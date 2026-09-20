@@ -1,0 +1,139 @@
+name: collect-and-build
+
+# Autonomous data collection + strategy pipeline + site build.
+# Runs on schedule (every 6h), on demand, and on push (skipping its own commits).
+concurrency:
+  group: nbacomp
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Run full multi-season backfill first (slow, ~40min)"
+        default: "false"
+  push:
+    paths-ignore:
+      - "data/**"
+      - "index.html"
+      - "leaderboard.html"
+      - "strategies.html"
+      - "upcoming.html"
+      - "positions.html"
+      - "history.html"
+      - "sources.html"
+      - "research.html"
+      - "methodology.html"
+      - "style.css"
+      - "data/history.json"
+
+permissions:
+  contents: write
+
+jobs:
+  collect-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Skip auto-commits
+        id: skip
+        run: |
+          if git log -1 --grep='\[auto\]' --oneline | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+          if git log -1 --grep='\[probe\]' --oneline | grep -q .; then
+            echo "probe=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deep probe only (fast iteration)
+        if: steps.skip.outputs.probe == 'true'
+        continue-on-error: true
+        run: |
+          python tools/probe_deep.py || true
+          python tools/probe_kalshi_events.py || true
+
+      - name: Commit probe results
+        if: steps.skip.outputs.probe == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/diagnostics.txt || true
+          git commit -m "[auto] deep probe $(date -u +%FT%TZ)" || true
+          git push origin HEAD || true
+
+      - name: Full backfill part 1 — schedule/results (two seasons)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          python -m nbacomp.collect backfill-days --start 20241001 --end 20250701
+          python -m nbacomp.collect backfill-days --start 20251001 --end "$(date -u +%Y%m%d)"
+
+      - name: Full backfill part 2 — independent verification (Basketball-Reference)
+        if: steps.skip.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          python -m nbacomp.collect verify-bref-months --months "2025:october,2025:november,2025:december,2025:january,2025:february,2025:march,2025:april,2025:may,2025:june"
+          python -m nbacomp.collect verify-bref-months --months "2026:october,2026:november,2026:december,2026:january,2026:february,2026:march,2026:april,2026:may,2026:june"
+
+      - name: Full backfill part 3 — Kalshi history (discovery, settled events, candles)
+        if: steps.skip.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          python -m nbacomp.collect kalshi-discovery
+          python -m nbacomp.collect kalshi-backfill
+          python -m nbacomp.collect kalshi-candles --series KXNBAGAME --start 2024-10-01T00:00:00Z --end "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Full backfill part 4 — box scores 2025-26 (player + team logs)
+        if: steps.skip.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          python -m nbacomp.collect boxscores --start 20251001 --end 20260715
+
+      - name: Full backfill part 5 — box scores 2024-25 (player + team logs)
+        if: steps.skip.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          python -m nbacomp.collect boxscores --start 20241001 --end 20250715
+
+      - name: Daily collection (schedule+odds, injuries, Kalshi, boxscores, verification)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          python -m nbacomp.collect kalshi-discovery || true
+          python -m nbacomp.collect daily
+
+      - name: Pipeline (strategies, backtest, paper engine, settlement, audit, site)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          python tools/seed_research.py
+          python tools/run_pipeline.py
+
+      - name: Failure diagnostics
+        if: failure()
+        continue-on-error: true
+        run: python tools/probe_sources.py || true
+
+      - name: Commit (data + site, or diagnostics on failure)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f data/nbacomp.db ]; then python tools/db_checkpoint.py; fi
+          rm -f data/nbacomp.db-wal data/nbacomp.db-shm
+          git add -A data index.html leaderboard.html strategies.html upcoming.html \
+            positions.html history.html sources.html research.html methodology.html \
+            style.css || true
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "[auto] collect + pipeline + site build $(date -u +%FT%TZ)" || true
+            git push origin HEAD || true
+          fi

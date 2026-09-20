@@ -1,0 +1,16 @@
+probe5 2026-09-20T21:45:08Z
+events settled page1: http=200 rows=200 cursor=yes
+  event: ticker=None title='Game 5: New York at San Antonio' sub='NYK at SAS (Jun 13)' strike=None close=None
+  event: ticker=None title='Game 4: San Antonio at New York' sub='SAS at NYK (Jun 10)' strike=None close=None
+  event: ticker=None title='Game 3: San Antonio at New York' sub='SAS at NYK (Jun 8)' strike=None close=None
+  walked 8 pages, seen=1448 oldest=None close=None
+
+PROBE_CRASH:
+Traceback (most recent call last):
+  File "/home/runner/work/NBAComp/NBAComp/tools/probe_kalshi_events.py", line 91, in <module>
+    main()
+  File "/home/runner/work/NBAComp/NBAComp/tools/probe_kalshi_events.py", line 65, in main
+    rm = get("/markets", {"event_ticker": ev0["ticker"], "limit": 100})
+                                          ~~~^^^^^^^^^^
+KeyError: 'ticker'
+
