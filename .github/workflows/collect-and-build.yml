@@ -58,7 +58,9 @@ jobs:
       - name: Deep probe only (fast iteration)
         if: steps.skip.outputs.probe == 'true'
         continue-on-error: true
-        run: python tools/probe_deep.py
+        run: |
+          python tools/probe_deep.py || true
+          python tools/probe_kalshi_events.py || true
 
       - name: Commit probe results
         if: steps.skip.outputs.probe == 'true'
