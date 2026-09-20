@@ -57,6 +57,7 @@ jobs:
 
       - name: Deep probe only (fast iteration)
         if: steps.skip.outputs.probe == 'true'
+        continue-on-error: true
         run: python tools/probe_deep.py
 
       - name: Commit probe results
@@ -66,7 +67,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/diagnostics.txt || true
           git commit -m "[auto] deep probe $(date -u +%FT%TZ)" || true
-          git push origin HEAD
+          git push origin HEAD || true
 
       - name: Full backfill (on demand)
         if: steps.skip.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.backfill == 'true'
@@ -110,10 +111,11 @@ jobs:
 
       - name: Failure diagnostics
         if: failure()
+        continue-on-error: true
         run: python tools/probe_sources.py || true
 
       - name: Commit (data + site, or diagnostics on failure)
-        if: always() && steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

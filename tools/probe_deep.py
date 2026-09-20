@@ -122,4 +122,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        os.makedirs("data", exist_ok=True)
+        with open("data/diagnostics.txt", "a") as f:
+            f.write("\nPROBE_CRASH:\n" + tb + "\n")
+        raise
