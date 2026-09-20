@@ -18,6 +18,7 @@ rest/travel features) are built strictly from games dated before the decision.</
 <code>engine.PriceBook</code> and tested in the test-suite.</li>
 <li>Injury adjustments use only listings published before the decision. Final injury status, final lineups,
 closing prices, and game results are never used at decision time.</li>
+<li>The forward engine refuses to place any bet less than 1 hour before tipoff (execution-latency guard).</li>
 </ul>
 <h2>Backtesting</h2>
 <p>Chronological walk over verified game results. Each strategy's state carries forward; a game's result is
@@ -29,6 +30,21 @@ silent choices.</p>
 forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
 simulated bet before tipoff, then settled from verified results. The forward ledger is the competition
 leaderboard; backtest records are always displayed separately.</p>
+<h2>Closing-line capture (where available)</h2>
+<p>When a forward bet settles, the engine stores the last observed Kalshi candle close before tipoff in
+the bet row's <code>closing_price</code> column. This is the closing-line value at the simulated decision
+time; absences (no candles) are recorded as NULL, never guessed.</p>
+<h2>Live / in-game betting — explicitly out of scope</h2>
+<p>The current Kalshi NBA offering closes each winner market at tipoff and does not provide live in-game
+prices. The forward engine therefore enforces a 1-hour pre-tip execution-latency guard and produces no
+in-running decisions. Live betting research would require a different venue with observable in-game prices
+and is documented as an explicit scope gap, not attempted.</p>
+<h2>Overtime (OT) handling</h2>
+<p>Kalshi game-winner markets are 'final-score' markets — overtime is included by exchange convention
+(verified in settler behavior; tested). The system does not currently exploit any OT-specific edge
+because Kalshi does not sell OT-only markets on regular-season NBA. Strategy NBA-018 OvertoneOlive is an
+<em>observer</em>: it counts OT games (via box score <code>OT</code> period) so the OT-incidence rate can
+be tracked against strategy outcomes, without placing OT-only bets.</p>
 <h2>Execution realism</h2>
 <ul>
 <li>Kalshi fills: observed orderbook ask (forward) or last closed candle close +1 tick (backtest, depth
@@ -40,15 +56,18 @@ unknown, never invented. Kalshi order-book size caps fills at observed depth whe
 </ul>
 <h2>P&amp;L, bankrolls, sizing</h2>
 <p>Each strategy starts with a $1,000 virtual bankroll. Stake = 25% Kelly capped at 3% of current bankroll,
-min $5, max 25% open exposure. Pushes return the stake (P&amp;L 0). Kalshi push/void handling defers to the
-exchange's recorded result; unresolved markets stay <i>pending</i>, never guessed.</p>
+min $5, max 25% open exposure (enforced via the audit <code>exposure-cap-violated</code> check). Pushes return
+the stake (P&amp;L 0). Kalshi push/void handling defers to the exchange's recorded result; unresolved markets
+stay <i>pending</i>, never guessed.</p>
 <h2>Data verification</h2>
 <p>Final scores are cross-checked ESPN ↔ NBA.com; every verification (match/mismatch) is stored. Source
 reachability is probed each collection run and published on the Sources page. Discrepancies raise anomalies,
 are investigated in the research log, and are never silently resolved.</p>
 <h2>Strategy versioning</h2>
 <p>Material rule changes create a new version (e.g., NBA-001 v1.1); history is preserved — bet rows carry the
-version that produced them and are never rewritten.</p>
+version that produced them and are never rewritten. Each bet row references both <code>strategy_id</code>
+and <code>strategy_version</code> at execution time, so historical performance can always be sliced by
+the version that produced it.</p>
 <h2>What this site is not</h2>
 <p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
 point is to find out, with real verified data, which hypotheses survive.</p>

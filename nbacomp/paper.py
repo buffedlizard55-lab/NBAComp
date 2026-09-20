@@ -54,6 +54,20 @@ def _kalshi_cents_price_for_side(price: engine.PricePoint, side: str) -> float:
     return price.price_cents if side == "home" else 100.0 - price.price_cents
 
 
+def _available_to_stake(con, strategy_id: str, br: float) -> float:
+    """Compute bankroll less open exposure, clamped to [0, br].
+
+    `br - open_exp` can go negative when exposure exceeds bankroll (the
+    position-cap check above this function prevents fresh bets in that state,
+    but defensive clamp avoids passing a negative sizing parameter downstream).
+    """
+    open_exp = con.execute(
+        "SELECT COALESCE(SUM(stake_usd),0) s FROM bets WHERE strategy_id=? "
+        "AND kind='forward' AND result='pending'",
+        (strategy_id,)).fetchone()["s"]
+    return max(0.0, br - open_exp)
+
+
 def _sig_winner(ctx, sid, side, prob, mkt, price, trigger) -> S.Signal:
     team = ctx[side]
     return S.Signal(
@@ -319,11 +333,14 @@ def _prop_signals(con, ctx, props: list[engine.KalshiMarketInfo]) -> list[S.Sign
     sigs: list[S.Signal] = []
     book = ctx["book"]
     # build rolling player form over all player_gamelogs strictly before the game
-    logs_by_player: dict[str, list] = {}
+    logs_by_player: dict[tuple[str, str], list] = {}
+    player_names: set[str] = set()
     for r in con.execute(
             "SELECT player, team, minutes, reb, ast, pts, game_date_et FROM player_gamelogs "
             "WHERE game_date_et<?", (ctx["game"]["game_date_et"],)):
         logs_by_player.setdefault((r["team"], r["player"]), []).append(dict(r))
+        player_names.add(r["player"])
+    cands = sorted(player_names, key=len, reverse=True)
     for info in props:
         # pickup the YES-side ask (it's the strike-and-over contract)
         kp = book.kalshi_live_ask(info.ticker)
@@ -339,7 +356,7 @@ def _prop_signals(con, ctx, props: list[engine.KalshiMarketInfo]) -> list[S.Sign
         if strike is None:
             continue
         # Player identification comes from the subtitle (e.g. "Tatum REB Over 7.5")
-        player, stat_name = _parse_prop_subtitle(info, ctx)
+        player, stat_name = _parse_prop_subtitle(info, cands)
         if not player or not stat_name:
             continue
         # Rolling 5 stats for that player
@@ -392,7 +409,8 @@ def _prop_signals(con, ctx, props: list[engine.KalshiMarketInfo]) -> list[S.Sign
     return sigs
 
 
-def _parse_prop_subtitle(info: engine.KalshiMarketInfo, ctx) -> tuple[str | None, str | None]:
+def _parse_prop_subtitle(info: engine.KalshiMarketInfo,
+                          cands: list[str]) -> tuple[str | None, str | None]:
     """Best-effort recovery of (player name, stat name) from a Kalshi subtitle.
 
     Returns ("Tatum", "reb") etc. Unparseable -> (None, None); never guesses.
@@ -407,22 +425,10 @@ def _parse_prop_subtitle(info: engine.KalshiMarketInfo, ctx) -> tuple[str | None
     if not stat:
         return None, None
     # Player name token: anywhere in subtitle/title that looks like a player
-    cands = sorted(set([p["player"] for rows in logs_summary(ctx)
-                         for p in rows]), key=len, reverse=True)
     for c in cands:
         if c.lower() in text or text in c.lower():
             return c, stat
     return None, None
-
-
-def logs_summary(ctx) -> list[list]:
-    """Helper: surface distinct player names from player_gamelogs for matching."""
-    con = ctx["book"].con  # PriceBook has the same DB connection
-    rows = con.execute(
-        "SELECT DISTINCT player FROM player_gamelogs "
-        "WHERE game_date_et<? AND team IN (?, ?)",
-        (ctx["game"]["game_date_et"], ctx["home"], ctx["away"])).fetchall()
-    return [[dict(r)] for r in rows]
 
 
 # --------------------------------------------------------- bet placement
@@ -439,7 +445,8 @@ def _place_forward_bet(con, ctx, sig: S.Signal, winner,
         return 0
     prob = sig.model_prob
     price_cents = sig.price
-    stake = S.stake_for(min(br, br - open_exp), prob, 100.0 / price_cents)
+    stake = S.stake_for(_available_to_stake(con, sig.strategy_id, br),
+                        prob, 100.0 / price_cents)
     if stake <= 0:
         return 0
     contracts, cost = engine.simulate_fill_kalshi(stake, price_cents)
@@ -498,7 +505,8 @@ def _place_total_bet(con, ctx, sig: S.Signal, info) -> int:
         "AND result='pending'", (sig.strategy_id,)).fetchone()["s"]
     if open_exp >= br * 0.25:
         return 0
-    stake = S.stake_for(min(br, br - open_exp), sig.model_prob, 1.909)  # -110
+    stake = S.stake_for(_available_to_stake(con, sig.strategy_id, br),
+                        sig.model_prob, 1.909)  # -110
     if stake <= 0:
         return 0
     dup = con.execute(
@@ -548,7 +556,8 @@ def _place_prop_bet(con, ctx, sig: S.Signal) -> int:
     if open_exp >= br * 0.25:
         return 0
     price_cents = sig.price
-    stake = S.stake_for(min(br, br - open_exp), sig.model_prob, 100.0 / price_cents)
+    stake = S.stake_for(_available_to_stake(con, sig.strategy_id, br),
+                        sig.model_prob, 100.0 / price_cents)
     if stake <= 0:
         return 0
     contracts, cost = engine.simulate_fill_kalshi(stake, price_cents)
@@ -601,7 +610,11 @@ def mark_open_positions(con):
 
 
 def settle_finished(con) -> int:
-    """Settle pending forward bets whose game is final."""
+    """Settle pending forward bets whose game is final.
+
+    Also captures the last observed price (closing) at settlement time when
+    available, for the per-spec requirement to surface closing-line context.
+    """
     mapping = engine.map_kalshi_markets(con)
     by_game: dict[str, engine.KalshiMarketInfo] = {}
     for info in mapping.values():
@@ -609,6 +622,7 @@ def settle_finished(con) -> int:
             by_game[info.game_id] = info
     pending = con.execute(
         "SELECT * FROM bets WHERE kind='forward' AND result='pending'").fetchall()
+    book = engine.PriceBook(con)
     n = 0
     CUR = util.utcnow_iso()
     for b in pending:
@@ -626,16 +640,30 @@ def settle_finished(con) -> int:
             pnl = engine.kalshi_bet_pnl(b["contracts"] or 0, b["fill_price"] or 50, result)
         else:
             continue
-        con.execute(
-            "UPDATE bets SET result=?, settlement_utc=?, settlement_source=?, pnl_usd=?, roi=? "
-            "WHERE bet_id=?",
-            (result, CUR,
-             "kalshi result / verified score" if b["market"] != "total" else "verified final score",
-             round(pnl, 2),
-             round(pnl / b["stake_usd"], 4) if b["stake_usd"] else 0, b["bet_id"]))
+        closing = None
+        try:
+            info = by_game.get(b["game_id"])
+            if info:
+                pp = book.kalshi_price_at(info.ticker, util.utcnow_iso())
+                if pp and pp.ts_utc:
+                    closing = pp.price_cents
+        except Exception:
+            closing = None
+        update_args = [result, CUR,
+                       "kalshi result / verified score" if b["market"] != "total" else
+                       "verified final score",
+                       round(pnl, 2),
+                       round(pnl / b["stake_usd"], 4) if b["stake_usd"] else 0]
+        update_sql = "UPDATE bets SET result=?, settlement_utc=?, settlement_source=?, pnl_usd=?, roi=?"
+        if closing is not None:
+            update_sql += ", closing_price=?"
+            update_args.append(closing)
+        update_sql += " WHERE bet_id=?"
+        update_args.append(b["bet_id"])
+        con.execute(update_sql, update_args)
         db.log_audit(con, "paper-engine", "bet-settled", b["bet_id"], {
             "result": result, "pnl": round(pnl, 2),
-            "market": b["market"]})
+            "market": b["market"], "closing_price": closing})
         _record_bankroll(con, b["strategy_id"],
                          _bankroll(con, b["strategy_id"]) + pnl,
                          f"settle:{b['bet_id']}")

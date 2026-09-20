@@ -14,6 +14,9 @@ labeled. Search and filter client-side; nothing is hidden, including losing stra
 <input id="q" type="search" placeholder="Search: strategy, team, market, result…">
 <div class="filters">
   <select id="f_kind"><option value="">all kinds</option><option>forward</option><option>backtest</option></select>
+  <select id="f_market"><option value="">all markets</option><option>kalshi:winner</option>
+    <option>total</option><option>kalshi:prop:rebounds</option>
+    <option>kalshi:prop:assists</option><option>kalshi:prop:points</option></select>
   <select id="f_result"><option value="">all results</option><option>win</option><option>loss</option>
     <option>push</option><option>pending</option></select>
   <select id="f_strat"><option value="">all strategies</option></select>
@@ -21,7 +24,7 @@ labeled. Search and filter client-side; nothing is hidden, including losing stra
 <p id="count" class="muted"></p>
 <div class="twrap"><table id="hist"><thead><tr>
 <th>Bet</th><th>Kind</th><th>Strategy</th><th>Decision (UTC)</th><th>Game</th><th>Market</th>
-<th>Pick</th><th>Price</th><th>Model</th><th>Result</th><th>Stake</th><th>P&L</th></tr></thead>
+<th>Pick</th><th>Price</th><th>Closing</th><th>Model</th><th>Result</th><th>Stake</th><th>P&L</th></tr></thead>
 <tbody></tbody></table></div>
 <script>
 const DATA = [];
@@ -34,8 +37,10 @@ function render() {
   const k = document.getElementById('f_kind').value;
   const rs = document.getElementById('f_result').value;
   const st = document.getElementById('f_strat').value;
+  const m = document.getElementById('f_market').value;
   const rows = DATA.filter(d =>
-    (!k || d.kind === k) && (!rs || d.result === rs) && (!st || d.username === st) &&
+    (!k || d.kind === k) && (!m || d.market === m) && (!rs || d.result === rs) &&
+    (!st || d.username === st) &&
     (!q || JSON.stringify(d).toLowerCase().includes(q)));
   document.getElementById('count').textContent = rows.length + ' of ' + DATA.length + ' bets';
   tb.innerHTML = rows.slice(0, 400).map(d =>
@@ -43,13 +48,14 @@ function render() {
      <td>${d.username}</td><td>${d.decision_utc}</td>
      <td>${d.game_label || ''}</td><td>${d.market}</td><td>${d.selection}</td>
      <td>${d.price} ${d.price_format}</td>
+     <td>${d.closing_price == null ? '—' : (+d.closing_price).toFixed(1) + 'c'}</td>
      <td>${d.model_prob == null ? '—' : (+d.model_prob).toFixed(3)}</td>
      <td class="${d.result}">${d.result}</td>
      <td>${$}${(d.stake_usd || 0).toFixed(2)}</td>
      <td class="${(d.pnl_usd || 0) >= 0 ? 'pos' : 'neg'}">${d.pnl_usd == null ? '—' : (+d.pnl_usd).toFixed(2)}</td></tr>`
   ).join('');
 }
-['q', 'f_kind', 'f_result', 'f_strat'].forEach(id =>
+['q', 'f_kind', 'f_result', 'f_strat', 'f_market'].forEach(id =>
   document.getElementById(id).addEventListener('input', render));
 render();
 </script>

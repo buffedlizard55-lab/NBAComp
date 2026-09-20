@@ -657,3 +657,82 @@ def test_audit_bet_by_unknown_strategy(con):
     summary = audit.run_checks(con)
     names = [c["check"] for c in summary["checks"]]
     assert "bet-by-unknown-strategy" in names
+
+
+def test_paper_available_to_stake_clamps(con):
+    """Excess exposure must produce 0 available capital (no negative sizes)."""
+    from nbacomp import paper
+    db.insert(con, "bankroll_events", {
+        "strategy_id": "NBA-003", "as_of_utc": util.utcnow_iso(),
+        "starting": 1000.0, "current": 200.0,
+        "available": 0.0, "exposure": 200.0, "reason": "test"})
+    db.insert(con, "bets", {
+        "bet_id": "excess", "run_id": "r", "kind": "forward", "strategy_id": "NBA-003",
+        "strategy_version": "1", "username": "u", "decision_utc": "2026-01-14T20:00:00Z",
+        "tipoff_utc": "2026-01-15T01:00:00Z", "game_id": "espn:1",
+        "market": "kalshi:winner", "selection": "home", "side": "home",
+        "price": 50, "price_format": "kalshi_cents", "source": "t", "stake_usd": 250.0,
+        "execution_status": "simulated_fill", "result": "pending", "verification": "t"})
+    avail = paper._available_to_stake(con, "NBA-003", 200.0)
+    assert avail == 0.0  # clamped, no negative sizing
+
+
+def test_paper_kalshi_cents_away_floor_1c():
+    """NO-side derivation 100-home_price must be in [1, 99] cents (Kalshi range)."""
+    from nbacomp import paper
+    p1 = engine.PricePoint("2026-01-15T00:00:00Z", 50.0, "orderbook_ask")
+    assert paper._kalshi_cents_price_for_side(p1, "home") == 50.0
+    assert paper._kalshi_cents_price_for_side(p1, "away") == 50.0  # mirror
+    p2 = engine.PricePoint("2026-01-15T00:00:00Z", 99.0, "orderbook_ask")
+    assert paper._kalshi_cents_price_for_side(p2, "away") == 1.0
+    p3 = engine.PricePoint("2026-01-15T00:00:00Z", 1.0, "orderbook_ask")
+    assert paper._kalshi_cents_price_for_side(p3, "away") == 99.0
+
+
+def test_paper_total_signal_no_line(con):
+    """If no line available for a game (neither ESPN snapshot nor Kalshi strike),
+    totals strategies must NOT emit signals — no fabricated price."""
+    from nbacomp import paper
+    _seed_game(con, game_id="espn:tot0", tipoff="2026-02-10T01:00:00Z", status="scheduled")
+    g = con.execute("SELECT * FROM games WHERE game_id='espn:tot0'").fetchone()
+    ctx = {"game": g, "decision": "2026-02-09T20:00:00Z", "home": "BOS", "away": "LAL",
+           "winner": None, "book": engine.PriceBook(con),
+           "rolling_history": {}, "h_roll": {"games": 5, "pace": 100, "ortg": 110, "drtg": 105,
+                                              "pts": 110, "opp_pts": 105, "fg3a": 35, "fg3m": 12,
+                                              "fg3pct": 0.34, "oreb": 8},
+           "a_roll": {"games": 5, "pace": 102, "ortg": 108, "drtg": 110,
+                      "pts": 108, "opp_pts": 110, "fg3a": 32, "fg3m": 11,
+                      "fg3pct": 0.34, "oreb": 9},
+           "h_rest": {}, "a_rest": {}, "total_line": None, "spread_line": None,
+           "inj_adj": {"BOS": 0.0, "LAL": 0.0}, "inj_flag": {"BOS": None, "LAL": None},
+           "total": None}
+    sigs = paper._total_signals(con, ctx)
+    assert sigs == []
+
+
+def test_push_settlement_kalshi(con):
+    """If Kalshi outcome exists and is 'no', a 'home' bet must settle as loss;
+    'away' must settle as win (already covered in test_settlement_kalshi_side_aware
+    but we keep this as an explicit end-to-end pass-through)."""
+    _seed_game(con, game_id="espn:p1", status="final", hs=100, as_=110)
+    info = engine.KalshiMarketInfo(
+        ticker="KXNBAGAME-26JAN14BOSLAL", event_ticker="KXNBAGAME-26JAN14BOSLAL",
+        series_ticker="KXNBAGAME", market_type="winner", game_id="espn:p1",
+        home="BOS", away="LAL", strike={}, result="no", title="", subtitle="")
+    # home bet -> loss
+    assert engine.apply_settlement_kalshi(con, info, {"side": "home"}, 100, 110) == "loss"
+    # away bet -> win
+    assert engine.apply_settlement_kalshi(con, info, {"side": "away"}, 100, 110) == "win"
+
+
+def test_profit_by_handles_missing_dim():
+    """Edge case: profit_by must return {} if no rows."""
+    con_path = "/tmp/_notadb.db"
+    import os
+    if os.path.exists(con_path):
+        os.unlink(con_path)
+    from nbacomp import db
+    with db.get_db(con_path) as con:
+        out = sitegen.strategy_profit_by(con, "NBA-X", "forward", "team")
+        assert out == {}
+    os.unlink(con_path)

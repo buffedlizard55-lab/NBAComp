@@ -524,8 +524,9 @@ def history(con, out_dir):
             "bet_id", "kind", "run_id", "strategy_id", "username", "decision_utc", "game_id",
             "game_label", "tipoff_utc", "market", "selection", "side", "price", "price_format",
             "source", "source_ts", "model_prob", "market_prob", "edge", "stake_usd", "to_win_usd",
-            "execution_status", "contracts", "fill_price", "fee_usd", "result", "settlement_utc",
-            "settlement_source", "pnl_usd", "roi", "verification", "notes", "strategy_version")})
+            "execution_status", "contracts", "fill_price", "fee_usd", "closing_price",
+            "result", "settlement_utc", "settlement_source", "pnl_usd", "roi",
+            "verification", "notes", "strategy_version")})
     _write_json(out_dir, "data/history.json", recs)
     body = f"""
 <h1>Trade history</h1>
@@ -534,6 +535,9 @@ labeled. Search and filter client-side; nothing is hidden, including losing stra
 <input id="q" type="search" placeholder="Search: strategy, team, market, result…">
 <div class="filters">
   <select id="f_kind"><option value="">all kinds</option><option>forward</option><option>backtest</option></select>
+  <select id="f_market"><option value="">all markets</option><option>kalshi:winner</option>
+    <option>total</option><option>kalshi:prop:rebounds</option>
+    <option>kalshi:prop:assists</option><option>kalshi:prop:points</option></select>
   <select id="f_result"><option value="">all results</option><option>win</option><option>loss</option>
     <option>push</option><option>pending</option></select>
   <select id="f_strat"><option value="">all strategies</option></select>
@@ -541,7 +545,7 @@ labeled. Search and filter client-side; nothing is hidden, including losing stra
 <p id="count" class="muted"></p>
 <div class="twrap"><table id="hist"><thead><tr>
 <th>Bet</th><th>Kind</th><th>Strategy</th><th>Decision (UTC)</th><th>Game</th><th>Market</th>
-<th>Pick</th><th>Price</th><th>Model</th><th>Result</th><th>Stake</th><th>P&L</th></tr></thead>
+<th>Pick</th><th>Price</th><th>Closing</th><th>Model</th><th>Result</th><th>Stake</th><th>P&L</th></tr></thead>
 <tbody></tbody></table></div>
 <script>
 const DATA = {json.dumps(recs)};
@@ -554,8 +558,10 @@ function render() {{
   const k = document.getElementById('f_kind').value;
   const rs = document.getElementById('f_result').value;
   const st = document.getElementById('f_strat').value;
+  const m = document.getElementById('f_market').value;
   const rows = DATA.filter(d =>
-    (!k || d.kind === k) && (!rs || d.result === rs) && (!st || d.username === st) &&
+    (!k || d.kind === k) && (!m || d.market === m) && (!rs || d.result === rs) &&
+    (!st || d.username === st) &&
     (!q || JSON.stringify(d).toLowerCase().includes(q)));
   document.getElementById('count').textContent = rows.length + ' of ' + DATA.length + ' bets';
   tb.innerHTML = rows.slice(0, 400).map(d =>
@@ -563,13 +569,14 @@ function render() {{
      <td>${{d.username}}</td><td>${{d.decision_utc}}</td>
      <td>${{d.game_label || ''}}</td><td>${{d.market}}</td><td>${{d.selection}}</td>
      <td>${{d.price}} ${{d.price_format}}</td>
+     <td>${{d.closing_price == null ? '—' : (+d.closing_price).toFixed(1) + 'c'}}</td>
      <td>${{d.model_prob == null ? '—' : (+d.model_prob).toFixed(3)}}</td>
      <td class="${{d.result}}">${{d.result}}</td>
      <td>${{$}}${{(d.stake_usd || 0).toFixed(2)}}</td>
      <td class="${{(d.pnl_usd || 0) >= 0 ? 'pos' : 'neg'}}">${{d.pnl_usd == null ? '—' : (+d.pnl_usd).toFixed(2)}}</td></tr>`
   ).join('');
 }}
-['q', 'f_kind', 'f_result', 'f_strat'].forEach(id =>
+['q', 'f_kind', 'f_result', 'f_strat', 'f_market'].forEach(id =>
   document.getElementById(id).addEventListener('input', render));
 render();
 </script>
@@ -598,18 +605,28 @@ def sources_page(con, out_dir):
     body = f"""
 <h1>Data sources</h1>
 <p class="muted">The core pipeline uses only keyless, free, public sources. Free trials and freemium tiers are
-treated as NOT free. Reachability is re-verified on every collection run and shown below from the latest run.</p>
+treated as NOT free. Reachability is re-verified on every collection run and shown below from the latest run.
+If a source stops working mid-pipeline: <code>(1)</code> the failure is logged into
+<code>collection_log</code> with HTTP status; <code>(2)</code> the affected subscriber
+strategies get no signal in that run (no fallback to invented data); <code>(3)</code> the source-status row
+flips to <code>ok=0</code> and is surfaced on this page; <code>(4)</code> the audit pass raises an anomaly.
+The site does not depend on any single fragile endpoint.</p>
 {table(["Source", "URL", "Data", "Cost", "Registration", "Paid plan", "Rate limits", "Reliability",
         "Last verified", "Latest run", "Verification notes"], rows)}
-<h2>Known unavailable data</h2>
+<h2>Known unavailable data (documented, not assumed)</h2>
 <ul>
 <li><b>Historical sportsbook closing lines (deep history):</b> no free, legal archive was found; paid archives
 exist and are excluded by policy. Consequence: historical backtests run only where Kalshi candlestick history
-exists; totals/spread model bets before that use clearly-labeled price assumptions.</li>
+exists; totals/spread model bets before that use clearly-labeled price assumptions (PRICED-ASSUMPTION).</li>
 <li><b>Historical injury reports:</b> no free dated archive — injury strategies are forward-tested first.</li>
 <li><b>Historical order-book depth:</b> Kalshi does not publish historical books; backtest entries use last
 closed hourly trade price +1 tick, labeled as an execution assumption.</li>
 <li><b>Referee assignments:</b> no reliable free historical feed found — referee strategies are NOT claimed.</li>
+<li><b>NBA.com/stats advanced tracking data (drives, touches, etc.):</b> reachable from some networks but
+blocked from GitHub Actions runners (Akamai 403 / connection tarpit). Replaced by ESPN box scores + Basketball-Reference
+verification. Sister site NBAInjuryReport documented the same fingerprint mismatch.</li>
+<li><b>Pre-2024-25 historical totals lines:</b> no free historical archive of sportsbook totals, so pre-2025
+totals backtests are not attempted. Forecast models run forward from collection start.</li>
 </ul>
 """
     _write(out_dir, "sources.html", page("Data Sources", body, "sources.html"))
@@ -659,6 +676,7 @@ rest/travel features) are built strictly from games dated before the decision.</
 <code>engine.PriceBook</code> and tested in the test-suite.</li>
 <li>Injury adjustments use only listings published before the decision. Final injury status, final lineups,
 closing prices, and game results are never used at decision time.</li>
+<li>The forward engine refuses to place any bet less than 1 hour before tipoff (execution-latency guard).</li>
 </ul>
 <h2>Backtesting</h2>
 <p>Chronological walk over verified game results. Each strategy's state carries forward; a game's result is
@@ -670,6 +688,21 @@ silent choices.</p>
 forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
 simulated bet before tipoff, then settled from verified results. The forward ledger is the competition
 leaderboard; backtest records are always displayed separately.</p>
+<h2>Closing-line capture (where available)</h2>
+<p>When a forward bet settles, the engine stores the last observed Kalshi candle close before tipoff in
+the bet row's <code>closing_price</code> column. This is the closing-line value at the simulated decision
+time; absences (no candles) are recorded as NULL, never guessed.</p>
+<h2>Live / in-game betting — explicitly out of scope</h2>
+<p>The current Kalshi NBA offering closes each winner market at tipoff and does not provide live in-game
+prices. The forward engine therefore enforces a 1-hour pre-tip execution-latency guard and produces no
+in-running decisions. Live betting research would require a different venue with observable in-game prices
+and is documented as an explicit scope gap, not attempted.</p>
+<h2>Overtime (OT) handling</h2>
+<p>Kalshi game-winner markets are 'final-score' markets — overtime is included by exchange convention
+(verified in settler behavior; tested). The system does not currently exploit any OT-specific edge
+because Kalshi does not sell OT-only markets on regular-season NBA. Strategy NBA-018 OvertoneOlive is an
+<em>observer</em>: it counts OT games (via box score <code>OT</code> period) so the OT-incidence rate can
+be tracked against strategy outcomes, without placing OT-only bets.</p>
 <h2>Execution realism</h2>
 <ul>
 <li>Kalshi fills: observed orderbook ask (forward) or last closed candle close +1 tick (backtest, depth
@@ -681,15 +714,18 @@ unknown, never invented. Kalshi order-book size caps fills at observed depth whe
 </ul>
 <h2>P&amp;L, bankrolls, sizing</h2>
 <p>Each strategy starts with a $1,000 virtual bankroll. Stake = 25% Kelly capped at 3% of current bankroll,
-min $5, max 25% open exposure. Pushes return the stake (P&amp;L 0). Kalshi push/void handling defers to the
-exchange's recorded result; unresolved markets stay <i>pending</i>, never guessed.</p>
+min $5, max 25% open exposure (enforced via the audit <code>exposure-cap-violated</code> check). Pushes return
+the stake (P&amp;L 0). Kalshi push/void handling defers to the exchange's recorded result; unresolved markets
+stay <i>pending</i>, never guessed.</p>
 <h2>Data verification</h2>
 <p>Final scores are cross-checked ESPN ↔ NBA.com; every verification (match/mismatch) is stored. Source
 reachability is probed each collection run and published on the Sources page. Discrepancies raise anomalies,
 are investigated in the research log, and are never silently resolved.</p>
 <h2>Strategy versioning</h2>
 <p>Material rule changes create a new version (e.g., NBA-001 v1.1); history is preserved — bet rows carry the
-version that produced them and are never rewritten.</p>
+version that produced them and are never rewritten. Each bet row references both <code>strategy_id</code>
+and <code>strategy_version</code> at execution time, so historical performance can always be sliced by
+the version that produced it.</p>
 <h2>What this site is not</h2>
 <p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
 point is to find out, with real verified data, which hypotheses survive.</p>
