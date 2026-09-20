@@ -1,11 +1,6 @@
 #!/usr/bin/env python
-"""Probe #3: pin down the working endpoint matrix.
-
-Focus: site.web.api.espn.com (scoreboard/summary/injuries/teams/standings,
-historical dates), basketball-reference reachability, stats.nba.com via Node
-fetch, and Kalshi historical market access (windowed queries, events status,
-candlesticks/trades on real markets).
-"""
+"""Probe #4 (final matrix): writes every result line incrementally to
+data/diagnostics.txt so partial results survive crashes."""
 from __future__ import annotations
 
 import json
@@ -19,14 +14,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nbacomp import http  # noqa: E402
 from nbacomp.sources import kalshi  # noqa: E402
 
-OUT = []
+PATH = "data/diagnostics.txt"
 
 
 def log(s):
-    OUT.append(s)
     print(s, flush=True)
     os.makedirs("data", exist_ok=True)
-    with open("data/diagnostics.txt", "a") as f:
+    with open(PATH, "a") as f:
         f.write(s + "\n")
 
 
@@ -38,113 +32,120 @@ def curl(url: str, timeout: int = 25) -> tuple[int, bytes]:
     return int(code) if code.isdigit() else 0, body[:-3]
 
 
-def jlen(body: bytes, key: str) -> str:
+def node_fetch(url: str, hdrs: str = "{}", timeout: int = 45) -> str:
+    script = ("fetch(" + json.dumps(url) + ",{headers:" + hdrs +
+              "}).then(r=>r.text().then(t=>console.log('status',r.status,'len',t.length,"
+              "'head',t.slice(0,80)))).catch(e=>console.log('ERR',String(e).slice(0,120)))")
     try:
-        js = json.loads(body)
-        v = js
-        for k in key.split("."):
-            v = v.get(k, []) if isinstance(v, dict) else []
-        return str(len(v)) if isinstance(v, list) else "dict"
-    except Exception as e:
-        return f"parse-err {e}"
+        p = subprocess.run(["node", "-e", script], capture_output=True,
+                           text=True, timeout=timeout)
+        return p.stdout.strip() or p.stderr.strip()[:150]
+    except subprocess.TimeoutExpired:
+        return f"TIMEOUT >{timeout}s"
+    except FileNotFoundError:
+        return "node not available"
 
 
 def main():
     os.makedirs("data", exist_ok=True)
-    with open("data/diagnostics.txt", "w") as f:
-        f.write("probe3 " + time.strftime("%FT%TZ", time.gmtime()) + "\n")
+    with open(PATH, "w") as f:
+        f.write("probe4 " + time.strftime("%FT%TZ", time.gmtime()) + "\n")
+
     WEB = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba"
 
-    # ESPN matrix on the working host
-    for label, url, key in [
-        ("site.web scoreboard today", f"{WEB}/scoreboard", "events"),
-        ("site.web scoreboard 20260115", f"{WEB}/scoreboard?dates=20260115", "events"),
-        ("site.web scoreboard 20250605 (finals)", f"{WEB}/scoreboard?dates=20250605", "events"),
-        ("site.web injuries", f"{WEB}/injuries", "items"),
-        ("site.web teams", f"{WEB}/teams", "sports.0.leagues.0.teams"),
+    # --- ESPN matrix on site.web (the host that answered 200)
+    for label, url in [
+        ("site.web scoreboard today", f"{WEB}/scoreboard"),
+        ("site.web scoreboard 20260115", f"{WEB}/scoreboard?dates=20260115"),
+        ("site.web scoreboard 20250605", f"{WEB}/scoreboard?dates=20250605"),
+        ("site.web injuries", f"{WEB}/injuries"),
+        ("site.web teams", f"{WEB}/teams"),
     ]:
         code, body = curl(url)
-        log(f"{label}: {code} bytes={len(body)} {key}={jlen(body, key) if code == 200 else '-'}")
+        ev = ""
+        if code == 200:
+            try:
+                js = json.loads(body)
+                n = len(js.get("events") or js.get("items") or [])
+                ev = f"toplist={n}"
+                if url.endswith("20260115") and js.get("events"):
+                    e0 = js["events"][0]
+                    ev += f" first={e0.get('shortName')} status={(e0.get('status') or {}).get('type', {}).get('state')}"
+                    comp = (e0.get("competitions") or [{}])[0]
+                    odds = comp.get("odds")
+                    if odds:
+                        o = odds[0]
+                        ev += f" odds: provider={((o.get('provider') or {}).get('name'))} details={o.get('details')} ou={o.get('overUnder')} ml_h={(o.get('homeTeamOdds') or {}).get('moneyLine')}"
+                    else:
+                        ev += " odds=None"
+            except Exception as e:
+                ev = f"parse-err {e}"
+        log(f"{label}: {code} bytes={len(body)} {ev}")
 
-    # summary for a specific event (from 20260115 board)
+    # summary for one historical event -> boxscore presence
     code, body = curl(f"{WEB}/scoreboard?dates=20260115")
-    event_id = None
     if code == 200:
         try:
-            js = json.loads(body)
-            evs = js.get("events") or []
-            if evs:
-                event_id = evs[0].get("id")
-                log(f"  sample event id={event_id} date={evs[0].get('date')}")
-        except json.JSONDecodeError:
-            pass
-    if event_id:
-        code, body = curl(f"{WEB}/summary?event={event_id}")
-        ok = code == 200
-        has_box = "boxscore" in body.decode("utf-8", "replace") if ok else False
-        log(f"site.web summary?event={event_id}: {code} bytes={len(body)} has_boxscore={has_box}")
+            e0 = (json.loads(body).get("events") or [{}])[0]
+            eid = e0.get("id")
+            code2, body2 = curl(f"{WEB}/summary?event={eid}")
+            has_box = b"boxscore" in body2
+            has_players = b"athletes" in body2
+            has_inj = b"injuries" in body2
+            log(f"site.web summary?event={eid}: {code2} bytes={len(body2)} "
+                f"boxscore={has_box} athletes={has_players} injuries={has_inj}")
+        except Exception as e:
+            log(f"summary probe failed: {e}")
 
-    # standings via core API
-    code, body = curl("https://sports.core.api.espn.com/v2/sports/basketball/league/nba/standings?season=2025")
-    log(f"core standings 2025: {code} bytes={len(body)}")
-    code, body = curl("https://sports.core.api.espn.com/v2/sports/basketball/league/nba/injuries")
-    log(f"core injuries (no params): {code} bytes={len(body)}")
-
-    # basketball-reference
+    # --- basketball-reference
     code, body = curl("https://www.basketball-reference.com/leagues/NBA_2026_games.html")
     log(f"basketball-reference 2026 games: {code} bytes={len(body)}")
 
-    # stats.nba.com via node fetch (different TLS stack)
-    try:
-        node_script = ("fetch('https://stats.nba.com/stats/scoreboardv2?GameDate=01%2F15%2F2026&LeagueID=00&DayOffset=0',"
-                   "{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36','Referer':'https://www.nba.com/',"
-                   "'Accept':'application/json'}}).then(r=>r.text().then(t=>"
-                   "console.log('status',r.status,'len',t.length))).catch(e=>console.log('ERR',String(e).slice(0,120)))")
-    p = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, timeout=60)
-        p = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, timeout=45)
-        log(f"node stats.nba.com scoreboardv2: {p.stdout.strip()} {p.stderr.strip()[:120]}")
-    except subprocess.TimeoutExpired:
-        log("node stats.nba.com scoreboardv2: TIMEOUT >45s (tarpit)")
+    # --- stats.nba.com via node (last check) + site.api via node
+    log("node stats.nba.com scoreboardv2: " + node_fetch(
+        "https://stats.nba.com/stats/scoreboardv2?GameDate=01%2F15%2F2026&LeagueID=00&DayOffset=0",
+        "{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36','Referer':'https://www.nba.com/','Accept':'application/json'}"))
+    log("node site.api.espn.com scoreboard: " + node_fetch(
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+        "{'User-Agent':'Mozilla/5.0'}"))
 
-    try:
-        node_script2 = ("fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard',"
-                    "{headers:{'User-Agent':'Mozilla/5.0'}}).then(r=>r.text().then(t=>"
-                    "console.log('status',r.status,'len',t.length))).catch(e=>console.log('ERR',String(e).slice(0,120)))")
-    p = subprocess.run(["node", "-e", node_script2], capture_output=True, text=True, timeout=60)
-        p = subprocess.run(["node", "-e", node_script2], capture_output=True, text=True, timeout=45)
-        log(f"node site.api.espn.com scoreboard: {p.stdout.strip()} {p.stderr.strip()[:120]}")
-    except subprocess.TimeoutExpired:
-        log("node site.api.espn.com scoreboard: TIMEOUT >45s")
-
-    # Kalshi historical access patterns
+    # --- Kalshi historical window access
     start = int(time.mktime(time.strptime("2026-01-10", "%Y-%m-%d")))
     end = int(time.mktime(time.strptime("2026-01-20", "%Y-%m-%d")))
     r = http.get(f"{kalshi.BASE}/markets", {"series_ticker": "KXNBAGAME",
                                             "min_close_ts": start, "max_close_ts": end, "limit": 1000})
-    log(f"kalshi markets window 2026-01-10..20 (no status): http={r.status} "
-        f"rows={len((r.json or {}).get('markets') or [])}")
-    if r.ok and (r.json or {}).get("markets"):
-        m0 = r.json["markets"][0]
-        log(f"  sample: {m0.get('ticker')} result={m0.get('result')} close={m0.get('close_time')} "
-            f"yes_open={m0.get('open_interest')}")
-        tk = m0["ticker"]
+    markets = (r.json or {}).get("markets") or []
+    log(f"kalshi markets window 2026-01-10..20 no-status: http={r.status} rows={len(markets)}")
+    if markets:
+        m0 = markets[0]
+        log(f"  sample: {m0.get('ticker')} result={m0.get('result')} close={m0.get('close_time')}")
         r2 = http.get(f"{kalshi.BASE}/markets/candlesticks",
-                      {"tickers": tk, "start_ts": start, "end_ts": end, "interval": 60})
+                      {"tickers": m0["ticker"], "start_ts": start, "end_ts": end, "interval": 60})
         cs = (r2.json or {}).get("candlesticks") or []
-        log(f"kalshi candles real settled ticker: http={r2.status} entries={len(cs)} "
-            f"candles={sum(len(e.get('candlesticks') or []) for e in cs)}")
-        if cs:
-            log(f"  candle sample: {cs[0].get('candlesticks', [{}])[0]}")
+        ncand = sum(len(e.get("candlesticks") or []) for e in cs)
+        log(f"kalshi candles settled ticker: http={r2.status} entries={len(cs)} candles={ncand}")
+        if cs and cs[0].get("candlesticks"):
+            log(f"  candle sample: {cs[0]['candlesticks'][0]}")
     r = http.get(f"{kalshi.BASE}/events", {"series_ticker": "KXNBAGAME", "status": "settled", "limit": 5})
     log(f"kalshi events settled: http={r.status} rows={len((r.json or {}).get('events') or [])}")
-    # more prop series candidates
-    for s in ["KXNBAPTS", "KXNBATHREES", "KXNBATO", "KXNBAPRA", "KXNBADD", "KXNBASTL", "KXNBABLK",
-              "KXNBAREBS", "KXNBAASTS"]:
-        rr = kalshi.get_series(s)
-        log(f"kalshi.series {s}: exists={rr.ok} http={rr.status}")
 
-    pass
+    # prop series candidates
+    for s in ["KXNBAPTS", "KXNBATHREES", "KXNBATO", "KXNBAPRA", "KXNBADD", "KXNBASTL",
+              "KXNBABLK", "KXNBAREBS", "KXNBAASTS", "KXNBAPTSALT"]:
+        rr = kalshi.get_series(s)
+        log(f"kalshi.series {s}: exists={rr.ok}")
+
+    # season coverage check: how far back do KXNBAGAME markets go?
+    for y, m in [(2026, 1), (2025, 10), (2025, 4), (2024, 12)]:
+        t0 = time.mktime(time.strptime(f"{y}-{m:02d}-10", "%Y-%m-%d"))
+        t1 = t0 + 5 * 86400
+        r = http.get(f"{kalshi.BASE}/markets", {"series_ticker": "KXNBAGAME",
+                                                "min_close_ts": int(t0), "max_close_ts": int(t1),
+                                                "limit": 5})
+        n = len((r.json or {}).get("markets") or [])
+        log(f"kalshi KXNBAGAME coverage {y}-{m:02d}: rows(5-cap)={n}")
+
+    log("probe4 done")
 
 
 if __name__ == "__main__":
@@ -154,7 +155,6 @@ if __name__ == "__main__":
         import traceback
         tb = traceback.format_exc()
         print(tb)
-        os.makedirs("data", exist_ok=True)
-        with open("data/diagnostics.txt", "a") as f:
+        with open(PATH, "a") as f:
             f.write("\nPROBE_CRASH:\n" + tb + "\n")
         raise
