@@ -1,58 +1,27 @@
-curl espn.scoreboard: 403 bytes=442 head=b'<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don\'t have permission to access "ht'
-curl espn.scoreboard(20260115): 403 bytes=447
-curl espn.injuries: 403 bytes=440
-curl espn.site-web scoreboard: 200 bytes=9821
-curl espn.core injuries: 404 bytes=52
-curl espn.scoreboard +browser-hdrs: 403 bytes=442
-curl stats.nba.com scoreboardv2: 0 bytes=0 head=b''
-curl data.nba.net scoreboard: 0 bytes=0 head=b''
-curl cdn.nba.net liveData scoreboard: 403 bytes=445 head=b"<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don't have perm"
-kalshi.series KXNBAGAME: http=200 exists=True
-kalshi.series KXNBASPREAD: http=200 exists=True
-kalshi.series KXNBATOTAL: http=200 exists=True
-kalshi.series KXNBA1H: http=200 exists=True
-kalshi.series KXNBAPOINT: http=404 exists=False
-kalshi.series KXNBAREB: http=200 exists=True
-kalshi.series KXNBAAST: http=200 exists=True
-kalshi.series KXNBAMVP: http=200 exists=True
-kalshi KXNBAGAME open: rows=6
-  sample tickers: ['KXNBAGAME-26OCT20OKCSAS-SAS', 'KXNBAGAME-26OCT20OKCSAS-OKC', 'KXNBAGAME-26OCT20PHINYK-PHI']
-  sample market: title='San Antonio wins' subtitle=None strike=None open_interest=None close_time=2026-10-23T01:30:00Z yes_bid=None yes_ask=None
-kalshi.candlesticks(48h, 3 real tickers): entries=0 candles=0
-kalshi.orderbooks: entries=1 sample={'orderbook_fp': {'no_dollars': [], 'yes_dollars': []}, 'ticker': 'KXNBAGAME-26OCT20OKCSAS-SAS,KXNBAGAME-26OCT20OKCSAS-OKC,KXNBAGAME-26OCT20PHINYK-PHI'}
-kalshi KXNBAGAME status=settled: rows=0
-kalshi KXNBAGAME status=finalized: rows=0
-kalshi KXNBAGAME status=closed: rows=0
-collection_log tail:
-  2026-09-20T19:36:16Z espn-day espn fail 20260920: HTTP 403
-  2026-09-20T19:36:15Z espn-day espn fail 20260919: HTTP 403
-  2026-09-20T19:36:14Z espn-day espn fail 20260918: HTTP 403
-  2026-09-20T19:36:13Z espn-day espn fail 20260917: HTTP 403
-  2026-09-20T19:36:12Z espn-day espn fail 20260916: HTTP 403
-  2026-09-20T19:36:11Z espn-day espn fail 20260915: HTTP 403
-  2026-09-20T19:36:10Z espn-day espn fail 20260914: HTTP 403
-  2026-09-20T19:36:09Z espn-day espn fail 20260913: HTTP 403
-  2026-09-20T19:36:08Z espn-day espn fail 20260912: HTTP 403
-  2026-09-20T19:36:07Z espn-day espn fail 20260911: HTTP 403
-  2026-09-20T19:36:06Z espn-day espn fail 20260910: HTTP 403
-  2026-09-20T19:36:05Z espn-day espn fail 20260909: HTTP 403
-
-PROBE_CRASH:
-Traceback (most recent call last):
-  File "/home/runner/work/NBAComp/NBAComp/tools/probe_deep.py", line 139, in <module>
-    main()
-  File "/home/runner/work/NBAComp/NBAComp/tools/probe_deep.py", line 97, in main
-    p = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, timeout=60)
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/subprocess.py", line 550, in run
-    stdout, stderr = process.communicate(input, timeout=timeout)
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/subprocess.py", line 1209, in communicate
-    stdout, stderr = self._communicate(input, endtime, timeout)
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/subprocess.py", line 2116, in _communicate
-    self._check_timeout(endtime, orig_timeout, stdout, stderr)
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/subprocess.py", line 1253, in _check_timeout
-    raise TimeoutExpired(
-subprocess.TimeoutExpired: Command '['node', '-e', "fetch('https://stats.nba.com/stats/scoreboardv2?GameDate=01%2F15%2F2026&LeagueID=00&DayOffset=0',{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36','Referer':'https://www.nba.com/','Accept':'application/json'}}).then(r=>r.text().then(t=>console.log('status',r.status,'len',t.length))).catch(e=>console.log('ERR',String(e).slice(0,120)))"]' timed out after 60 seconds
-
+probe4 2026-09-20T19:50:15Z
+site.web scoreboard today: 200 bytes=9821 toplist=1
+site.web scoreboard 20260115: 200 bytes=125924 toplist=9 first=MEM VS ORL status=post odds=None
+site.web scoreboard 20250605: 200 bytes=19740 toplist=1
+site.web injuries: 200 bytes=859816 toplist=0
+site.web teams: 200 bytes=134851 toplist=0
+site.web summary?event=401810433: 200 bytes=422243 boxscore=True athletes=True injuries=True
+basketball-reference 2026 games: 200 bytes=268106
+node stats.nba.com scoreboardv2: TIMEOUT >45s
+node site.api.espn.com scoreboard: status 200 len 9821 head {"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association
+kalshi markets window 2026-01-10..20 no-status: http=200 rows=0
+kalshi events settled: http=200 rows=5
+kalshi.series KXNBAPTS: exists=True
+kalshi.series KXNBATHREES: exists=False
+kalshi.series KXNBATO: exists=False
+kalshi.series KXNBAPRA: exists=True
+kalshi.series KXNBADD: exists=False
+kalshi.series KXNBASTL: exists=True
+kalshi.series KXNBABLK: exists=True
+kalshi.series KXNBAREBS: exists=False
+kalshi.series KXNBAASTS: exists=False
+kalshi.series KXNBAPTSALT: exists=False
+kalshi KXNBAGAME coverage 2026-01: rows(5-cap)=0
+kalshi KXNBAGAME coverage 2025-10: rows(5-cap)=0
+kalshi KXNBAGAME coverage 2025-04: rows(5-cap)=0
+kalshi KXNBAGAME coverage 2024-12: rows(5-cap)=0
+probe4 done
