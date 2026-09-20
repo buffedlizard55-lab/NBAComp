@@ -51,6 +51,22 @@ jobs:
           if git log -1 --grep='\[auto\]' --oneline | grep -q .; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
+          if git log -1 --grep='\[probe\]' --oneline | grep -q .; then
+            echo "probe=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deep probe only (fast iteration)
+        if: steps.skip.outputs.probe == 'true'
+        run: python tools/probe_deep.py
+
+      - name: Commit probe results
+        if: steps.skip.outputs.probe == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/diagnostics.txt || true
+          git commit -m "[auto] deep probe $(date -u +%FT%TZ)" || true
+          git push origin HEAD
 
       - name: Full backfill (on demand)
         if: steps.skip.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.backfill == 'true'
