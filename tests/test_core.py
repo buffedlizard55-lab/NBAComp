@@ -457,3 +457,203 @@ def test_leaderboard_separates_kinds(con, tmp_path):
     idx = (tmp_path / "index.html").read_text()
     assert "Backtest snapshot" in idx
     assert "forward paper trades" in idx
+
+
+# ---------------------------------------------------------------- extended metrics + audit
+
+def test_strategy_performance_extended_metrics(con):
+    """The new strategy_performance must include volatility, longest streaks,
+    largest win/loss, loss rate, pushes/voids, etc."""
+    meta = S.STRATEGIES["NBA-003"]
+    # six settled bets: w, w, w, l, l, push
+    rows = [
+        ("b1", "win", 5.0, -110), ("b2", "win", 8.0, -110),
+        ("b3", "win", 12.0, -110), ("b4", "loss", -10.0, -110),
+        ("b5", "loss", -10.0, -110), ("b6", "push", 0.0, -110),
+    ]
+    for bid, res, pnl, price in rows:
+        db.insert(con, "bets", {
+            "bet_id": bid, "run_id": "r", "kind": "forward", "strategy_id": "NBA-003",
+            "strategy_version": meta["version"], "username": meta["username"],
+            "decision_utc": "2026-01-14T20:00:00Z",
+            "tipoff_utc": "2026-01-15T01:00:00Z",
+            "settlement_utc": "2026-01-15T04:00:00Z",
+            "game_id": "espn:1", "market": "kalshi:winner", "selection": "home",
+            "side": "home", "price": price, "price_format": "american",
+            "source": "t", "stake_usd": 10, "execution_status": "simulated_fill",
+            "result": res, "pnl_usd": pnl, "verification": "test"})
+    perf = sitegen.strategy_performance(con, "NBA-003", "forward")
+    assert perf["bets"] == 6
+    assert perf["wins"] == 3
+    assert perf["losses"] == 2
+    assert perf["pushes"] == 1
+    assert perf["longest_win"] == 3
+    assert perf["longest_loss"] == 2
+    assert perf["volatility"] is not None and perf["volatility"] > 0
+    assert perf["largest_win"] == 12.0
+    assert perf["largest_loss"] == -10.0
+    assert perf["loss_rate"] == pytest.approx(2 / 5)  # decided only (excludes pushes)
+    assert perf["win_rate"] == pytest.approx(3 / 5)
+    assert "max_dd" in perf  # backward compat
+
+
+def test_strategy_profit_by_groups(con):
+    """profit_by must split P&L correctly across grouped dimensions."""
+    meta = S.STRATEGIES["NBA-003"]
+    for bid, market, pnl in [
+        ("g1", "kalshi:winner", 5.0), ("g2", "kalshi:winner", -3.0),
+        ("g3", "total", 10.0), ("g4", "total", 0.0),
+    ]:
+        db.insert(con, "bets", {
+            "bet_id": bid, "run_id": "r", "kind": "forward", "strategy_id": "NBA-003",
+            "strategy_version": meta["version"], "username": meta["username"],
+            "decision_utc": "2026-01-14T20:00:00Z",
+            "settlement_utc": "2026-01-15T04:00:00Z",
+            "game_label": "LAL @ BOS 2026-01-15",
+            "tipoff_utc": "2026-01-15T01:00:00Z",
+            "game_id": "espn:1", "market": market, "selection": "home", "side": "home",
+            "price": 50, "price_format": "kalshi_cents", "source": "t",
+            "stake_usd": 10, "execution_status": "simulated_fill",
+            "result": "win", "pnl_usd": pnl, "verification": "test"})
+    by_market = sitegen.strategy_profit_by(con, "NBA-003", "forward", "market")
+    assert by_market["kalshi:winner"]["pnl"] == 2.0
+    assert by_market["total"]["pnl"] == 10.0
+    by_team = sitegen.strategy_profit_by(con, "NBA-003", "forward", "team")
+    assert "BOS" in by_team
+
+
+def test_audit_exposure_cap_violation(con):
+    """An open exposure > 25% of current bankroll must raise the audit flag."""
+    _seed_game(con, status="scheduled")
+    db.insert(con, "bankroll_events", {
+        "strategy_id": "NBA-003", "as_of_utc": util.utcnow_iso(),
+        "starting": 1000.0, "current": 100.0,
+        "available": 50.0, "exposure": 50.0, "reason": "test"})
+    db.insert(con, "bets", {
+        "bet_id": "over-1", "run_id": "r", "kind": "forward", "strategy_id": "NBA-003",
+        "strategy_version": "1.0", "username": "u", "decision_utc": "2026-01-14T20:00:00Z",
+        "tipoff_utc": "2026-01-15T01:00:00Z",
+        "game_id": "espn:1", "market": "kalshi:winner", "selection": "home",
+        "side": "home", "price": 50, "price_format": "kalshi_cents", "source": "t",
+        "stake_usd": 30.0, "execution_status": "simulated_fill",  # 30 > 25.0 = 25%
+        "result": "pending", "verification": "test"})
+    summary = audit.run_checks(con)
+    names = [c["check"] for c in summary["checks"]]
+    assert "exposure-cap-violated" in names
+
+
+def test_audit_impossible_probability(con):
+    """A bet with model_prob outside (0, 1) must be flagged."""
+    _seed_game(con)
+    db.insert(con, "bets", {
+        "bet_id": "x1", "run_id": "r", "kind": "forward", "strategy_id": "NBA-003",
+        "strategy_version": "1.0", "username": "u", "decision_utc": "2026-01-14T20:00:00Z",
+        "tipoff_utc": "2026-01-15T01:00:00Z", "game_id": "espn:1",
+        "market": "kalshi:winner", "selection": "home", "side": "home",
+        "price": 50, "price_format": "kalshi_cents", "source": "t", "stake_usd": 10,
+        "execution_status": "simulated_fill", "model_prob": 1.5, "market_prob": 0.5,
+        "result": "pending", "verification": "test"})
+    summary = audit.run_checks(con)
+    names = [c["check"] for c in summary["checks"]]
+    assert "impossible-probability" in names
+
+
+def test_audit_bet_still_pending_after_24h(con):
+    """A forward bet whose tipoff was over 24h ago and still pending -> warning."""
+    _seed_game(con, status="final", tipoff="2025-01-15T01:00:00Z")
+    db.insert(con, "bets", {
+        "bet_id": "late", "run_id": "r", "kind": "forward", "strategy_id": "NBA-003",
+        "strategy_version": "1.0", "username": "u",
+        "decision_utc": "2025-01-14T20:00:00Z",
+        "tipoff_utc": "2025-01-15T01:00:00Z",
+        "game_id": "espn:1", "market": "kalshi:winner", "selection": "home", "side": "home",
+        "price": 50, "price_format": "kalshi_cents", "source": "t", "stake_usd": 10,
+        "execution_status": "simulated_fill", "result": "pending", "verification": "test"})
+    summary = audit.run_checks(con)
+    names = [c["check"] for c in summary["checks"]]
+    assert "bet-still-pending-after-24h" in names
+
+
+def test_audit_run_checks_handles_empty_db(con):
+    """Audit must complete cleanly on an empty DB (no spurious flags)."""
+    summary = audit.run_checks(con)
+    assert {"critical", "warn", "info"}.issubset(summary.keys())
+    # No critical look-ahead violations from an empty DB
+    assert summary["critical"] == 0
+
+
+# ---------------------------------------------------------------- forward engine extensions
+
+def test_paper_total_signal_placement_and_settlement(con, tmp_path):
+    """Totals bets must be placed, persist, settle correctly, label as priced-assumption."""
+    from nbacomp import paper
+    _seed_game(con, game_id="espn:tot", tipoff="2026-02-10T01:00:00Z", status="scheduled")
+    db.insert(con, "odds_snapshots", {
+        "game_id": "espn:tot", "captured_utc": "2026-02-09T20:00:00Z",
+        "source": "espn:consensus", "market": "total", "selection": "line 220.5",
+        "line": 220.5, "price": 0, "price_format": "line",
+        "source_url": "x", "source_updated_utc": None})
+    sig = S.Signal(strategy_id="NBA-002", game_id="espn:tot", market="total",
+                   selection="over 220.5", side="over", price=-110,
+                   price_format="american", source="espn:line",
+                   model_prob=0.6, market_prob=0.524,
+                   trigger="pace mismatch: model 230 vs line 220.5",
+                   game_label="LAL @ BOS 2026-02-09",
+                   tipoff_utc="2026-02-10T01:00:00Z")
+    ctx = {"game": con.execute("SELECT * FROM games WHERE game_id='espn:tot'").fetchone(),
+           "decision": "2026-02-09T20:00:00Z", "home": "BOS", "away": "LAL"}
+    n = paper._place_total_bet(con, ctx, sig, info=None)
+    assert n == 1
+    row = con.execute("SELECT * FROM bets WHERE market='total'").fetchone()
+    assert row["verification"].startswith("PRICED-ASSUMPTION")
+    assert row["side"] == "over"
+    # settle as WIN (final total 230)
+    assert paper._settle_one(con, dict(row), by_game={},
+                             g={"home_score": 115, "away_score": 115}) == "win"
+    # settle as LOSS (final total 210)
+    assert paper._settle_one(con, dict(row), by_game={},
+                             g={"home_score": 105, "away_score": 105}) == "loss"
+
+
+def test_paper_prop_signal_no_market_yet(con):
+    """With no live prop market, paper engine must NOT emit prop signals."""
+    from nbacomp import paper
+    _seed_game(con, game_id="espn:p1", tipoff="2026-02-20T01:00:00Z", status="scheduled")
+    g = con.execute("SELECT * FROM games WHERE game_id='espn:p1'").fetchone()
+    ctx = {"game": g, "decision": "2026-02-19T20:00:00Z", "home": "BOS", "away": "LAL",
+           "winner": None, "book": engine.PriceBook(con),
+           "rolling_history": {}, "h_roll": None, "a_roll": None,
+           "h_rest": {}, "a_rest": {}, "total_line": None, "spread_line": None,
+           "inj_adj": {"BOS": 0.0, "LAL": 0.0},
+           "inj_flag": {"BOS": None, "LAL": None}}
+    sigs = paper._prop_signals(con, ctx, props=[])
+    assert sigs == []
+
+
+def test_paper_kalshi_cents_price_for_side():
+    """Helper that maps YES/NO to kalshi_cents must work for both sides."""
+    from nbacomp import paper
+    pp = engine.PricePoint("2026-01-15T00:00:00Z", 60.0, "orderbook_ask")
+    assert paper._kalshi_cents_price_for_side(pp, "home") == 60.0
+    assert paper._kalshi_cents_price_for_side(pp, "away") == 40.0
+
+
+def test_strategy_ids_for_unique_usernames():
+    """Every strategy must have a unique username (competition spec)."""
+    usernames = [m["username"] for m in S.STRATEGIES.values()]
+    assert len(usernames) == len(set(usernames)), f"duplicate username: {usernames}"
+
+
+def test_audit_bet_by_unknown_strategy(con):
+    _seed_game(con)
+    db.insert(con, "bets", {
+        "bet_id": "u1", "run_id": "r", "kind": "forward", "strategy_id": "NBA-999",
+        "strategy_version": "1", "username": "?", "decision_utc": "2026-01-14T20:00:00Z",
+        "tipoff_utc": "2026-01-15T01:00:00Z", "game_id": "espn:1",
+        "market": "kalshi:winner", "selection": "x", "side": "home",
+        "price": 50, "price_format": "kalshi_cents", "source": "t",
+        "stake_usd": 10, "execution_status": "simulated_fill", "result": "pending",
+        "verification": "test"})
+    summary = audit.run_checks(con)
+    names = [c["check"] for c in summary["checks"]]
+    assert "bet-by-unknown-strategy" in names

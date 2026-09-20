@@ -108,4 +108,66 @@ def run_checks(con) -> dict:
     for r in neg_br:
         record("critical", "negative-bankroll", dict(r))
 
+    # --- probability / odds math
+    outofrange = con.execute(
+        "SELECT bet_id, model_prob, market_prob, edge FROM bets WHERE model_prob IS NOT NULL "
+        "AND (model_prob <= 0 OR model_prob >= 1 OR (market_prob IS NOT NULL AND "
+        "(market_prob <= 0 OR market_prob >= 1)))").fetchall()
+    for r in outofrange:
+        record("critical", "impossible-probability", dict(r))
+
+    # --- exposure cap: any strategy whose open exposure exceeds 25% of bankroll
+    exp_rows = con.execute(
+        "SELECT b.strategy_id, COALESCE(SUM(b.stake_usd),0) s, br.current FROM bets b "
+        "JOIN (SELECT strategy_id, current FROM bankroll_events "
+        "       GROUP BY strategy_id HAVING as_of_utc=MAX(as_of_utc)) br "
+        "ON br.strategy_id=b.strategy_id WHERE b.kind='forward' AND b.result='pending' "
+        "GROUP BY b.strategy_id").fetchall()
+    for r in exp_rows:
+        if r["current"] and r["s"] > 0.25 * r["current"] + 0.01:
+            record("critical", "exposure-cap-violated",
+                   {"strategy": r["strategy_id"], "open_pnl": round(r["s"], 2),
+                    "bankroll": round(r["current"], 2)})
+
+    # --- missing strategy / unknown strategy id
+    unknown = con.execute(
+        "SELECT DISTINCT strategy_id FROM bets WHERE strategy_id NOT IN "
+        "(SELECT strategy_id FROM strategies)").fetchall()
+    for r in unknown:
+        record("warn", "bet-by-unknown-strategy", dict(r))
+
+    # --- source-status reachability: at least one src hasn't been verified in 7d
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stale_src = con.execute(
+        "SELECT source_id, checked_utc, ok FROM source_status WHERE checked_utc < ?", (cutoff,)).fetchall()
+    for r in stale_src:
+        record("info", "source-stale", {"source": r["source_id"],
+                                        "last_checked": r["checked_utc"], "ok": r["ok"]})
+
+    # --- duplicate kalshi markets (same ticker inserted twice with different payloads)
+    dup_km = con.execute(
+        "SELECT event_ticker, COUNT(DISTINCT ticker) c FROM kalshi_markets GROUP BY 1 HAVING c>1"
+    ).fetchall()
+    for r in dup_km:
+        record("info", "kalshi-multi-tickers-per-event", dict(r))
+
+    # --- outstanding pending bets whose tipoff was 24h ago
+    overdue = con.execute(
+        "SELECT bet_id, strategy_id, game_id, tipoff_utc FROM bets WHERE result='pending' "
+        "AND kind='forward' AND tipoff_utc < ?",
+        ((datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ"),)
+    ).fetchall()
+    for r in overdue:
+        record("warn", "bet-still-pending-after-24h", dict(r))
+
+    # --- injury listing appearing AFTER game result (impossible)
+    futuristic_inj = con.execute(
+        "SELECT i.player, i.published_utc, g.game_date_et FROM injuries i "
+        "JOIN games g ON g.home_team = i.team OR g.away_team = i.team "
+        "WHERE i.published_utc IS NOT NULL AND date(i.published_utc) > "
+        "datetime(g.game_date_et, '+7 days') LIMIT 25").fetchall()
+    for r in futuristic_inj:
+        record("info", "injury-listing-late", dict(r))
+
     return summary

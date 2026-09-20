@@ -108,6 +108,28 @@ ENTRIES = [
         "decision": "Backtest/paper P&L is now trustworthy-by-construction at the sizing/settlement level; remaining risk is data availability, not code.",
         "next_steps": "Pass 3: line-by-line requirements review against the full competition spec.",
     },
+    {
+        "question": "Pass 3 — line-by-line requirements review against the original prompt?",
+        "sources_searched": "Local code review against the 66-section competition prompt; gap analysis; categories not yet covered: starting lineups (#7), rotation/minutes (#8), rebounds-only (#15), assists-only (#16), shot-profile numeric (#13), live betting (#27), overtime (#28), referee (#23 — explicitly excluded), coaching (#24).",
+        "data_discovered": ("Coverage gaps closed: started lineup edge (NBA-019 LineupSpotLarry, gated on starting-lineup feed), "
+                            "defensive matchup (NBA-015 DefRtgLena — defense-vs-offense under-totals), "
+                            "foul-rate / free-throw matchups (NBA-016 FoulToneFern), "
+                            "pace mismatch generalization (NBA-017 PaceMatchQuincy), "
+                            "overtime observer (NBA-018 OvertoneOlive — counts OT games since Kalshi has no OT market currently). "
+                            "Forward paper engine now runs every registered strategy via the SAME evaluator set as the backtester "
+                            "(NBA-001/003/004/005/006/007 + NBA-002/010/011 totals + NBA-008/009/014 props, when priced). "
+                            "Risk metrics expanded: per-strategy volatility, longest win/loss streaks, largest single win/loss, "
+                            "loss rate, win/loss push/void counts. Site shows profit-by-month and profit-by-category breakdowns "
+                            "on the leaderboard; per-strategy profit-by-market/team/month breakdowns on the strategy page. "
+                            "Audit extended: exposure-cap-violation, impossible-probability, bet-still-pending-after-24h, "
+                            "unknown-strategy detection, stale source flags."),
+        "hypothesis": None,
+        "test_performed": "49-test pytest suite now covers: extended performance metrics, profit-by groupings, exposure-cap audit, impossible-probability audit, pending-24h audit, empty-DB audit, total signal placement + settlement, prop signal no-market guard, kalshi_cents helper, unique-username invariant, unknown-strategy audit, paper total placement.",
+        "result": "All 49 tests pass. Site builds without errors against empty seed DB and against a populated DB.",
+        "verification": "tests/test_core.py + tests/test_collect_and_backtest.py — 49 passed in 0.56s.",
+        "decision": "Continue collecting data via GitHub Actions; every pipeline run will inflate real results on top of this scaffold.",
+        "next_steps": "Pass 4 (live): first real ESPN scoreboard + Kalshi backfill + box-scores + paper-betting pass executed in Actions.",
+    },
 ]
 
 

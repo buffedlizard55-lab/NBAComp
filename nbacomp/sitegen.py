@@ -76,26 +76,93 @@ def strategy_performance(con, strategy_id: str, kind: str) -> dict:
         "SELECT * FROM bets WHERE strategy_id=? AND kind=? AND result IN ('win','loss','push','void')",
         (strategy_id, kind)).fetchall()
     if not rows:
-        return {"bets": 0}
+        pending = con.execute(
+            "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
+            (strategy_id, kind)).fetchone()["c"]
+        return {"bets": 0, "pending": pending}
     pnl = sum(r["pnl_usd"] or 0 for r in rows)
     wins = sum(1 for r in rows if r["result"] == "win")
+    losses = sum(1 for r in rows if r["result"] == "loss")
+    pushes = sum(1 for r in rows if r["result"] == "push")
+    voids = sum(1 for r in rows if r["result"] == "void")
     decided = sum(1 for r in rows if r["result"] in ("win", "loss"))
     staked = sum(r["stake_usd"] or 0 for r in rows)
+    sorted_rows = sorted(rows, key=lambda r: r["settlement_utc"] or "")
     curve, peak, mdd = 0.0, 0.0, 0.0
-    for r in sorted(rows, key=lambda r: r["settlement_utc"] or ""):
+    pnl_series = []
+    for r in sorted_rows:
         curve += r["pnl_usd"] or 0
         peak = max(peak, curve)
         mdd = max(mdd, peak - curve)
+        pnl_series.append(r["pnl_usd"] or 0)
+    # volatility: std of bet P&L (sample std)
+    n = len(pnl_series)
+    if n >= 2:
+        mean = sum(pnl_series) / n
+        var = sum((x - mean) ** 2 for x in pnl_series) / (n - 1)
+        vol = var ** 0.5
+    else:
+        vol = None
+    # streaks (longest winning and losing streaks, in chronological order)
+    longest_win = longest_loss = cur_win = cur_loss = 0
+    for r in sorted_rows:
+        if r["result"] == "win":
+            cur_win += 1; cur_loss = 0
+            longest_win = max(longest_win, cur_win)
+        elif r["result"] == "loss":
+            cur_loss += 1; cur_win = 0
+            longest_loss = max(longest_loss, cur_loss)
+        else:
+            cur_win = cur_loss = 0
+    # largest win/loss
+    decided_pnls = [r["pnl_usd"] for r in rows if r["result"] in ("win", "loss")]
+    largest_win = max(decided_pnls) if decided_pnls else None
+    largest_loss = min(decided_pnls) if decided_pnls else None
     odds = [abs(float(r["price"])) for r in rows if r["price"] is not None]
+    pending = con.execute(
+        "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
+        (strategy_id, kind)).fetchone()["c"]
     return {
-        "bets": len(rows), "wins": wins, "win_rate": wins / decided if decided else None,
+        "bets": len(rows), "wins": wins, "losses": losses, "pushes": pushes,
+        "voids": voids, "win_rate": wins / decided if decided else None,
+        "loss_rate": losses / decided if decided else None,
         "pnl": round(pnl, 2), "roi": pnl / staked if staked else None,
         "staked": round(staked, 2), "max_dd": round(mdd, 2),
+        "volatility": round(vol, 2) if vol is not None else None,
+        "largest_win": round(largest_win, 2) if largest_win is not None else None,
+        "largest_loss": round(largest_loss, 2) if largest_loss is not None else None,
+        "longest_win": longest_win, "longest_loss": longest_loss,
         "avg_price": round(sum(odds) / len(odds), 1) if odds else None,
-        "pending": con.execute(
-            "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
-            (strategy_id, kind)).fetchone()["c"],
+        "pending": pending,
     }
+
+
+def strategy_profit_by(con, strategy_id: str, kind: str, group_by: str) -> dict[str, dict]:
+    """Profit / bet count grouped by some dimension (market/team/player/month)."""
+    rows = con.execute(
+        "SELECT * FROM bets WHERE strategy_id=? AND kind=? AND result IN ('win','loss','push','void')",
+        (strategy_id, kind)).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        if group_by == "market":
+            key = r["market"] or "unknown"
+        elif group_by == "month":
+            ts = r["settlement_utc"] or r["decision_utc"] or ""
+            key = (ts[:7]) if ts else "unknown"
+        elif group_by == "team":
+            lab = r["game_label"] or ""
+            key = lab.split("@")[1].strip().split()[0] if "@" in lab else "unknown"
+        elif group_by == "player":
+            sel = r["selection"] or ""
+            key = sel.split()[0] if sel else "unknown"
+        else:
+            key = "all"
+        d = out.setdefault(key, {"pnl": 0.0, "bets": 0, "wins": 0})
+        d["pnl"] += r["pnl_usd"] or 0
+        d["bets"] += 1
+        if r["result"] == "win":
+            d["wins"] += 1
+    return out
 
 
 def build_all(con, out_dir: str = "."):
@@ -216,21 +283,95 @@ def leaderboard(con, out_dir):
 <p class="muted">Ranked by total forward P&L (competition objective: strongest returns). Risk metrics are
 displayed for context, not used for ranking. Backtest and forward records are always separate.</p>
 <h2>Forward paper-trading competition</h2>
-{table(["Rank", "Username", "Strategy", "Bankroll", "P&L", "ROI", "Bets", "Win %", "Avg price",
-        "Max DD", "Staked", "Pending", "Status"],
-       [[i + 1, r["username"], f"<a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a>",
-         fmt_money(r["bankroll"]), fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")),
-         r.get("bets", 0), f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
-         r.get("avg_price") or "—", fmt_money(r.get("max_dd") or 0), fmt_money(r.get("staked") or 0),
-         r.get("pending", 0), _status_of(r, "forward")] for i, r in enumerate(fwd)])}
+<table class='muted'><thead><tr>
+<th>Rank</th><th>Username</th><th>Strategy</th><th>Bankroll</th><th>P&amp;L</th><th>ROI</th>
+<th>Bets</th><th>Win %</th><th>Avg price</th><th>Max DD</th><th>Volatility</th>
+<th>Largest W/L</th><th>Longest streaks</th><th>Staked</th><th>Pending</th><th>Status</th>
+</tr></thead><tbody>
+{''.join(_leaderboard_row(r, i, kind='forward') for i, r in enumerate(fwd))}
+</tbody></table>
+<h3>Forward P&L by month (competition-wide)</h3>
+{_profit_by_competition(con, "forward")}
+<h3>Forward P&L by strategy-category</h3>
+{_profit_by_category(con, "forward")}
 <h2>Backtest results (historical simulation)</h2>
-{table(["Strategy", "Bets", "Win %", "P&L", "ROI", "Max DD", "Avg price", "Status"],
-       [[f"<a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a>", r.get("bets", 0),
-         f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
-         fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")), fmt_money(r.get("max_dd") or 0),
-         r.get("avg_price") or "—", _status_of(r, "backtest")] for r in bt])}
+<table class='muted'><thead><tr>
+<th>Strategy</th><th>Bets</th><th>Win %</th><th>P&amp;L</th><th>ROI</th><th>Max DD</th>
+<th>Volatility</th><th>Staked</th><th>Status</th>
+</tr></thead><tbody>
+{''.join(_leaderboard_row(r, 0, kind='backtest') for r in bt)}
+</tbody></table>
 """
     _write(out_dir, "leaderboard.html", page("Leaderboard", body, "leaderboard.html"))
+
+
+def _leaderboard_row(r, i, kind="forward") -> str:
+    rank = i + 1 if kind == "forward" else ""
+    pnl = r.get("pnl") or 0
+    pnl_class = "pos" if pnl > 0 and r.get("bets", 0) > 0 else ("neg" if pnl < 0 else "")
+    win_pct = f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—"
+    vol = f"${r['volatility']:.2f}" if r.get("volatility") is not None else "—"
+    biggest_w = fmt_money(r.get("largest_win"))
+    biggest_l = fmt_money(r.get("largest_loss"))
+    if kind == "forward":
+        return (f"<tr><td>{rank}</td><td>{_esc(r['username'])}</td>"
+                f"<td><a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a></td>"
+                f"<td>{fmt_money(r['bankroll'])}</td>"
+                f"<td class='{pnl_class}'>{fmt_money(pnl)}</td>"
+                f"<td>{fmt_pct(r.get('roi'))}</td>"
+                f"<td>{r.get('bets', 0)}</td>"
+                f"<td>{win_pct}</td>"
+                f"<td>{r.get('avg_price') or '—'}</td>"
+                f"<td>{fmt_money(r.get('max_dd') or 0)}</td>"
+                f"<td>{vol}</td>"
+                f"<td>{biggest_w} / {biggest_l}</td>"
+                f"<td>{r.get('longest_win', 0)}W / {r.get('longest_loss', 0)}L</td>"
+                f"<td>{fmt_money(r.get('staked') or 0)}</td>"
+                f"<td>{r.get('pending', 0)}</td>"
+                f"<td>{_status_of(r, kind)}</td></tr>")
+    return (f"<tr><td><a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a></td>"
+            f"<td>{r.get('bets', 0)}</td>"
+            f"<td>{win_pct}</td>"
+            f"<td class='{pnl_class}'>{fmt_money(pnl)}</td>"
+            f"<td>{fmt_pct(r.get('roi'))}</td>"
+            f"<td>{fmt_money(r.get('max_dd') or 0)}</td>"
+            f"<td>{vol}</td>"
+            f"<td>{fmt_money(r.get('staked') or 0)}</td>"
+            f"<td>{_status_of(r, kind)}</td></tr>")
+
+
+def _profit_by_competition(con, kind: str) -> str:
+    rows = con.execute(
+        "SELECT substr(COALESCE(settlement_utc, decision_utc), 1, 7) m, "
+        "COALESCE(SUM(pnl_usd),0) p, COUNT(*) c FROM bets WHERE kind=? AND "
+        "result IN ('win','loss','push','void') GROUP BY 1 ORDER BY 1",
+        (kind,)).fetchall()
+    if not rows:
+        return "<p class='empty'>No settled bets yet.</p>"
+    body = "<table><thead><tr><th>Month</th><th>P&L</th><th>Bets</th></tr></thead><tbody>"
+    for r in rows:
+        body += (f"<tr><td>{_esc(r['m'])}</td>"
+                 f"<td>{fmt_money(r['p'])}</td>"
+                 f"<td>{r['c']}</td></tr>")
+    body += "</tbody></table>"
+    return body
+
+
+def _profit_by_category(con, kind: str) -> str:
+    rows = con.execute(
+        "SELECT s.category, COALESCE(SUM(b.pnl_usd),0) p, COUNT(*) c FROM bets b "
+        "JOIN strategies s ON s.strategy_id=b.strategy_id "
+        "WHERE b.kind=? AND b.result IN ('win','loss','push','void') GROUP BY 1 "
+        "ORDER BY p DESC", (kind,)).fetchall()
+    if not rows:
+        return "<p class='empty'>No settled bets yet.</p>"
+    body = "<table><thead><tr><th>Strategy category</th><th>P&L</th><th>Bets</th></tr></thead><tbody>"
+    for r in rows:
+        body += (f"<tr><td>{_esc(r['category'])}</td>"
+                 f"<td>{fmt_money(r['p'])}</td>"
+                 f"<td>{r['c']}</td></tr>")
+    body += "</tbody></table>"
+    return body
 
 
 def strategies_page(con, out_dir):
@@ -252,14 +393,26 @@ def strategies_page(con, out_dir):
                         [[_esc(b["game_label"]), _esc(b["market"]), _esc(b["selection"]),
                           _esc(b["price"]), f"{b['model_prob']:.3f}" if b["model_prob"] else "—",
                           _esc(b["result"]), fmt_money(b["pnl_usd"])] for b in bets])
+        # profit breakdowns
+        fwd_by_market = strategy_profit_by(con, sid, "forward", "market")
+        fwd_by_team = strategy_profit_by(con, sid, "forward", "team")
+        fwd_by_month = strategy_profit_by(con, sid, "forward", "month")
+        fwd_breakdowns = _profit_breakdown_html(fwd_by_market, "market") + \
+                         _profit_breakdown_html(fwd_by_team, "team") + \
+                         _profit_breakdown_html(fwd_by_month, "month")
 
         def perf_html(p, label):
             if not p.get("bets"):
                 return (f"<div class='perf'><b>{label}</b>: no {label.split(' ')[0].lower()} bets yet"
                         f"{' — ' + _esc(p.get('note')) if p.get('note') else ''}.</div>")
-            return (f"<div class='perf'><b>{label}</b> — bets {p['bets']} · win {p['win_rate'] * 100:.1f}% · "
+            base = (f"<div class='perf'><b>{label}</b> — bets {p['bets']} · win {p['win_rate'] * 100:.1f}% · "
                     f"P&L {fmt_money(p['pnl'])} · ROI {fmt_pct(p['roi'])} · maxDD {fmt_money(p['max_dd'])}"
-                    f" · pending {p['pending']}</div>")
+                    f" · pending {p['pending']}")
+            base += f" · vol {fmt_money(p['volatility'])}" if p.get('volatility') is not None else ""
+            base += (f" · largest W {fmt_money(p['largest_win'])} / L {fmt_money(p['largest_loss'])}"
+                     f" · streaks {p['longest_win']}W / {p['longest_loss']}L")
+            base += "</div>"
+            return base
 
         cards.append(f"""
 <div class="strategy-card" id="{sid}">
@@ -277,6 +430,7 @@ def strategies_page(con, out_dir):
 <details><summary>Data limitations</summary><ul>{lims}</ul></details>
 {perf_html(perf_b, 'Backtest (historical simulation)')}
 {perf_html(perf_f, 'Forward (live paper competition)')}
+<details><summary>Forward breakdowns (market / team / month)</summary>{fwd_breakdowns or "<p class='empty'>No forward bets yet.</p>"}</details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary>{why}</details>
 <details open><summary>Recent bets (all kinds)</summary>{bt_rows}</details>
 </div>""")
@@ -285,6 +439,17 @@ def strategies_page(con, out_dir):
             "Backtest and forward records are labeled separately and never mixed.</p>"
             + "".join(cards))
     _write(out_dir, "strategies.html", page("Strategies", body, "strategies.html"))
+
+
+def _profit_breakdown_html(by: dict, dim: str) -> str:
+    if not by:
+        return ""
+    rows = "".join(f"<tr><td>{_esc(k)}</td><td>{d.get('bets', 0)}</td>"
+                   f"<td>{d.get('wins', 0)}</td>"
+                   f"<td>{fmt_money(d.get('pnl', 0))}</td></tr>"
+                   for k, d in sorted(by.items()))
+    return ("<table><thead><tr><th>" + _esc(dim).title() +
+            "</th><th>Bets</th><th>Wins</th><th>P&L</th></tr></thead><tbody>" + rows + "</tbody></table>")
 
 
 def _why_analysis(bt: dict, fwd: dict) -> str:
