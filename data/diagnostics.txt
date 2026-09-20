@@ -36,3 +36,23 @@ collection_log tail:
   2026-09-20T19:36:07Z espn-day espn fail 20260911: HTTP 403
   2026-09-20T19:36:06Z espn-day espn fail 20260910: HTTP 403
   2026-09-20T19:36:05Z espn-day espn fail 20260909: HTTP 403
+
+PROBE_CRASH:
+Traceback (most recent call last):
+  File "/home/runner/work/NBAComp/NBAComp/tools/probe_deep.py", line 139, in <module>
+    main()
+  File "/home/runner/work/NBAComp/NBAComp/tools/probe_deep.py", line 97, in main
+    p = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, timeout=60)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/subprocess.py", line 1209, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/subprocess.py", line 2116, in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/subprocess.py", line 1253, in _check_timeout
+    raise TimeoutExpired(
+subprocess.TimeoutExpired: Command '['node', '-e', "fetch('https://stats.nba.com/stats/scoreboardv2?GameDate=01%2F15%2F2026&LeagueID=00&DayOffset=0',{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36','Referer':'https://www.nba.com/','Accept':'application/json'}}).then(r=>r.text().then(t=>console.log('status',r.status,'len',t.length))).catch(e=>console.log('ERR',String(e).slice(0,120)))"]' timed out after 60 seconds
+
