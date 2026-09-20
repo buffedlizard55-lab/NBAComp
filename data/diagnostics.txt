@@ -1,27 +1,16 @@
-probe4 2026-09-20T19:52:04Z
-site.web scoreboard today: 200 bytes=9821 toplist=1
-site.web scoreboard 20260115: 200 bytes=125924 toplist=9 first=MEM VS ORL status=post odds=None
-site.web scoreboard 20250605: 200 bytes=19740 toplist=1
-site.web injuries: 200 bytes=859816 toplist=0
-site.web teams: 200 bytes=134851 toplist=0
-site.web summary?event=401810433: 200 bytes=422243 boxscore=True athletes=True injuries=True
-basketball-reference 2026 games: 200 bytes=268106
-node stats.nba.com scoreboardv2: TIMEOUT >45s
-node site.api.espn.com scoreboard: status 200 len 9821 head {"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association
-kalshi markets window 2026-01-10..20 no-status: http=200 rows=0
-kalshi events settled: http=200 rows=5
-kalshi.series KXNBAPTS: exists=True
-kalshi.series KXNBATHREES: exists=False
-kalshi.series KXNBATO: exists=False
-kalshi.series KXNBAPRA: exists=True
-kalshi.series KXNBADD: exists=False
-kalshi.series KXNBASTL: exists=True
-kalshi.series KXNBABLK: exists=True
-kalshi.series KXNBAREBS: exists=False
-kalshi.series KXNBAASTS: exists=False
-kalshi.series KXNBAPTSALT: exists=False
-kalshi KXNBAGAME coverage 2026-01: rows(5-cap)=0
-kalshi KXNBAGAME coverage 2025-10: rows(5-cap)=0
-kalshi KXNBAGAME coverage 2025-04: rows(5-cap)=0
-kalshi KXNBAGAME coverage 2024-12: rows(5-cap)=0
-probe4 done
+probe5 2026-09-20T19:54:28Z
+events settled page1: http=200 rows=200 cursor=yes
+  event: ticker=None title='Game 5: New York at San Antonio' sub='NYK at SAS (Jun 13)' strike=None close=None
+  event: ticker=None title='Game 4: San Antonio at New York' sub='SAS at NYK (Jun 10)' strike=None close=None
+  event: ticker=None title='Game 3: San Antonio at New York' sub='SAS at NYK (Jun 8)' strike=None close=None
+  walked 8 pages, seen=1448 oldest=None close=None
+
+PROBE_CRASH:
+Traceback (most recent call last):
+  File "/home/runner/work/NBAComp/NBAComp/tools/probe_kalshi_events.py", line 91, in <module>
+    main()
+  File "/home/runner/work/NBAComp/NBAComp/tools/probe_kalshi_events.py", line 65, in main
+    rm = get("/markets", {"event_ticker": ev0["ticker"], "limit": 100})
+                                          ~~~^^^^^^^^^^
+KeyError: 'ticker'
+
