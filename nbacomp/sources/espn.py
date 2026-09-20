@@ -1,9 +1,15 @@
-"""ESPN public JSON endpoints (site.api.espn.com) — schedule, results, odds, injuries.
+"""ESPN public JSON endpoints — schedule, results, odds, injuries, box scores.
 
-Access notes (verified 2026-09-20 against sibling project NBAInjuryReport audits):
-- Keyless, no registration. Rate limits unknown -> min_interval enforced.
-- Some endpoints have 403'd specific runner fingerprints before; failures are
-  logged, never fabricated, and data.nba.net / stats.nba.com act as fallbacks.
+TRANSPORT NOTES (verified from GitHub Actions runners 2026-09-20, recorded in
+data/diagnostics.txt and the research log):
+- site.api.espn.com returns Akamai 403 to runner TLS fingerprints (python and
+  curl) but answers 200 to Node fetch; site.web.api.espn.com answers 200 to
+  plain curl/urllib. We therefore use site.web as PRIMARY and keep site.api as
+  fallback for other environments.
+- Historical dates work on /scoreboard?dates=YYYYMMDD (final scores persist;
+  odds only persist for upcoming/near-term games).
+- /summary?event=ID returns full box scores (athletes + statistics) and the
+  game's injury listings.
 """
 from __future__ import annotations
 
@@ -11,29 +17,40 @@ from datetime import datetime, timedelta, timezone
 
 from .. import http
 
-BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
-CORE = "https://sports.core.api.espn.com/v2/sports/basketball/league/nba"
+BASE_WEB = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba"
+BASE = BASE_WEB  # primary host (runner-verified)
+BASE_ALT = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 
 LEAGUE_ID = "00"
 
 
-def scoreboard(date: str | None = None) -> http.HttpResult:
+def _get(path: str, params: dict | None = None):
+    r = http.get(f"{BASE_WEB}{path}", params, min_interval=0.8)
+    if not r.ok and r.status in (0, 403, 404):
+        r2 = http.get(f"{BASE_ALT}{path}", params, min_interval=0.8)
+        if r2.ok:
+            return r2
+    return r
+
+
+def scoreboard(date: str | None = None):
     """date = YYYYMMDD (ET game date). None = today."""
-    params = {"dates": date} if date else None
-    return http.get(f"{BASE}/scoreboard", params, min_interval=1.0)
+    return _get("/scoreboard", {"dates": date} if date else None)
 
 
-def summary(event_id: str) -> http.HttpResult:
-    return http.get(f"{BASE}/summary", {"event": event_id}, min_interval=1.0)
+def summary(event_id: str):
+    return _get("/summary", {"event": event_id})
 
 
-def injuries() -> http.HttpResult:
-    return http.get(f"{BASE}/injuries", min_interval=1.0)
+def injuries():
+    return _get("/injuries")
 
 
-def teams() -> http.HttpResult:
-    return http.get(f"{BASE}/teams", min_interval=1.0)
+def teams():
+    return _get("/teams")
 
+
+# ---------------------------------------------------------------- parsing
 
 def parse_scoreboard(js: dict) -> list[dict]:
     """Normalize scoreboard events into game dicts (no scores invented)."""
@@ -50,7 +67,6 @@ def parse_scoreboard(js: dict) -> list[dict]:
                     "name": (c.get("team") or {}).get("displayName"),
                     "score": (c.get("score") if isinstance(c.get("score"), str)
                               else ((c.get("score") or {}).get("displayValue"))),
-                    "winner": c.get("winner"),
                 }
                 if c.get("homeAway") == "home":
                     home = side
@@ -65,17 +81,14 @@ def parse_scoreboard(js: dict) -> list[dict]:
                 "game_id": f"espn:{ev.get('id')}",
                 "source": "espn",
                 "season": _season_label(ev.get("season")),
-                "game_date_et": (ev.get("date") or "")[:10] if False else _et_date(ev.get("date")),
+                "game_date_et": _et_date(ev.get("date")),
                 "tipoff_utc": ev.get("date"),
                 "home_team": home["abbrev"],
                 "away_team": away["abbrev"],
-                "home_espn_id": home["espn_id"],
-                "away_espn_id": away["espn_id"],
                 "status": status,
                 "neutral_site": 1 if comp.get("neutral") else 0,
                 "home_score": _int_or_none(home["score"]) if status == "final" else None,
                 "away_score": _int_or_none(away["score"]) if status == "final" else None,
-                "source_updated_utc": None,
             }
             odds = comp.get("odds") or ev.get("odds")
             if odds:
@@ -92,7 +105,6 @@ def _season_label(season: dict | None) -> str:
         y = (season or {}).get("year")
         if not y:
             return "unknown"
-        # NBA season label: year is the year the season *ends* (e.g. 2026 -> 2025-26)
         return f"{y - 1}-{str(y)[2:]}"
     except Exception:
         return "unknown"
@@ -128,13 +140,7 @@ def _int_or_none(v) -> int | None:
 def _parse_odds(o: dict, game_id: str) -> dict | None:
     try:
         prov = ((o.get("provider") or {}).get("name") or "unknown-provider")
-        out = {
-            "game_id": game_id,
-            "provider": prov,
-            "captured_note": "snapshot at fetch time; source timestamps not provided by endpoint",
-            "source_updated_utc": None,
-        }
-        details = o.get("details") or ""
+        out = {"game_id": game_id, "provider": prov, "source_updated_utc": None}
         ou = o.get("overUnder")
         spread = o.get("spread")
         if ou is not None:
@@ -147,7 +153,6 @@ def _parse_odds(o: dict, game_id: str) -> dict | None:
                 out["spread_home"] = float(spread)
             except (TypeError, ValueError):
                 pass
-        out["details"] = details
         h = o.get("homeTeamOdds") or {}
         a = o.get("awayTeamOdds") or {}
         if isinstance(h.get("moneyLine"), (int, float)):
@@ -166,30 +171,200 @@ def _parse_odds(o: dict, game_id: str) -> dict | None:
                     out["open_spread_home"] = float(opening["spread"])
                 except (TypeError, ValueError):
                     pass
-        return out if (out.get("total") or out.get("ml_home") or out.get("ml_away")
+        return out if (out.get("total") or out.get("ml_home") is not None
+                       or out.get("ml_away") is not None
                        or out.get("spread_home") is not None) else None
     except Exception:
         return None
 
 
 def parse_injuries(js: dict) -> list[dict]:
+    """Shape-agnostic: find every {team, injuries[]} block in the payload."""
     out: list[dict] = []
-    for team_block in (js or {}).get("items", []) or []:
-        t = team_block.get("team") or {}
-        abbrev = t.get("abbreviation") or t.get("shortDisplayName")
-        for inj in team_block.get("injuries", []) or []:
-            ath = inj.get("athlete") or {}
-            item = {
-                "player": ath.get("displayName") or "",
-                "player_id": f"espn:{ath.get('id')}" if ath.get("id") else None,
-                "team": abbrev,
-                "status": ((inj.get("status") or {}).get("name") or ""),
-                "reason": None,
-                "source": "espn",
-                "source_url": f"{BASE}/injuries",
-                "published_utc": inj.get("date") or ((inj.get("status") or {}).get("date")),
-                "note": inj.get("longComment") or inj.get("shortComment") or None,
-            }
-            if item["player"] and item["status"]:
-                out.append(item)
+
+    def walk(node):
+        if isinstance(node, dict):
+            inj = node.get("injuries")
+            if isinstance(inj, list) and node.get("team"):
+                t = node["team"] or {}
+                abbrev = t.get("abbreviation") or t.get("shortDisplayName")
+                for i in inj:
+                    ath = i.get("athlete") or {}
+                    item = {
+                        "player": ath.get("displayName") or "",
+                        "player_id": f"espn:{ath.get('id')}" if ath.get("id") else None,
+                        "team": abbrev,
+                        "status": ((i.get("status") or {}).get("name") or ""),
+                        "source": "espn",
+                        "source_url": f"{BASE}/injuries",
+                        "published_utc": i.get("date") or ((i.get("status") or {}).get("date")),
+                        "note": i.get("longComment") or i.get("shortComment") or None,
+                        "game_date": None,
+                    }
+                    if item["player"] and item["status"]:
+                        out.append(item)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(js or {})
+    return out
+
+
+# ------------------------------------------------------------- box scores
+
+def _game_meta(js: dict) -> tuple[str | None, str, dict[str, dict]]:
+    """(game_id, season, {abbrev: {home, score}}) from a summary payload."""
+    game_info = js.get("header") or {}
+    game_id = js.get("gameId") or game_info.get("id")
+    season_year = None
+    try:
+        season_year = ((game_info.get("season") or {}).get("year"))
+    except Exception:
+        pass
+    season = f"{season_year - 1}-{str(season_year)[2:]}" if season_year else "unknown"
+    meta: dict[str, dict] = {}
+    try:
+        for c in ((game_info.get("competitions") or [{}])[0].get("competitors") or []):
+            ab = (c.get("team") or {}).get("abbreviation")
+            if ab:
+                meta[ab] = {"home": c.get("homeAway") == "home", "score": c.get("score")}
+    except Exception:
+        pass
+    return (str(game_id) if game_id else None), season, meta
+
+
+def _split_made_att(v: str) -> tuple[int | None, int | None]:
+    try:
+        a, b = str(v).split("-")
+        return int(float(a)), int(float(b))
+    except (TypeError, ValueError):
+        return None, None
+
+
+def parse_boxscore(js: dict) -> list[dict]:
+    """Per-player game logs from a summary payload (verified real shape):
+
+    boxscore.players[] = {team:{abbreviation}, statistics[]} where each
+    statistics entry has names[] like MIN,PTS,FG,3PT,FT,REB,AST,TO,STL,BLK,
+    OREB,DREB,PF,+/- and athletes[] = {athlete:{id,displayName}, starter,
+    didNotPlay, reason, stats[]}. FG/3PT/FT values are "made-att" strings.
+    """
+    out: list[dict] = []
+    box = (js or {}).get("boxscore") or {}
+    game_id, season, _meta = _game_meta(js)
+    for team_block in box.get("players", []) or []:
+        team = ((team_block.get("team") or {}).get("abbreviation")) or ""
+        for stat_group in team_block.get("statistics", []) or []:
+            names = [str(x).upper() for x in (stat_group.get("names") or [])]
+            if not names:
+                continue
+            for entry in stat_group.get("athletes", []) or []:
+                ath = entry.get("athlete") or {}
+                name = ath.get("displayName") or ""
+                if not name:
+                    continue
+                stats_raw = entry.get("stats") or []
+                dnp = bool(entry.get("didNotPlay"))
+                row = {
+                    "season": season,
+                    "game_id": f"espn:{game_id}" if game_id else None,
+                    "player": name,
+                    "player_id": f"espn:{ath.get('id')}" if ath.get("id") else None,
+                    "team": team,
+                    "status": "dnp" if dnp else ("started" if entry.get("starter") else "bench"),
+                    "minutes": None, "pts": None, "reb": None, "ast": None,
+                    "stl": None, "blk": None, "tov": None, "fg3m": None,
+                    "fgm": None, "fga": None, "ftm": None, "fta": None,
+                    "plus_minus": None,
+                }
+                if stats_raw and not dnp:
+                    for i, val in enumerate(stats_raw):
+                        key = names[i] if i < len(names) else ""
+                        try:
+                            if key == "MIN":
+                                row["minutes"] = _minutes(val)
+                            elif key == "PTS":
+                                row["pts"] = int(float(val))
+                            elif key == "REB":
+                                row["reb"] = int(float(val))
+                            elif key == "AST":
+                                row["ast"] = int(float(val))
+                            elif key == "STL":
+                                row["stl"] = int(float(val))
+                            elif key == "BLK":
+                                row["blk"] = int(float(val))
+                            elif key == "TO":
+                                row["tov"] = int(float(val))
+                            elif key == "FG":
+                                row["fgm"], row["fga"] = _split_made_att(val)
+                            elif key == "3PT":
+                                row["fg3m"], row["fg3a"] = _split_made_att(val)
+                            elif key == "FT":
+                                row["ftm"], row["fta"] = _split_made_att(val)
+                            elif key == "+/-":
+                                row["plus_minus"] = float(val)
+                        except (TypeError, ValueError):
+                            continue
+                if row["game_id"]:
+                    out.append(row)
+    return out
+
+
+def _minutes(v) -> float | None:
+    try:
+        if isinstance(v, str) and ":" in v:
+            mm, ss = v.split(":")
+            return round(int(mm) + int(ss) / 60.0, 1)
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_team_boxscore(js: dict) -> list[dict]:
+    """Per-team box lines from the summary payload (verified real shape):
+
+    boxscore.teams[] = {team:{abbreviation}, statistics:[{name, label,
+    displayValue}]} with FG/3PT/FT as "made-att" and OR/TO as ints. Used for
+    possession-based pace/efficiency features.
+    """
+    out: list[dict] = []
+    box = (js or {}).get("boxscore") or {}
+    game_id, season, meta = _game_meta(js)
+    for team_block in box.get("teams", []) or []:
+        team = ((team_block.get("team") or {}).get("abbreviation")) or ""
+        row = {"season": season, "game_id": f"espn:{game_id}" if game_id else None,
+               "team": team, "fga": None, "fg3a": None, "oreb": None, "tov": None,
+               "fta": None, "pts": None, "fgm": None, "fg3m": None, "ftm": None,
+               "reb": None, "ast": None, "is_home": None, "score": None}
+        for st in team_block.get("statistics", []) or []:
+            name = str(st.get("name") or "")
+            val = st.get("displayValue")
+            try:
+                if name == "fieldGoalsMade-fieldGoalsAttempted":
+                    row["fgm"], row["fga"] = _split_made_att(val)
+                elif name == "threePointFieldGoalsMade-threePointFieldGoalsAttempted":
+                    row["fg3m"], row["fg3a"] = _split_made_att(val)
+                elif name == "freeThrowsMade-freeThrowsAttempted":
+                    row["ftm"], row["fta"] = _split_made_att(val)
+                elif name == "totalRebounds":
+                    row["reb"] = int(float(val))
+                elif name == "offensiveRebounds":
+                    row["oreb"] = int(float(val))
+                elif name == "assists":
+                    row["ast"] = int(float(val))
+                elif name == "turnovers":
+                    row["tov"] = int(float(val))
+            except (TypeError, ValueError):
+                continue
+        m = meta.get(team) or {}
+        row["is_home"] = 1 if m.get("home") else 0
+        try:
+            row["score"] = int(float(m.get("score"))) if m.get("score") is not None else None
+        except (TypeError, ValueError):
+            pass
+        if row["game_id"]:
+            out.append(row)
     return out

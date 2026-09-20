@@ -9,6 +9,7 @@ Look-ahead protections (structural, tested):
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from . import strategies as S
@@ -67,8 +68,74 @@ def match_teams_in_text(text: str) -> set[str]:
     return found
 
 
+_EVENT_TICKER_RE = None
+
+
+_SUBTITLE_DATE_RE = re.compile(r"\(([A-Z][a-z]{2})\s+(\d{1,2})\)")
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split())}
+
+
+def subtitle_dates(sub) -> list[str]:
+    """'(Jun 13)' -> candidate ET dates for plausible season years.
+
+    Runner evidence (probe5): settled event subtitles carry month/day with no
+    year. An NBA season runs Oct-Jun, so the calendar year of today and the
+    year before cover any subtitle we are currently mapping; wrong guesses
+    simply find no game and return nothing (never a mis-assignment).
+    """
+    m = _SUBTITLE_DATE_RE.search(sub or "")
+    if not m:
+        return []
+    mo = _MONTHS.get(m.group(1))
+    try:
+        dd = int(m.group(2))
+    except ValueError:
+        return []
+    if not mo or not 1 <= dd <= 31:
+        return []
+    this_year = int(util.utcnow_iso()[:4])
+    import datetime as _dt
+    out = []
+    for yy in (this_year, this_year - 1):
+        try:
+            out.append(_dt.datetime(yy, mo, dd).strftime("%Y-%m-%d"))
+        except ValueError:
+            continue
+    return out
+
+
+def parse_event_ticker(event_ticker: str):
+    """KXNBAGAME-26OCT20OKCSAS -> (date '2026-10-20', {'OKC','SAS'}).
+
+    Kalshi encodes the game date and both team abbreviations in the event
+    ticker (runner-verified). Returns (None, set()) when the pattern doesn't
+    match or the abbreviations aren't NBA teams.
+    """
+    global _EVENT_TICKER_RE
+    import re
+    if _EVENT_TICKER_RE is None:
+        _EVENT_TICKER_RE = re.compile(
+            r"^[A-Z0-9]+-(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})"
+            r"([A-Z]{3})([A-Z]{3})$")
+    m = _EVENT_TICKER_RE.match(event_ticker or "")
+    if not m:
+        return None, set()
+    yy, mon, dd, t1, t2 = m.groups()
+    month = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP",
+             "OCT", "NOV", "DEC"].index(mon) + 1
+    year = 2000 + int(yy)
+    if t1 not in TEAM_NAMES or t2 not in TEAM_NAMES:
+        return None, set()
+    return f"{year}-{month:02d}-{int(dd):02d}", {t1, t2}
+
+
 def map_kalshi_markets(con) -> dict[str, KalshiMarketInfo]:
-    """Join kalshi_markets to games by (date, team pair). Only confident matches kept."""
+    """Join kalshi_markets to games by (date, team pair).
+
+    Primary: event ticker encoding (date + abbrevs, runner-verified format).
+    Fallback: title/subtitle text matching. Only confident matches are kept.
+    """
     from . import db
     infos: dict[str, KalshiMarketInfo] = {}
     rows = con.execute("SELECT * FROM kalshi_markets").fetchall()
@@ -77,33 +144,60 @@ def map_kalshi_markets(con) -> dict[str, KalshiMarketInfo]:
     by_day: dict[str, list] = {}
     for g in games:
         by_day.setdefault(g["game_date_et"], []).append(g)
+
+    def find_game(teams: set, date_et: str | None):
+        if len(teams) != 2:
+            return None
+        cands = []
+        if date_et:
+            import datetime as _dt
+            d = util.parse_iso(date_et + "T00:00:00Z")
+            for off in (0, 1, -1):
+                dd = (d + _dt.timedelta(days=off)).strftime("%Y-%m-%d")
+                cands.extend(by_day.get(dd, []))
+                if cands:
+                    break
+        else:
+            cands = [g for day in by_day.values() for g in day]
+        for g in cands:
+            if {g["home_team"], g["away_team"]} == teams:
+                return g
+        return None
+
     for m in rows:
         if not m["ticker"]:
             continue
-        text = f"{m['title'] or ''} {m['subtitle'] or ''}"
-        teams = match_teams_in_text(text)
+        date_et, teams = parse_event_ticker(m["event_ticker"] or "")
+        if not teams:
+            text = f"{m['title'] or ''} {m['subtitle'] or ''}"
+            teams = match_teams_in_text(text)
+            close = util.parse_iso(m["close_time"])
+            if close:
+                date_et = util.et_game_date(close)
         if len(teams) != 2:
             continue
-        close = util.parse_iso(m["close_time"])
-        cand_game = None
-        if close:
-            # search a +/- 2 day window around close time in ET days
-            import datetime as _dt
-            d0 = util.et_game_date(close)
-            for off in (0, 1, -1):
-                d = (util.parse_iso(d0 + "T00:00:00Z") + _dt.timedelta(days=off)).strftime("%Y-%m-%d")
-                for g in by_day.get(d, []):
-                    if {g["home_team"], g["away_team"]} == teams:
-                        cand_game = g
-                        break
-                if cand_game:
-                    break
-        if not cand_game:
+        # candidate ET dates to search, best first: ticker encoding > market
+        # close time > subtitle '(Jun 13)' (year resolved to plausible seasons)
+        cand_dates: list = []
+        if date_et:
+            cand_dates.append(date_et)
+        elif close:
+            cand_dates.append(util.et_game_date(close))
+        else:
+            cand_dates.extend(subtitle_dates(m["subtitle"]))
+        g = None
+        for cd in cand_dates:
+            g = find_game(teams, cd)
+            if g:
+                break
+        if not g and not cand_dates:
+            g = find_game(teams, None)  # last resort: unique team-pair scan
+        if not g:
             continue
         infos[m["ticker"]] = KalshiMarketInfo(
             ticker=m["ticker"], event_ticker=m["event_ticker"], series_ticker=m["series_ticker"],
-            market_type=m["market_type"] or "unknown", game_id=cand_game["game_id"],
-            home=cand_game["home_team"], away=cand_game["away_team"],
+            market_type=m["market_type"] or "unknown", game_id=g["game_id"],
+            home=g["home_team"], away=g["away_team"],
             strike=json.loads(m["strike_values"] or "{}"), result=m["result"],
             title=m["title"] or "", subtitle=m["subtitle"] or "")
     return infos
@@ -135,12 +229,24 @@ class PriceBook:
                 self._books[r["ticker"]] = (r["captured_utc"], float(r["yes_ask"]))
 
     def kalshi_price_at(self, ticker: str, decision_iso: str) -> PricePoint | None:
-        """Last fully-closed hourly candle close strictly before decision."""
+        """Last hourly candle that fully CLOSED strictly before the decision.
+
+        A candle's ts is its OPEN time; its close lands one hour later, so
+        using any candle that opens before the decision but closes after it
+        would be look-ahead. Require close_time = ts + 60min <= decision.
+        """
         cands = self._candles.get(ticker) or []
+        dec = util.parse_iso(decision_iso)
         best = None
+        import datetime as _dt
         for ts, close in cands:
-            if ts < decision_iso:  # string compare ok for same-format ISO UTC
-                best = PricePoint(ts, close + 1.0, "candle_close+1tick")  # 1-tick slippage
+            ts_dt = util.parse_iso(ts)
+            if ts_dt is None:
+                continue
+            close_time = ts_dt + _dt.timedelta(minutes=60)
+            if close_time <= dec:
+                best = PricePoint(util.to_iso(close_time), close + 1.0,
+                                  "candle_close+1tick")  # 1-tick slippage
             else:
                 break
         return best
@@ -200,12 +306,24 @@ def settle_score_based(result_type: str, home_score: int, away_score: int,
 
 
 def apply_settlement_kalshi(con, info: KalshiMarketInfo, bet: dict, home_score, away_score) -> str:
-    """Prefer Kalshi's own recorded result; cross-check with score inference."""
+    """Prefer Kalshi's own recorded result; cross-check with score inference.
+
+    Winner bets are always placed on the HOME-team market: a "home" bet is
+    YES (price = home price), an "away" bet is the NO side of that same
+    market (priced 100 − home price). The desired resolution therefore
+    inverts with bet["side"] — this must be honored for BOTH the recorded
+    Kalshi result and the score inference.
+    """
+    if info.market_type == "winner":
+        side = bet.get("side") or "home"
+        took_no = side == "away"
+    else:
+        took_no = False  # non-winner markets are bet YES only
+        side = "home"
     if info.result in ("yes", "no"):
-        want = "yes"
+        want = "no" if took_no else "yes"
         if info.market_type == "winner":
-            inferred = settle_score_based("winner", home_score, away_score,
-                                          bet.get("side") or "home", None)
+            inferred = settle_score_based("winner", home_score, away_score, side, None)
         else:
             inferred = None
         kresult = "win" if info.result == want else "loss"
@@ -230,7 +348,8 @@ def apply_settlement_kalshi(con, info: KalshiMarketInfo, bet: dict, home_score, 
 def _strike(info: KalshiMarketInfo, default) -> float | None:
     try:
         sv = info.strike
-        for k in ("above", "below", "strike", "value"):
+        for k in ("above", "below", "strike", "value", "strike_value",
+                  "greater", "less", "over_under"):
             if k in sv and sv[k] is not None:
                 return float(sv[k])
     except (TypeError, ValueError):

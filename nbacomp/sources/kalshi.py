@@ -92,6 +92,26 @@ def get_events(series_ticker: str, status: str | None = None,
     return out
 
 
+def get_markets_by_event(event_ticker: str, max_pages: int = 10) -> list[dict]:
+    """All markets of one event (works for settled events, unlike the
+    series+status filter, which returned zero rows in runner probes)."""
+    out: list[dict] = []
+    cursor = None
+    for _ in range(max_pages):
+        params: dict = {"event_ticker": event_ticker, "limit": 1000}
+        if cursor:
+            params["cursor"] = cursor
+        r = _get("/markets", params)
+        if not r.ok:
+            break
+        js = r.json or {}
+        out.extend(js.get("markets") or [])
+        cursor = js.get("cursor")
+        if not cursor:
+            break
+    return out
+
+
 def get_candlesticks(tickers: list[str], start_ts_ms: int, end_ts_ms: int,
                      interval: int = 60) -> list[dict]:
     """Batch candlesticks. Returns list of {ticker, candlesticks:[...]}."""
@@ -157,6 +177,31 @@ def classify_market(m: dict) -> str:
     """
     series = (m.get("series_ticker") or "").upper()
     title = f"{m.get('title') or ''} {(m.get('subtitle') or '')}".lower()
+    if series == "KXNBAGAME":
+        return "winner"
+    if series == "KXNBASPREAD":
+        return "spread"
+    if series == "KXNBATOTAL":
+        return "total"
+    if series == "KXNBA1H":
+        return "1h"
+    if series == "KXNBAQ1":
+        return "q1"
+    if series == "KXNBAPTS":
+        return "prop:points"
+    if series == "KXNBAREB":
+        return "prop:rebounds"
+    if series == "KXNBAAST":
+        return "prop:assists"
+    if series == "KXNBAPRA":
+        return "prop:pra"
+    if series == "KXNBASTL":
+        return "prop:steals"
+    if series == "KXNBABLK":
+        return "prop:blocks"
+    if series == "KXNBAMVP":
+        return "award:mvp"
+    # generic text fallbacks for newly-discovered series
     if "spread" in series:
         return "spread"
     if "total" in series and "point" not in title:
@@ -167,10 +212,10 @@ def classify_market(m: dict) -> str:
         return "q1"
     if "game" in series:
         return "winner"
-    for k, tag in (("point", "prop:points"), ("reb", "prop:rebounds"),
-                   ("ast", "prop:assists"), ("three", "prop:threes"),
-                   ("stl", "prop:steals"), ("blk", "prop:blocks"),
-                   ("dbl", "prop:doubledouble"), ("pra", "prop:pra")):
+    for k, tag in (("point", "prop:points"), ("pts", "prop:points"),
+                   ("reb", "prop:rebounds"), ("ast", "prop:assists"),
+                   ("three", "prop:threes"), ("stl", "prop:steals"),
+                   ("blk", "prop:blocks"), ("pra", "prop:pra")):
         if k in series:
             return tag
     return "unknown"

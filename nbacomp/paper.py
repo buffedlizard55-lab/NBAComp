@@ -157,12 +157,22 @@ def _place_forward_bet(con, ctx, sig: S.Signal, winner, live: engine.PricePoint)
     if open_exp >= br * 0.25:
         return 0
     prob = sig.model_prob
-    stake = S.stake_for(min(br, br - open_exp), prob, util.prob_to_fair_decimal(prob))
+    price_cents = sig.price
+    # payout odds from the price actually paid (Kalshi c cents -> decimal 100/c)
+    stake = S.stake_for(min(br, br - open_exp), prob, 100.0 / price_cents)
     if stake <= 0:
         return 0
-    price_cents = sig.price
     contracts, cost = engine.simulate_fill_kalshi(stake, price_cents)
     if contracts <= 0:
+        return 0
+    # one bet per strategy/game/market/selection for the life of the position:
+    # without this, every collection run re-bets the same edge (bet_id embeds
+    # the decision timestamp, so ID-equality alone never dedups across runs)
+    dup = con.execute(
+        "SELECT 1 FROM bets WHERE strategy_id=? AND game_id=? AND market=? AND selection=? "
+        "AND kind='forward' LIMIT 1",
+        (sig.strategy_id, ctx["game"]["game_id"], sig.market, sig.selection)).fetchone()
+    if dup:
         return 0
     bet_id = engine.make_bet_id("forward", sig.strategy_id, ctx["game"]["game_id"],
                                 sig.market, sig.selection, ctx["decision"], "forward")
@@ -185,7 +195,10 @@ def _place_forward_bet(con, ctx, sig: S.Signal, winner, live: engine.PricePoint)
         "execution_status": "simulated_fill", "fill_price": price_cents,
         "fee_usd": util.kalshi_fees_dollars(contracts, price_cents),
         "contracts": contracts, "result": "pending",
-        "verification": "price: live observed Kalshi orderbook ask at decision time",
+        "verification": ("price: " + ("live observed Kalshi orderbook ask (home YES side)"
+                                     if sig.side == "home" else
+                                     "NO side DERIVED as 100 minus the observed home-market ask")
+                         + " at decision time"),
         "notes": sig.trigger[:500]}, replace=True)
     _record_bankroll(con, sig.strategy_id, br, "bet-placed")
     db.log_audit(con, "paper-engine", "bet-created", bet_id, {
@@ -264,10 +277,18 @@ def _injury_state(con, ctx, decision):
     _injury_adjustment(con, ctx, decision)
 
 
-def espn_ml_probs(con, game_id, decision) -> tuple[float, float] | None:
+def espn_ml_probs(con, game_id, decision, max_age_hours: int = 24) -> tuple[float, float] | None:
+    """Latest devigged ESPN moneyline probs at/before decision, if fresh enough.
+
+    A days-old snapshot is genuinely stale information; trading divergence
+    against it would manufacture an edge that no longer exists.
+    """
+    import datetime as _dt
+    cutoff = util.to_iso(util.parse_iso(decision) - _dt.timedelta(hours=max_age_hours))
     rows = con.execute(
         "SELECT * FROM odds_snapshots WHERE game_id=? AND market='ml' AND captured_utc<=? "
-        "ORDER BY captured_utc DESC LIMIT 2", (game_id, decision)).fetchall()
+        "AND captured_utc>=? ORDER BY captured_utc DESC LIMIT 2",
+        (game_id, decision, cutoff)).fetchall()
     home = away = None
     for r in rows:
         if r["selection"] == "home" and r["price"]:

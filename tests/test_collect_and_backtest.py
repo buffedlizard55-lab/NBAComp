@@ -72,29 +72,122 @@ def test_parse_injuries():
 
 def test_collect_espn_day_stores_games_and_odds(tmp_path, monkeypatch):
     from nbacomp import collect
+
     class FakeResp:
         ok = True
         status = 200
         json = SCOREBOARD_FIXTURE
         error = None
+        body = b"{}"
 
     monkeypatch.setattr(espn, "scoreboard", lambda date=None: FakeResp())
 
-    class FakeVerify:
-        ok = False
-        status = 0
-        error = "unreachable"
-        json = None
-
-    monkeypatch.setattr(collect.nba, "scoreboard_v2", lambda d: FakeVerify())
-
     with db.get_db(str(tmp_path / "c.db")) as con:
-        n = collect.collect_espn_day(con, "20260115", verify=True)
+        n = collect.collect_espn_day(con, "20260115")
         assert n == 1
         g = con.execute("SELECT * FROM games").fetchone()
         assert g["home_team"] == "BOS"
         odds = con.execute("SELECT COUNT(*) c FROM odds_snapshots").fetchone()["c"]
         assert odds >= 4  # total, spread, 2 MLs (+ opening rows)
+
+
+BOXSCORE_FIXTURE = {
+    "gameId": "401810433",
+    "header": {"id": "401810433", "season": {"year": 2026},
+               "competitions": [{"competitors": [
+                   {"homeAway": "home", "score": "112",
+                    "team": {"abbreviation": "ORL"}},
+                   {"homeAway": "away", "score": "105",
+                    "team": {"abbreviation": "MEM"}}]}]},
+    "boxscore": {
+        "teams": [
+            {"team": {"abbreviation": "MEM"}, "statistics": [
+                {"name": "fieldGoalsMade-fieldGoalsAttempted", "displayValue": "38-83"},
+                {"name": "threePointFieldGoalsMade-threePointFieldGoalsAttempted",
+                 "displayValue": "17-36"},
+                {"name": "freeThrowsMade-freeThrowsAttempted", "displayValue": "18-21"},
+                {"name": "totalRebounds", "displayValue": "37"},
+                {"name": "offensiveRebounds", "displayValue": "7"},
+                {"name": "assists", "displayValue": "27"},
+                {"name": "turnovers", "displayValue": "16"},
+            ]},
+        ],
+        "players": [
+            {"team": {"abbreviation": "MEM"}, "statistics": [{
+                "names": ["MIN", "PTS", "FG", "3PT", "FT", "REB", "AST", "TO",
+                          "STL", "BLK", "OREB", "DREB", "PF", "+/-"],
+                "athletes": [
+                    {"active": True, "starter": True, "didNotPlay": False,
+                     "athlete": {"id": "4277961", "displayName": "Jaren Jackson Jr."},
+                     "stats": ["33", "30", "12-22", "3-5", "3-3", "3", "1", "4",
+                               "2", "2", "0", "3", "3", "-21"]},
+                    {"active": True, "starter": False, "didNotPlay": True,
+                     "athlete": {"id": "5112087", "displayName": "Jaylen Wells"},
+                     "stats": []},
+                ]}]},
+        ],
+    },
+}
+
+
+def test_parse_boxscore_real_shape():
+    rows = espn.parse_boxscore(BOXSCORE_FIXTURE)
+    assert len(rows) == 2
+    jjj = rows[0]
+    assert jjj["player"] == "Jaren Jackson Jr."
+    assert jjj["pts"] == 30 and jjj["reb"] == 3 and jjj["ast"] == 1
+    assert jjj["minutes"] == 33
+    assert jjj["fgm"] == 12 and jjj["fga"] == 22
+    assert jjj["fg3m"] == 3 and jjj["fg3a"] == 5
+    assert jjj["ftm"] == 3 and jjj["fta"] == 3
+    assert jjj["tov"] == 4 and jjj["plus_minus"] == -21
+    assert jjj["status"] == "started"
+    wells = rows[1]
+    assert wells["status"] == "dnp"
+    assert wells["pts"] is None
+
+
+def test_parse_team_boxscore_real_shape():
+    rows = espn.parse_team_boxscore(BOXSCORE_FIXTURE)
+    assert len(rows) == 1
+    t = rows[0]
+    assert t["team"] == "MEM"
+    assert t["fgm"] == 38 and t["fga"] == 83
+    assert t["fg3m"] == 17 and t["fg3a"] == 36
+    assert t["ftm"] == 18 and t["fta"] == 21
+    assert t["oreb"] == 7 and t["tov"] == 16
+    assert t["is_home"] == 0 and t["score"] == 105
+
+
+def test_parse_injuries_shape_agnostic():
+    js = {"types": [{"teams": [{
+        "team": {"abbreviation": "BOS"},
+        "injuries": [{"athlete": {"id": "1", "displayName": "Jayson Tatum"},
+                      "status": {"name": "Out", "date": "2026-01-15T18:00Z"},
+                      "longComment": "Ankle"}],
+    }]}]}
+    rows = espn.parse_injuries(js)
+    assert rows[0]["player"] == "Jayson Tatum"
+    assert rows[0]["status"] == "Out"
+    assert rows[0]["team"] == "BOS"
+
+
+BREF_HTML = """
+<table><tbody>
+<tr><td data-stat="visitor_team_name"><a href="/teams/BOS/2025.html">Boston Celtics</a></td>
+<td class="right" data-stat="visitor_pts">110</td>
+<td data-stat="home_team_name"><a href="/teams/LAL/2025.html">Los Angeles Lakers</a></td>
+<td class="right" data-stat="home_pts">105</td></tr>
+</tbody></table>"""
+
+
+def test_bref_parse_monthly_games():
+    from nbacomp.sources import bref
+    rows = bref.parse_monthly_games(BREF_HTML)
+    assert len(rows) == 1
+    assert rows[0]["visitor_pts"] == 110 and rows[0]["home_pts"] == 105
+    assert bref.abbr_for("Boston Celtics") == "BOS"
+    assert bref.abbr_for("Los Angeles Lakers") == "LAL"
 
 
 def test_backtest_decision_always_before_tipoff(tmp_path):
@@ -144,11 +237,18 @@ def test_backtest_decision_always_before_tipoff(tmp_path):
 
         res = backtest.run_backtest(con, ["2025-26"], run_id="test")
         rows = con.execute("SELECT * FROM bets").fetchall()
+        # regression guard: the Kelly fair-odds bug silently produced ZERO bets
+        assert rows, "backtest placed no bets — sizing must use PAID odds (100/price)"
         for b in rows:
             assert b["decision_utc"] < b["tipoff_utc"]
             if b["source_ts"]:
                 assert b["source_ts"] <= b["decision_utc"]
             assert b["stake_usd"] > 0
+            assert b["result"] in ("win", "loss", "push", "void")
+            if b["result"] == "win":
+                assert b["pnl_usd"] > 0
+            if b["result"] == "loss":
+                assert b["pnl_usd"] < 0
 
 
 def test_pricebook_around_window():

@@ -218,6 +218,46 @@ CREATE TABLE IF NOT EXISTS bets (
 CREATE INDEX IF NOT EXISTS idx_bets_strat ON bets(strategy_id, kind, run_id);
 CREATE INDEX IF NOT EXISTS idx_bets_game ON bets(game_id);
 
+-- Bet records are append-only. The ONLY permitted mutation is writing the
+-- settlement columns (never decision/price/state columns). Any other UPDATE
+-- aborts at the database level instead of relying on code discipline.
+CREATE TRIGGER IF NOT EXISTS trg_bets_append_only BEFORE UPDATE ON bets
+BEGIN
+  SELECT CASE WHEN
+    NEW.bet_id IS NOT OLD.bet_id
+    OR NEW.run_id IS NOT OLD.run_id
+    OR NEW.kind IS NOT OLD.kind
+    OR NEW.strategy_id IS NOT OLD.strategy_id
+    OR NEW.strategy_version IS NOT OLD.strategy_version
+    OR NEW.username IS NOT OLD.username
+    OR NEW.decision_utc IS NOT OLD.decision_utc
+    OR NEW.game_id IS NOT OLD.game_id
+    OR NEW.game_label IS NOT OLD.game_label
+    OR NEW.tipoff_utc IS NOT OLD.tipoff_utc
+    OR NEW.market IS NOT OLD.market
+    OR NEW.selection IS NOT OLD.selection
+    OR NEW.side IS NOT OLD.side
+    OR NEW.price IS NOT OLD.price
+    OR NEW.price_format IS NOT OLD.price_format
+    OR NEW.source IS NOT OLD.source
+    OR NEW.source_url IS NOT OLD.source_url
+    OR NEW.source_ts IS NOT OLD.source_ts
+    OR NEW.model_prob IS NOT OLD.model_prob
+    OR NEW.market_prob IS NOT OLD.market_prob
+    OR NEW.edge IS NOT OLD.edge
+    OR NEW.stake_usd IS NOT OLD.stake_usd
+    OR NEW.to_win_usd IS NOT OLD.to_win_usd
+    OR NEW.ev_usd IS NOT OLD.ev_usd
+    OR NEW.execution_status IS NOT OLD.execution_status
+    OR NEW.fill_price IS NOT OLD.fill_price
+    OR NEW.fee_usd IS NOT OLD.fee_usd
+    OR NEW.contracts IS NOT OLD.contracts
+    OR NEW.verification IS NOT OLD.verification
+    OR NEW.notes IS NOT OLD.notes
+    THEN RAISE(ABORT, 'bets are append-only: only result/settlement_utc/settlement_source/pnl_usd/roi may change')
+  END;
+END;
+
 CREATE TABLE IF NOT EXISTS bankroll_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   strategy_id TEXT NOT NULL,

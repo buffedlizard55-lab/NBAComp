@@ -62,21 +62,69 @@ ENTRIES = [
         "decision": "Competition launches with 14 strategies; lineage tracking enabled for future versions.",
         "next_steps": "First backtest after candle backfill; first forward bets when 2026-27 prices exist.",
     },
+    {
+        "question": "Which transports and endpoints ACTUALLY work from GitHub Actions runners?",
+        "sources_searched": "Live probes from ubuntu-latest runners (committed to data/diagnostics.txt): site.api.espn.com, site.web.api.espn.com, sports.core.api.espn.com, stats.nba.com, data.nba.net, cdn.nba.com, basketball-reference.com, Kalshi trade-api v2; transport variants: python-urllib, curl, Node fetch",
+        "data_discovered": ("ESPN site.api: Akamai 403 for runner TLS fingerprints (python AND curl) but 200 via Node fetch; "
+                            "site.web.api.espn.com: 200 via plain HTTP for scoreboard (any historical date), injuries (860KB), teams, summary (full box scores). "
+                            "stats.nba.com: connection tarpit/timeout from runners in ALL transports (urllib, curl, Node); data.nba.net dead (0 bytes); cdn.nba.com liveData 403. "
+                            "basketball-reference: 200. Kalshi: 200 keyless; settled history via /events?status=settled pagination (NOT /markets?status=settled which returns 0); "
+                            "NBA series confirmed: KXNBAGAME/KXNBASPREAD/KXNBATOTAL/KXNBA1H/KXNBAPTS/KXNBAREB/KXNBAAST/KXNBAPRA/KXNBASTL/KXNBABLK/KXNBAMVP."),
+        "hypothesis": "A fully keyless, free core pipeline is possible using site.web ESPN + BBR + Kalshi.",
+        "test_performed": "Iterated 5 committed probe runs from Actions; each result recorded in-repo (data/diagnostics.txt history).",
+        "result": "Pipeline re-architected to verified endpoints; stats.nba.com replaced by ESPN box scores (same modeled fields) + BBR independent verification.",
+        "verification": "Every claim above comes from committed probe output with HTTP status + byte counts (see diagnostics history in git).",
+        "decision": "Freeze this endpoint matrix in code + tests; re-probe nightly so drift is detected and recorded.",
+        "next_steps": "Backfill two seasons of ESPN results, BBR verification, Kalshi settled events + candlesticks, and box scores; then run first real backtests.",
+    },
+    {
+        "question": "probe5 (Actions run): what do settled Kalshi NBA events actually expose?",
+        "sources_searched": "Kalshi trade-api v2 /events?series_ticker=KXNBAGAME&status=settled (cursor pagination), via Actions runner (data/diagnostics.txt probe5 2026-09-20T19:54Z)",
+        "data_discovered": ("200 settled events/page with cursor; 1448+ settled KXNBAGAME events over 8 pages (2024-25 and 2025-26 seasons). "
+                            "Settled event rows carry title ('Game 5: New York at San Antonio') and sub_title ('NYK at SAS (Jun 13)') but NO "
+                            "ticker or close_time keys; the identity is the event_ticker field (KXNBAGAME-26JUN13NYKSAS format). "
+                            "Per-event markets and 400-day candle history were NOT reached (probe crashed on the wrong key) — still unverified."),
+        "hypothesis": "Historical game-winner prices (candlesticks) exist deep enough to honestly backtest strategies.",
+        "test_performed": "Runner probe walked 8 pages of settled events; market/candle probe pending next run (probe fixed to use event_ticker).",
+        "result": "UNVERIFIED for market-level history; event-level history CONFIRMED. Collectors re-written around event_ticker identity.",
+        "verification": "data/diagnostics.txt probe5 block (committed by Actions run for f154a0b).",
+        "decision": "kalshi_backfill uses event_ticker + subtitle '(Mon DD)' date resolution; dates never guessed beyond plausible season years.",
+        "next_steps": "Next Actions run: dump one settled event's markets (result/strike fields) + 400d candles; then decide backtest depth vs forward-test.",
+    },
+    {
+        "question": "Adversarial review pass 2 (2026-09-20): what breaks under hostile inspection?",
+        "sources_searched": "Local code review: engine.py, backtest.py, paper.py, audit.py, db.py, collect.py, sources/*, workflows",
+        "data_discovered": ("CRITICAL: Kelly sizing was passed the model's FAIR decimal odds (1/p) as payout — Kelly f* is identically zero, so NO bet "
+                            "was ever placed anywhere (backtest+paper). Fixed to paid odds (100/price_cents). CRITICAL: winner settlement was "
+                            "side-blind — away bets (NO side of the home market) settled from the raw Kalshi result as if YES; fixed + regression "
+                            "tests. HIGH: forward engine re-bet the same game/strategy every collection run (bet ids embed the decision "
+                            "timestamp) — fixed with a one-position-per-strategy/game/market/selection rule. Also: partially-open hourly candles "
+                            "excluded from decisions (look-ahead); bet rows made append-only via SQLite trigger; ESPN divergence signals ignore "
+                            "snapshots older than 24h; NBA-012 cross-market divergence re-checked; workflow bref verification was missing May 2025."),
+        "hypothesis": "The pipeline would have produced plausible-looking output despite producing zero bets.",
+        "test_performed": "38 automated tests incl. new regressions: candle-closure guard, side-aware settlement, kelly paid-odds, dedup, append-only trigger, probe5 subtitle mapping.",
+        "result": "4 significant defects found and fixed before any data run; all tests green.",
+        "verification": "pytest 38 passed locally on arena/01a0c02a-nbacomp at commit c1b972c+.",
+        "decision": "Backtest/paper P&L is now trustworthy-by-construction at the sizing/settlement level; remaining risk is data availability, not code.",
+        "next_steps": "Pass 3: line-by-line requirements review against the full competition spec.",
+    },
 ]
 
 
 def main():
     with db.get_db() as con:
-        n = con.execute("SELECT COUNT(*) c FROM research_log").fetchone()["c"]
-        if n:
-            print(f"research log already has {n} entries; skipping seed")
-            return
+        added = 0
         for e in ENTRIES:
+            existing = con.execute("SELECT id FROM research_log WHERE question=?",
+                                   (e["question"],)).fetchone()
+            if existing:
+                continue
             db.insert(con, "research_log", {
                 "ts_utc": util.utcnow_iso(), **{k: e.get(k) for k in (
                     "question", "sources_searched", "data_discovered", "hypothesis",
                     "test_performed", "result", "verification", "decision", "next_steps")}})
-        print(f"seeded {len(ENTRIES)} research entries")
+            added += 1
+        print(f"research entries added: {added}")
 
 
 if __name__ == "__main__":

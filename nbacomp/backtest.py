@@ -133,18 +133,24 @@ def _place_kalshi_bet(con, ctx, sig: S.Signal, winner: engine.KalshiMarketInfo,
         tick = price_h if sig.selection == "home" else engine.PricePoint(
             price_h.ts_utc, 100.0 - price_h.price_cents, "no_side_derived")
         mkt_prob = tick.price_cents / 100.0
-        stake = S.stake_for(br, prob, util.prob_to_fair_decimal(prob))
+        # Kelly payout odds = the decimal odds actually paid (Kalshi price c
+        # pays 1:1 on c/100 staked -> decimal 100/c). Passing the MODEL's fair
+        # decimal (1/p) would make Kelly f* identically zero -> no bets ever.
+        stake = S.stake_for(br, prob, 100.0 / tick.price_cents)
         if stake <= 0:
             return 0
         contracts, cost = engine.simulate_fill_kalshi(stake, tick.price_cents)
         if contracts <= 0:
             return 0
-        result = engine.apply_settlement_kalshi(con, winner, {"selection": sig.selection},
-                                                ctx["game"]["home_score"], ctx["game"]["away_score"])
-        pnl = engine.kalshi_bet_pnl(contracts, tick.price_cents, result) if result in ("win", "loss") else 0.0
-        fee = util.kalshi_fees_dollars(contracts, tick.price_cents)
         bet_id = engine.make_bet_id("backtest", sig.strategy_id, ctx["game"]["game_id"],
                                     sig.market, sig.selection, ctx["decision"], run_id)
+        result = engine.apply_settlement_kalshi(con, winner,
+                                                {"bet_id": bet_id, "side": sig.side,
+                                                 "selection": sig.selection},
+                                                ctx["game"]["home_score"], ctx["game"]["away_score"])
+        pnl = (engine.kalshi_bet_pnl(contracts, tick.price_cents, result)
+               if result in ("win", "loss") else 0.0)
+        fee = util.kalshi_fees_dollars(contracts, tick.price_cents)
         db.insert(con, "bets", {
             "bet_id": bet_id, "run_id": run_id, "kind": "backtest",
             "strategy_id": sig.strategy_id, "strategy_version": meta["version"],

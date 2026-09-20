@@ -1,13 +1,21 @@
 """Collection orchestration — the only code that touches the network.
 
-Commands:
-  backfill-seasons  ESPN scoreboard per day for seasons + verification vs NBA.com
-  daily             upcoming schedule+odds, injuries, Kalshi snapshot, NBA stats refresh
-  kalshi-discovery  probe candidate NBA series and record which exist
-  kalshi-candles    candlesticks for Kalshi NBA markets in a time window
+Verified transport reality (GitHub Actions runners, 2026-09-20 — see
+data/diagnostics.txt and the research log):
+- ESPN site.api.espn.com: 403 (Akamai fingerprint) → use site.web host.
+- stats.nba.com / data.nba.net / cdn.nba.com: blocked or tarpitted → replaced
+  by ESPN box scores + Basketball-Reference verification.
+- Kalshi public market data: fully accessible (keyless).
 
-Every fetch logs to collection_log / source_status. Failures are recorded,
-never silently swallowed, and never filled with invented data.
+Commands:
+  backfill-days        ESPN scoreboard per day (schedule/results/odds)
+  verify-bref-months   Basketball-Reference monthly score verification
+  boxscores            ESPN box scores for a date range (player + team logs)
+  daily                schedule/odds/injuries/Kalshi/boxscores catch-up
+  kalshi-discovery     probe candidate NBA series; record what exists
+  kalshi-backfill      settled events -> markets (full history walk)
+  kalshi-snapshot      open markets + orderbooks (forward prices)
+  kalshi-candles       candlesticks for winner markets in a window
 """
 from __future__ import annotations
 
@@ -20,13 +28,13 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nbacomp import db, util  # noqa: E402
-from nbacomp.sources import espn, kalshi, nba  # noqa: E402
+from nbacomp import db, engine, util  # noqa: E402
+from nbacomp.sources import bref, espn, kalshi  # noqa: E402
 
 CAP = util.utcnow_iso()
 
 
-def save_source_status(con, source_id: str, r: "http.HttpResult", detail: str = ""):
+def save_source_status(con, source_id: str, r, detail: str = ""):
     db.insert(con, "source_status", {
         "source_id": source_id, "checked_utc": util.utcnow_iso(),
         "ok": 1 if r.ok else 0, "http_status": r.status,
@@ -37,8 +45,7 @@ def save_source_status(con, source_id: str, r: "http.HttpResult", detail: str = 
 
 # ------------------------------------------------------------------ ESPN
 
-def collect_espn_day(con, day: str, verify: bool = True) -> int:
-    """day = YYYYMMDD (UTC day scanned by ESPN; returns games upserted)."""
+def collect_espn_day(con, day: str, verify: bool = False) -> int:
     r = espn.scoreboard(day)
     save_source_status(con, "espn:scoreboard", r, detail=f"date={day}")
     if not r.ok:
@@ -59,51 +66,6 @@ def collect_espn_day(con, day: str, verify: bool = True) -> int:
         if odds:
             _store_espn_odds(con, odds)
     db.log_collection(con, "espn-day", "espn", "ok", f"date={day}", rows=len(games))
-
-    if verify and games:
-        mm, dd, yyyy = day[4:6], day[6:8], day[0:4]
-        rv = nba.scoreboard_v2(f"{mm}/{dd}/{yyyy}")
-        save_source_status(con, "nba:scoreboardv2", rv, detail=f"date={day}")
-        if rv.ok:
-            rows = nba.parse_rows(rv.json)
-            by_teams = {}
-            for row in rows:
-                key = (str(row.get("home_team_abbreviation") or row.get("home_team_abbr") or ""),
-                       str(row.get("visitor_team_abbreviation") or row.get("visitor_team_abbr") or ""))
-                by_teams[key] = row
-            for g in games:
-                if g["status"] != "final":
-                    continue
-                row = by_teams.get((g["home_team"], g["away_team"]))
-                if row is None:  # try reversed key variants
-                    for (h, a), v in by_teams.items():
-                        if a == g["home_team"] and h == g["away_team"]:
-                            row = v
-                            break
-                if row is None:
-                    continue
-                hs, as_ = row.get("home_score"), row.get("visitor_score") or row.get("away_score")
-                if hs is None or as_ is None:
-                    continue
-                match = (int(hs) == g["home_score"] and int(as_) == g["away_score"])
-                status = "match" if match else "mismatch"
-                db.insert(con, "verifications", {
-                    "checked_utc": util.utcnow_iso(),
-                    "claim": f"final score {g['game_id']} {g['away_team']}@{g['home_team']}",
-                    "primary_source": "espn", "primary_value": f"{g['away_score']}-{g['home_score']}",
-                    "secondary_source": "nba.com", "secondary_value": f"{as_}-{hs}",
-                    "status": status,
-                    "discrepancy": None if match else "sources disagree",
-                })
-                if match:
-                    con.execute("UPDATE games SET verified=1, verified_against='nba.com' WHERE game_id=?",
-                                (g["game_id"],))
-                else:
-                    db.log_anomaly(con, "critical", "score-mismatch", {
-                        "game_id": g["game_id"], "espn": [g["away_score"], g["home_score"]],
-                        "nba": [as_, hs]})
-        else:
-            db.log_collection(con, "verify-day", "nba.com", "fail", f"{day}: {rv.error}")
     return len(games)
 
 
@@ -112,14 +74,14 @@ def _store_espn_odds(con, odds: dict):
     captured = util.utcnow_iso()
     items = []
     if odds.get("total") is not None:
-        items.append(("total", f"over {odds['total']}", odds["total"], None, None))
+        items.append(("total", f"line {odds['total']:g}", odds["total"], None))
     if odds.get("spread_home") is not None:
-        items.append(("spread", f"home {odds['spread_home']:+g}", odds["spread_home"], None, None))
+        items.append(("spread", f"home {odds['spread_home']:+g}", odds["spread_home"], None))
     if odds.get("ml_home") is not None:
-        items.append(("ml", "home", None, odds["ml_home"], None))
+        items.append(("ml", "home", None, odds["ml_home"]))
     if odds.get("ml_away") is not None:
-        items.append(("ml", "away", None, odds["ml_away"], None))
-    for market, selection, line, price, _ in items:
+        items.append(("ml", "away", None, odds["ml_away"]))
+    for market, selection, line, price in items:
         db.insert(con, "odds_snapshots", {
             "game_id": game_id, "market": market, "selection": selection,
             "line": line, "price": price if price is not None else 0,
@@ -129,7 +91,6 @@ def _store_espn_odds(con, odds: dict):
             "source_updated_utc": odds.get("source_updated_utc"),
             "captured_utc": captured,
         })
-    # store open lines as separate snapshot rows when present
     for key, market, sel in (("open_total", "total", "opening total"),
                              ("open_spread_home", "spread", "opening home spread")):
         if odds.get(key) is not None:
@@ -142,16 +103,102 @@ def _store_espn_odds(con, odds: dict):
             })
 
 
-def backfill_days(con, start: str, end: str):
+def backfill_days(con, start: str, end: str) -> int:
     d0 = datetime.strptime(start, "%Y%m%d")
     d1 = datetime.strptime(end, "%Y%m%d")
     d = d0
     total = 0
     while d <= d1:
-        total += collect_espn_day(con, d.strftime("%Y%m%d"), verify=True)
+        total += collect_espn_day(con, d.strftime("%Y%m%d"))
         d += timedelta(days=1)
-        time.sleep(0.4)
+        time.sleep(0.35)
     return total
+
+
+def verify_bref_months(con, seasons: list[tuple[int, list[str]]]) -> int:
+    n = 0
+    for year, months in seasons:
+        for m in months:
+            n += bref.verify_month(con, year, m)
+            time.sleep(1.0)
+    return n
+
+
+# ------------------------------------------------------------------ boxscores
+
+def collect_boxscores(con, date_yyyymmdd: str) -> int:
+    """Fetch summaries for all FINAL games of an ET date; store player+team logs."""
+    day = f"{date_yyyymmdd[:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:8]}"
+    games = con.execute(
+        "SELECT * FROM games WHERE game_date_et=? AND status='final'", (day,)).fetchall()
+    n = 0
+    for g in games:
+        gid = g["game_id"].split(":", 1)[1]
+        r = espn.summary(gid)
+        save_source_status(con, "espn:summary", r, detail=gid)
+        if not r.ok:
+            db.log_collection(con, "boxscore", "espn", "fail", f"{gid}: {r.error}")
+            continue
+        players = espn.parse_boxscore(r.json)
+        teams = espn.parse_team_boxscore(r.json)
+        tmeta = {t["team"]: t for t in teams}
+        for p in players:
+            db.insert(con, "player_gamelogs", {
+                "season": p["season"] if p["season"] != "unknown" else g["season"],
+                "game_id": g["game_id"],
+                "game_date_et": day,
+                "player_id": p["player_id"] or f"name:{p['player']}",
+                "player": p["player"],
+                "team": p["team"],
+                "status": p["status"],
+                "minutes": p.get("minutes"), "pts": p.get("pts"), "reb": p.get("reb"),
+                "ast": p.get("ast"), "stl": p.get("stl"), "blk": p.get("blk"),
+                "tov": p.get("tov"), "fg3m": p.get("fg3m"), "fgm": p.get("fgm"),
+                "fga": p.get("fga"), "ftm": p.get("ftm"), "fta": p.get("fta"),
+                "plus_minus": p.get("plus_minus"),
+                "source": "espn:summary", "captured_utc": util.utcnow_iso(),
+            }, replace=True)
+            n += 1
+        for t in teams:
+            meta = tmeta.get(t["team"], {})
+            opp = [x for x in tmeta if x != t["team"]]
+            opp_team = opp[0] if opp else None
+            opp_pts = tmeta.get(opp_team, {}).get("score") if opp_team else None
+            db.insert(con, "team_gamelogs", {
+                "season": t["season"] if t["season"] != "unknown" else g["season"],
+                "game_id": g["game_id"],
+                "game_date_et": day,
+                "team": t["team"], "opp": opp_team,
+                "is_home": t.get("is_home") if t.get("is_home") is not None
+                else (1 if g["home_team"] == t["team"] else 0),
+                "pts": t.get("pts"), "opp_pts": opp_pts, "wl": None,
+                "minutes": None,
+                "fgm": t.get("fgm"), "fga": t.get("fga"),
+                "fg3m": t.get("fg3m"), "fg3a": t.get("fg3a"),
+                "ftm": t.get("ftm"), "fta": t.get("fta"),
+                "oreb": t.get("oreb"), "dreb": None,
+                "reb": t.get("reb"), "ast": t.get("ast"),
+                "stl": None, "blk": None, "tov": t.get("tov"), "pf": None,
+                "plus_minus": None,
+                "source": "espn:summary", "captured_utc": util.utcnow_iso(),
+            }, replace=True)
+            n += 1
+        time.sleep(0.4)
+    db.log_collection(con, "boxscores", "espn", "ok", f"{day}", rows=n)
+    return n
+
+
+def collect_injuries(con) -> int:
+    r = espn.injuries()
+    save_source_status(con, "espn:injuries", r)
+    if not r.ok:
+        db.log_collection(con, "injuries", "espn", "fail", r.error or "unavailable")
+        return 0
+    items = espn.parse_injuries(r.json)
+    for it in items:
+        db.insert(con, "injuries", it)
+    db.log_collection(con, "injuries", "espn", "ok", "", rows=len(items))
+    return len(items)
 
 
 # ------------------------------------------------------------------ Kalshi
@@ -161,22 +208,9 @@ def kalshi_discovery(con) -> dict:
     found = {}
     for s in kalshi.CANDIDATE_SERIES:
         r = kalshi.get_series(s)
-        ok = r.ok
-        found[s] = {"exists": ok, "http": r.status}
+        found[s] = {"exists": r.ok, "http": r.status}
         save_source_status(con, f"kalshi:series:{s}", r)
-        time.sleep(0.2)
-    # Also scan open events of every found series to count live markets
-    for s, info in found.items():
-        if not info["exists"]:
-            continue
-        markets = kalshi.get_markets(s, status="open", max_pages=10)
-        events = kalshi.get_events(s, status="open", max_pages=10)
-        info["open_markets"] = len(markets)
-        info["open_events"] = len(events)
-        CAP2 = util.utcnow_iso()
-        for m in markets:
-            row = kalshi.parse_market(m, CAP2)
-            db.insert(con, "kalshi_markets", row, replace=True)
+        time.sleep(0.15)
     db.insert(con, "meta", {"key": "kalshi_series_discovery",
                             "value": json.dumps(found, default=str),
                             "updated_utc": util.utcnow_iso()}, replace=True)
@@ -185,74 +219,64 @@ def kalshi_discovery(con) -> dict:
     return found
 
 
-def kalshi_snapshot(con) -> int:
-    """Refresh open+settled NBA markets we track; capture orderbooks; store quotes."""
+def _live_series(con) -> list[str]:
     meta = con.execute("SELECT value FROM meta WHERE key='kalshi_series_discovery'").fetchone()
     if not meta:
         kalshi_discovery(con)
         meta = con.execute("SELECT value FROM meta WHERE key='kalshi_series_discovery'").fetchone()
     found = json.loads(meta["value"])
-    live_series = [s for s, v in found.items() if v.get("exists")]
+    return [s for s, v in found.items() if v.get("exists")]
+
+
+def kalshi_snapshot(con) -> int:
+    """Refresh OPEN markets (forward prices) + orderbooks for the main series."""
     n = 0
     CAP2 = util.utcnow_iso()
     book_tickers: list[str] = []
-    for s in live_series:
-        for status in ("open", "settled"):
-            try:
-                markets = kalshi.get_markets(s, status=status, max_pages=30)
-            except Exception as e:
-                db.log_collection(con, "kalshi-snapshot", f"kalshi:{s}", "fail",
-                                  f"status={status}: {e}")
-                continue
-            if not markets:
-                continue
-            for m in markets:
-                try:
-                    row = kalshi.parse_market(m, CAP2)
-                except Exception as e:
-                    db.log_anomaly(con, "warn", "kalshi-market-parse-error",
-                                   {"ticker": m.get("ticker"), "err": str(e)[:200]})
-                    continue
-                db.insert(con, "kalshi_markets", row, replace=True)
-                n += 1
-                if row["status"] == "active":
-                    book_tickers.append(row["ticker"])
-            time.sleep(0.3)
-    # orderbooks for active markets (observability + execution realism)
-    got = kalshi.get_orderbooks(book_tickers[:300])
-    CAP3 = util.utcnow_iso()
-    books_stored = 0
-    for ob in got:
+    for s in _live_series(con):
         try:
-            t = ob.get("market_ticker") or ob.get("ticker")
-            if not t:
-                continue
-            book = ob.get("orderbook") or {}
-            yes_bids = _norm_book_side(book.get("yes"))
-            no_bids = _norm_book_side(book.get("no"))
-            yes_asks = [[100 - p, sz] for p, sz in reversed(no_bids)] if no_bids else \
-                _norm_book_side(book.get("yes_ask"))
-            db.insert(con, "kalshi_orderbooks", {
-                "ticker": t, "captured_utc": CAP3,
-                "yes_bid": yes_bids[0][0] if yes_bids else None,
-                "yes_ask": yes_asks[0][0] if yes_asks else None,
-                "bids": json.dumps(yes_bids), "asks": json.dumps(yes_asks),
-            }, replace=True)
-            books_stored += 1
+            markets = kalshi.get_markets(s, status="open", max_pages=10)
         except Exception as e:
-            db.log_anomaly(con, "warn", "orderbook-parse-error",
-                           {"ticker": ob.get("market_ticker"), "err": str(e)[:200]})
+            db.log_collection(con, "kalshi-snapshot", f"kalshi:{s}", "fail", str(e)[:200])
+            continue
+        for m in markets:
+            try:
+                row = kalshi.parse_market(m, CAP2)
+            except Exception as e:
+                db.log_anomaly(con, "warn", "kalshi-market-parse-error",
+                               {"ticker": m.get("ticker"), "err": str(e)[:200]})
+                continue
+            db.insert(con, "kalshi_markets", row, replace=True)
+            n += 1
+            if s == "KXNBAGAME":
+                book_tickers.append(row["ticker"])
+        time.sleep(0.3)
+    # per-ticker orderbooks (batch endpoint shape unreliable in probes)
+    books = 0
+    CAP3 = util.utcnow_iso()
+    for t in book_tickers[:40]:
+        r = kalshi.get_orderbook(t)
+        if not r.ok:
+            continue
+        book = r.json or {}
+        ob = book.get("orderbook") or book.get("orderbook_fp") or {}
+        yes_bids = _norm_side(ob.get("yes") or ob.get("yes_dollars"))
+        no_bids = _norm_side(ob.get("no") or ob.get("no_dollars"))
+        yes_asks = [[100 - p, sz] for p, sz in reversed(no_bids)] if no_bids else []
+        db.insert(con, "kalshi_orderbooks", {
+            "ticker": t, "captured_utc": CAP3,
+            "yes_bid": yes_bids[0][0] if yes_bids else None,
+            "yes_ask": yes_asks[0][0] if yes_asks else None,
+            "bids": json.dumps(yes_bids), "asks": json.dumps(yes_asks),
+        }, replace=True)
+        books += 1
+        time.sleep(0.15)
     db.log_collection(con, "kalshi-snapshot", "kalshi", "ok",
-                      f"markets={n} books={books_stored}", rows=n)
+                      f"open_markets={n} books={books}", rows=n)
     return n
 
 
-def _norm_book_side(side) -> list:
-    """Normalize Kalshi order-book side to [[price_cents, size], ...].
-
-    The API has used both list pairs and dict entries ({price, size}); handle
-    both defensively and record nothing rather than crash.
-    """
+def _norm_side(side) -> list:
     out = []
     for item in side or []:
         try:
@@ -265,22 +289,97 @@ def _norm_book_side(side) -> list:
     return out
 
 
+def kalshi_backfill(con, max_pages: int = 40, recent_days: int | None = None) -> int:
+    """Walk SETTLED events per series (cursor pagination), store their markets.
+
+    This is how historical Kalshi NBA data is obtained: the /markets endpoint
+    with a series+status filter returns nothing for settled history; the
+    events endpoint does return settled events, and each event's markets carry
+    the recorded result. Verified in runner probes (data/diagnostics.txt).
+
+    recent_days: when set, only events dated within the last N days get
+    their markets fetched (used by the daily catch-up; the full backfill
+    walks everything up to max_pages).
+
+    Runner evidence (probe5, data/diagnostics.txt): settled event rows carry
+    title/subtitle but NO "ticker" or "close_time" keys — the event identity
+    is "event_ticker" (Kalshi schema), and its date comes from the ticker
+    encoding (KXNBAGAME-26JUN13NYKSAS), not close_time.
+    """
+    total = 0
+    CAP2 = util.utcnow_iso()
+    cutoff = None
+    if recent_days:
+        cutoff = util.to_iso(util.parse_iso(util.utcnow_iso()) - timedelta(days=recent_days))[:10]
+    for s in _live_series(con):
+        cursor = None
+        events: list[dict] = []
+        for _ in range(max_pages):
+            params: dict = {"series_ticker": s, "status": "settled", "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            r = kalshi._get("/events", params)
+            if not r.ok:
+                db.log_collection(con, "kalshi-backfill", f"kalshi:{s}", "fail",
+                                  f"events http={r.status}", rows=len(events))
+                break
+            js = r.json or {}
+            batch = js.get("events") or []
+            events.extend(batch)
+            cursor = js.get("cursor")
+            if not cursor:
+                break
+            if recent_days and batch:
+                dates = [engine.parse_event_ticker(e.get("event_ticker") or e.get("ticker") or "")[0]
+                         for e in batch]
+                dates = [d for d in dates if d]
+                if dates and min(dates) < cutoff:
+                    break
+            time.sleep(0.25)
+        n_events = skipped = 0
+        for e in events:
+            ev_ticker = e.get("event_ticker") or e.get("ticker")
+            if not ev_ticker:
+                skipped += 1
+                continue
+            ev_date = engine.parse_event_ticker(ev_ticker)[0]
+            if cutoff and ev_date and ev_date < cutoff:
+                continue
+            ms = kalshi.get_markets_by_event(ev_ticker)
+            for m in ms:
+                try:
+                    row = kalshi.parse_market(m, CAP2)
+                except Exception:
+                    continue
+                row["title"] = row["title"] or e.get("title")
+                row["event_ticker"] = row["event_ticker"] or ev_ticker
+                db.insert(con, "kalshi_markets", row, replace=True)
+            n_events += 1
+            total += len(ms)
+            time.sleep(0.2)
+        db.log_collection(con, "kalshi-backfill", f"kalshi:{s}", "ok",
+                          f"events={n_events} skipped_no_ticker={skipped} markets_total={total}",
+                          rows=n_events)
+    return total
+
+
 def kalshi_candles_window(con, series_filter: str | None, start_iso: str, end_iso: str,
                           interval: int = 60) -> int:
-    """Fetch candlesticks for NBA markets active/settled inside a window."""
-    start = util.parse_iso(start_iso)
-    end = util.parse_iso(end_iso)
+    """Fetch candlesticks for winner markets closing inside a window."""
     rows = con.execute(
         "SELECT ticker FROM kalshi_markets WHERE (? IS NULL OR series_ticker=?) "
-        "AND close_time IS NOT NULL", (series_filter, series_filter)).fetchall()
+        "AND close_time IS NOT NULL AND close_time >= ? AND close_time <= ?",
+        (series_filter, series_filter, start_iso, end_iso)).fetchall()
     tickers = [r["ticker"] for r in rows]
-    got = kalshi.get_candlesticks(tickers, util.ms(start), util.ms(end), interval)
+    start = int(util.parse_iso(start_iso).timestamp())
+    end = int(util.parse_iso(end_iso).timestamp())
+    got = kalshi.get_candlesticks(tickers, start * 1000, end * 1000, interval)
     n = 0
     C = util.utcnow_iso()
     for entry in got:
         t = entry.get("market_ticker")
         for c in entry.get("candlesticks") or []:
-            ts = c.get("ts") or (c.get("timestamp_ms"))
+            ts = c.get("ts") or c.get("timestamp_ms")
             price = c.get("price") or {}
             db.insert(con, "kalshi_candles", {
                 "ticker": t, "interval": interval,
@@ -308,134 +407,71 @@ def _ms_iso(ts) -> str | None:
         return None
 
 
-# ------------------------------------------------------------------ injuries
-
-def collect_injuries(con) -> int:
-    r = espn.injuries()
-    save_source_status(con, "espn:injuries", r)
-    if not r.ok:
-        db.log_collection(con, "injuries", "espn", "fail", r.error or "unavailable")
-        return 0
-    items = espn.parse_injuries(r.json)
-    for it in items:
-        db.insert(con, "injuries", it)
-    db.log_collection(con, "injuries", "espn", "ok", "", rows=len(items))
-    return len(items)
-
-
-# ------------------------------------------------------------------ NBA stats
-
-def collect_nba_stats(con, seasons: list[str]) -> int:
-    n = 0
-    for season in seasons:
-        for measure in ("Base", "Advanced", "FourFactors"):
-            r = nba.leaguedashteamstats(season, measure=measure)
-            save_source_status(con, f"nba:teamstats:{measure}", r, detail=season)
-            if r.ok:
-                for row in nba.parse_rows(r.json):
-                    team = str(row.get("team_abbreviation") or row.get("team_abbr") or "")
-                    if not team:
-                        continue
-                    db.insert(con, "team_season_stats", {
-                        "season": season, "team": team, "measure": measure,
-                        "stats_json": json.dumps(row, default=str),
-                        "source": "stats.nba.com", "captured_utc": util.utcnow_iso(),
-                    }, replace=True)
-                    n += 1
-            else:
-                db.log_collection(con, "nba-teamstats", f"stats.nba.com:{measure}", "fail",
-                                  f"{season}: {r.error}")
-        r = nba.teamgamelogs(season)
-        save_source_status(con, "nba:teamgamelogs", r, detail=season)
-        if r.ok:
-            rows = nba.parse_rows(r.json)
-            for row in rows:
-                gid = row.get("game_id")
-                if not gid:
-                    continue
-                db.insert(con, "team_gamelogs", {
-                    "season": season, "game_id": f"nba:{gid}",
-                    "game_date_et": str(row.get("game_date") or "")[:10],
-                    "team": row.get("team_abbreviation"),
-                    "opp": row.get("matchup", "").split(" vs. ")[-1].split(" @ ")[-1]
-                    if row.get("matchup") else None,
-                    "is_home": 0 if " @ " in (row.get("matchup") or "") else 1,
-                    "pts": row.get("pts"), "opp_pts": None, "wl": row.get("wl"),
-                    "minutes": row.get("min"),
-                    "fgm": row.get("fgm"), "fga": row.get("fga"),
-                    "fg3m": row.get("fg3m"), "fg3a": row.get("fg3a"),
-                    "ftm": row.get("ftm"), "fta": row.get("fta"),
-                    "oreb": row.get("oreb"), "dreb": row.get("dreb"), "reb": row.get("reb"),
-                    "ast": row.get("ast"), "stl": row.get("stl"), "blk": row.get("blk"),
-                    "tov": row.get("tov"), "pf": row.get("pf"),
-                    "plus_minus": row.get("plus_minus"),
-                    "source": "stats.nba.com", "captured_utc": util.utcnow_iso(),
-                }, replace=True)
-                n += 1
-        else:
-            db.log_collection(con, "nba-gamelogs", "stats.nba.com", "fail",
-                              f"{season}: {r.error}")
-        r = nba.leaguehustlestatsteam(season)
-        save_source_status(con, "nba:hustle", r, detail=season)
-        if r.ok:
-            for row in nba.parse_rows(r.json):
-                team = str(row.get("team_abbreviation") or "")
-                if not team:
-                    continue
-                db.insert(con, "team_season_stats", {
-                    "season": season, "team": team, "measure": "Hustle",
-                    "stats_json": json.dumps(row, default=str),
-                    "source": "stats.nba.com", "captured_utc": util.utcnow_iso(),
-                }, replace=True)
-                n += 1
-    return n
-
-
 # ------------------------------------------------------------------ CLI
 
 def main():
     ap = argparse.ArgumentParser(description="NBAComp data collection")
-    ap.add_argument("command", choices=["backfill-days", "daily", "kalshi-discovery",
-                                        "kalshi-candles", "kalshi-settled-window",
-                                        "injuries", "nba-stats"])
-    ap.add_argument("--start", help="YYYYMMDD")
-    ap.add_argument("--end", help="YYYYMMDD inclusive")
-    ap.add_argument("--seasons", default="2023-24,2024-25,2025-26,2026-27")
+    ap.add_argument("command", choices=["backfill-days", "verify-bref-months", "boxscores",
+                                        "daily", "kalshi-discovery", "kalshi-backfill",
+                                        "kalshi-snapshot", "kalshi-candles"])
+    ap.add_argument("--start", help="YYYYMMDD or ISO")
+    ap.add_argument("--end", help="inclusive")
+    ap.add_argument("--months", help="e.g. 2025-10,2025-11 for bref verify")
     ap.add_argument("--series", default=None)
     args = ap.parse_args()
 
     with db.get_db() as con:
         if args.command == "backfill-days" and args.start and args.end:
-            n = backfill_days(con, args.start, args.end)
-            print(f"games collected: {n}")
+            print(f"games collected: {backfill_days(con, args.start, args.end)}")
+        elif args.command == "verify-bref-months" and args.months:
+            # tokens are season-end-year:monthname, e.g. 2026:january
+            # (Oct-Dec of calendar year Y belong to season ending Y+1)
+            items = []
+            for token in args.months.split(","):
+                y, m = token.strip().split(":")
+                items.append((int(y), m.strip()))
+            print(f"verified: {verify_bref_months(con, items)}")
+        elif args.command == "boxscores" and args.start:
+            d0 = datetime.strptime(args.start, "%Y%m%d")
+            d1 = datetime.strptime(args.end, "%Y%m%d") if args.end else d0
+            d = d0
+            n = 0
+            while d <= d1:
+                n += collect_boxscores(con, d.strftime("%Y%m%d"))
+                d += timedelta(days=1)
+            print(f"boxscore rows: {n}")
         elif args.command == "daily":
             now = datetime.now(timezone.utc)
-            # scan a UTC window that covers the next 7 days of ET game dates
-            d = now - timedelta(days=1)
-            for _ in range(9):
-                collect_espn_day(con, d.strftime("%Y%m%d"), verify=True)
+            d = now - timedelta(days=2)
+            for _ in range(11):
+                collect_espn_day(con, d.strftime("%Y%m%d"))
                 d += timedelta(days=1)
             collect_injuries(con)
             kalshi_snapshot(con)
-            seasons = [s.strip() for s in args.seasons.split(",") if s.strip()]
-            collect_nba_stats(con, seasons)
+            # recent settled events (settlement ground truth for forward bets)
+            kalshi_backfill(con, max_pages=2)
+            # yesterday's boxscores (player logs + rolling features)
+            y = now - timedelta(days=1)
+            collect_boxscores(con, y.strftime("%Y%m%d"))
+            # bref verification for the current month
+            bref.verify_month(con, now.year, _month_name(now.month))
         elif args.command == "kalshi-discovery":
             found = kalshi_discovery(con)
             print(json.dumps({k: v for k, v in found.items() if v["exists"]}, indent=2))
+        elif args.command == "kalshi-backfill":
+            print(f"markets stored: {kalshi_backfill(con)}")
+        elif args.command == "kalshi-snapshot":
+            print(f"open markets: {kalshi_snapshot(con)}")
         elif args.command == "kalshi-candles":
             end = util.utcnow_iso()
-            start = args.start and util.parse_iso(args.start) or (util.parse_iso(end) - timedelta(days=30))
+            start = util.parse_iso(args.start) if args.start else util.parse_iso(end) - timedelta(days=30)
             n = kalshi_candles_window(con, args.series, util.to_iso(start), end)
             print(f"candles: {n}")
-        elif args.command == "kalshi-settled-window" and args.start:
-            end = args.end or util.utcnow_iso()
-            n = kalshi_settled_window(con, args.start, end)
-            print(f"settled markets loaded: {n}")
-        elif args.command == "injuries":
-            print(f"injuries: {collect_injuries(con)}")
-        elif args.command == "nba-stats":
-            seasons = [s.strip() for s in args.seasons.split(",") if s.strip()]
-            print(f"rows: {collect_nba_stats(con, seasons)}")
+
+
+def _month_name(m: int) -> str:
+    return ["january", "february", "march", "april", "may", "june", "july",
+            "august", "september", "october", "november", "december"][m - 1]
 
 
 if __name__ == "__main__":
