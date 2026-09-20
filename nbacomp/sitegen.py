@@ -278,66 +278,238 @@ real data is captured.</p>
 def leaderboard(con, out_dir):
     fwd = _leaderboard_rows(con, "forward")
     bt = _leaderboard_rows(con, "backtest")
+    n_cat = len({r["category"] for r in fwd})
+    games = con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"]
+    verified = con.execute("SELECT COUNT(*) c FROM games WHERE verified=1").fetchone()["c"]
+    span = con.execute(
+        "SELECT MIN(game_date_et) lo, MAX(game_date_et) hi FROM games").fetchone()
+    season_sub = (f"{span['lo'][:7]} → {span['hi'][:7]} ({verified:,} cross-verified)"
+                  if games and span["lo"] else "No games collected yet")
+    settled = con.execute(
+        "SELECT COUNT(*) c FROM bets WHERE result IN ('win','loss','push','void')").fetchone()["c"]
+    markets = con.execute(
+        "SELECT COUNT(DISTINCT market) c FROM bets WHERE result IN ('win','loss','push','void')"
+    ).fetchone()["c"]
+    wager_sub = (f"100% Immutable Ledger • {markets} Market Types" if settled
+                 else "No wagers recorded yet")
+    total_fwd_pnl = sum(r.get("pnl") or 0 for r in fwd)
+    pending = con.execute(
+        "SELECT COUNT(*) c FROM bets WHERE kind='forward' AND result='pending'").fetchone()["c"]
+    leaders = [r for r in fwd if r.get("bets")]
+    top = leaders[0] if leaders else None
+    if top:
+        top_val = f"@{_esc(top['username'])}"
+        top_sub = f"PnL {fmt_money(top.get('pnl') or 0)} · ROI {fmt_pct(top.get('roi'))}"
+    else:
+        top_val, top_sub = "—", "No settled bets yet"
+    upcoming_games = con.execute(
+        "SELECT * FROM games WHERE status IS NULL OR status != 'final' "
+        "ORDER BY tipoff_utc LIMIT 8").fetchall()
+    upcoming_n = con.execute(
+        "SELECT COUNT(*) c FROM games WHERE status IS NULL OR status != 'final'").fetchone()["c"]
+    upd = con.execute("SELECT value FROM meta WHERE key='last_pipeline_utc'").fetchone()
+
+    cats: dict[str, int] = {}
+    for r in fwd:
+        cats[r["category"]] = cats.get(r["category"], 0) + 1
+    pills = [f"<button class='fbtn on' data-cat=''>All {n_cat} Categories</button>"]
+    for c in sorted(cats):
+        pills.append(f"<button class='fbtn' data-cat='{_esc(c)}'>{_esc(c)} ({cats[c]})</button>")
+
+    top5_rows = "".join(_top5_row_html(r, i + 1) for i, r in enumerate(fwd[:5]))
+
+    if upcoming_games:
+        slate = table(
+            ["Matchup", "Date / Time", "Status", "Signals"],
+            [[f"<b>{_esc(g['away_team'])} @ {_esc(g['home_team'])}</b>",
+              _esc(g["tipoff_utc"] or g["game_date_et"] or "TBD"),
+              _esc(g["status"] or "scheduled"),
+              f"{con.execute('SELECT COUNT(*) c FROM bets WHERE game_id=?', (g['game_id'],)).fetchone()['c']} bets"]
+             for g in upcoming_games])
+    else:
+        slate = ("<p class='empty'>No upcoming games in the database yet — the slate fills in "
+                 "automatically as collection captures the schedule.</p>")
+
+    fwd_tbody = "".join(_lb_row_html(r, i + 1, "forward") for i, r in enumerate(fwd))
+    tied_note = ("<p class='muted'>All strategies tied at $0.00 — no settled bets yet. "
+                 "The 2026-27 season tips off in late October 2026; rows activate as "
+                 "verifiable prices and signals exist.</p>" if not settled else "")
+
+    payload = {
+        "generated_utc": upd["value"] if upd else None,
+        "starting_bankroll": S.STARTING_BANKROLL,
+        "forward": [_lb_json(r, "forward") for r in fwd],
+        "backtest": [_lb_json(r, "backtest") for r in bt],
+    }
+    _write_json(out_dir, "data/leaderboard.json", payload)
+    script = LB_SCRIPT.replace("__LB_JSON__", json.dumps(payload))
+
     body = f"""
-<h1>Leaderboard</h1>
-<p class="muted">Ranked by total forward P&L (competition objective: strongest returns). Risk metrics are
-displayed for context, not used for ranking. Backtest and forward records are always separate.</p>
-<h2>Forward paper-trading competition</h2>
-<table class='muted'><thead><tr>
-<th>Rank</th><th>Username</th><th>Strategy</th><th>Bankroll</th><th>P&amp;L</th><th>ROI</th>
-<th>Bets</th><th>Win %</th><th>Avg price</th><th>Max DD</th><th>Volatility</th>
-<th>Largest W/L</th><th>Longest streaks</th><th>Staked</th><th>Pending</th><th>Status</th>
-</tr></thead><tbody>
-{''.join(_leaderboard_row(r, i, kind='forward') for i, r in enumerate(fwd))}
-</tbody></table>
+<h1>🏆 Strategy Leaderboard — {len(fwd)} Autonomous Personas</h1>
+<p class="muted">Year-long autonomous NBA paper-trading competition across {len(fwd)} quantitative
+personas covering {n_cat} research categories. Ranked by total forward P&amp;L (competition objective:
+strongest returns). Risk metrics are displayed for context, not used for ranking. Backtest and forward
+records are always separate — toggle below, never mixed.</p>
+<div class="cards kpis">
+  <div class="card"><div class="v">{games:,}</div><div class="k">Tracked NBA Games</div>
+    <div class="s">{_esc(season_sub)}</div></div>
+  <div class="card"><div class="v">{len(fwd)}</div><div class="k">Active Strategies</div>
+    <div class="s">Across {n_cat} Research Categories</div></div>
+  <div class="card"><div class="v">{settled:,}</div><div class="k">Settled Wagers</div>
+    <div class="s">{_esc(wager_sub)}</div></div>
+  <div class="card"><div class="v">{fmt_money(total_fwd_pnl)}</div><div class="k">Total Forward PnL</div>
+    <div class="s">Strict Point-in-Time Fills</div></div>
+  <div class="card"><div class="v">{pending}</div><div class="k">Pending Forward Bets</div>
+    <div class="s">Published Before Tipoff</div></div>
+  <div class="card"><div class="v small-v">{top_val}</div><div class="k">Top Strategy</div>
+    <div class="s">{top_sub}</div></div>
+</div>
+<h2>🏆 Current Leaderboard (Top 5) <a href="#full" class="muted">View All {len(fwd)} →</a></h2>
+<div class="twrap"><table><thead><tr><th>Rank</th><th>Username</th><th>Category</th>
+<th>Win Rate</th><th>PnL ($)</th><th>ROI</th></tr></thead><tbody>{top5_rows}</tbody></table></div>
+<h2>⚡ Upcoming Slate Pulse ({upcoming_n} Games)</h2>
+{slate}
+<h2 id="full">🏆 Full Competition Board</h2>
+<div class="lb-controls">
+  <div class="kind-toggle">
+    <button id="kind_fwd" class="fbtn on">Forward (live paper)</button>
+    <button id="kind_bt" class="fbtn">Backtest (historical sim)</button>
+  </div>
+  <input id="lb_q" type="search" placeholder="Search username, strategy, category…">
+</div>
+<div class="pills">{''.join(pills)}</div>
+<p id="lb_count" class="muted"></p>
+<div class="twrap"><table id="lb"><thead><tr>
+<th data-k="rank">#</th><th data-k="username" class="sortable">Username ↕</th>
+<th data-k="category" class="sortable">Category ↕</th><th data-k="version" class="sortable">Ver ↕</th>
+<th data-k="pnl" class="sortable">Total PnL ($) ↕</th><th data-k="roi" class="sortable">ROI (%) ↕</th>
+<th data-k="win_rate" class="sortable">Win Rate ↕</th><th data-k="bets" class="sortable">Bets ↕</th>
+<th data-k="max_dd" class="sortable">Max DD ($) ↕</th><th data-k="bankroll" class="sortable">Bankroll ↕</th>
+<th data-k="status" class="sortable">Status ↕</th>
+</tr></thead><tbody id="lb_body">{fwd_tbody}</tbody></table></div>
+{tied_note}
 <h3>Forward P&L by month (competition-wide)</h3>
 {_profit_by_competition(con, "forward")}
 <h3>Forward P&L by strategy-category</h3>
 {_profit_by_category(con, "forward")}
-<h2>Backtest results (historical simulation)</h2>
-<table class='muted'><thead><tr>
-<th>Strategy</th><th>Bets</th><th>Win %</th><th>P&amp;L</th><th>ROI</th><th>Max DD</th>
-<th>Volatility</th><th>Staked</th><th>Status</th>
-</tr></thead><tbody>
-{''.join(_leaderboard_row(r, 0, kind='backtest') for r in bt)}
-</tbody></table>
+<p class="muted">Machine-readable board: <a href="data/leaderboard.json">data/leaderboard.json</a> ·
+Last pipeline run: {_esc(upd["value"] if upd else "not yet run")}</p>
+{script}
 """
     _write(out_dir, "leaderboard.html", page("Leaderboard", body, "leaderboard.html"))
 
 
-def _leaderboard_row(r, i, kind="forward") -> str:
-    rank = i + 1 if kind == "forward" else ""
-    pnl = r.get("pnl") or 0
-    pnl_class = "pos" if pnl > 0 and r.get("bets", 0) > 0 else ("neg" if pnl < 0 else "")
-    win_pct = f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—"
-    vol = f"${r['volatility']:.2f}" if r.get("volatility") is not None else "—"
-    biggest_w = fmt_money(r.get("largest_win"))
-    biggest_l = fmt_money(r.get("largest_loss"))
-    if kind == "forward":
-        return (f"<tr><td>{rank}</td><td>{_esc(r['username'])}</td>"
-                f"<td><a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a></td>"
-                f"<td>{fmt_money(r['bankroll'])}</td>"
-                f"<td class='{pnl_class}'>{fmt_money(pnl)}</td>"
-                f"<td>{fmt_pct(r.get('roi'))}</td>"
-                f"<td>{r.get('bets', 0)}</td>"
-                f"<td>{win_pct}</td>"
-                f"<td>{r.get('avg_price') or '—'}</td>"
-                f"<td>{fmt_money(r.get('max_dd') or 0)}</td>"
-                f"<td>{vol}</td>"
-                f"<td>{biggest_w} / {biggest_l}</td>"
-                f"<td>{r.get('longest_win', 0)}W / {r.get('longest_loss', 0)}L</td>"
-                f"<td>{fmt_money(r.get('staked') or 0)}</td>"
-                f"<td>{r.get('pending', 0)}</td>"
-                f"<td>{_status_of(r, kind)}</td></tr>")
-    return (f"<tr><td><a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a></td>"
-            f"<td>{r.get('bets', 0)}</td>"
-            f"<td>{win_pct}</td>"
-            f"<td class='{pnl_class}'>{fmt_money(pnl)}</td>"
-            f"<td>{fmt_pct(r.get('roi'))}</td>"
-            f"<td>{fmt_money(r.get('max_dd') or 0)}</td>"
-            f"<td>{vol}</td>"
-            f"<td>{fmt_money(r.get('staked') or 0)}</td>"
-            f"<td>{_status_of(r, kind)}</td></tr>")
+def fmt_usd(x) -> str:
+    if x is None:
+        return "—"
+    return f"${x:,.2f}"
+
+
+def _top5_row_html(r: dict, rank: int) -> str:
+    win = f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—"
+    return (f"<tr><td><b>#{rank}</b></td><td>@{_esc(r['username'])}</td>"
+            f"<td>{_esc(r['category'])}</td><td>{win}</td>"
+            f"<td class='{_pnl_class(r)}'>{fmt_money(r.get('pnl') or 0)}</td>"
+            f"<td><b>{fmt_pct(r.get('roi'))}</b></td></tr>")
+
+
+def _pnl_class(r: dict) -> str:
+    if not r.get("bets"):
+        return ""
+    return "pos" if (r.get("pnl") or 0) > 0 else ("neg" if (r.get("pnl") or 0) < 0 else "")
+
+
+def _st_class(status: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in status.lower())
+
+
+def _lb_row_html(r: dict, rank: int, kind: str) -> str:
+    medal = f" class='medal m{rank}'" if rank <= 3 else ""
+    win = f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—"
+    st = _status_of(r, kind)
+    return (
+        f"<tr><td><b{medal}>#{rank}</b></td>"
+        f"<td><b>@{_esc(r['username'])}</b><br><span class='muted'>{_esc(r['name'])}</span></td>"
+        f"<td>{_esc(r['category'])}</td><td>v{_esc(r['version'])}</td>"
+        f"<td class='{_pnl_class(r)}'>{fmt_money(r.get('pnl') or 0)}</td>"
+        f"<td><b>{fmt_pct(r.get('roi'))}</b></td><td>{win}</td><td>{r.get('bets', 0)}</td>"
+        f"<td>{fmt_usd(r.get('max_dd') or 0)}</td><td>{fmt_usd(r['bankroll'])}</td>"
+        f"<td><span class='st st-{_st_class(st)}'>{_esc(st)}</span></td></tr>")
+
+
+def _lb_json(r: dict, kind: str) -> dict:
+    return {
+        "id": r["id"], "username": r["username"], "name": r["name"],
+        "category": r["category"], "version": r["version"],
+        "pnl": r.get("pnl") or 0.0, "roi": r.get("roi"),
+        "win_rate": r.get("win_rate"), "bets": r.get("bets", 0),
+        "max_dd": r.get("max_dd") or 0.0, "bankroll": r["bankroll"],
+        "pending": r.get("pending", 0), "status": _status_of(r, kind),
+    }
+
+
+LB_SCRIPT = """
+<script>
+const LB = __LB_JSON__;
+const state = {kind: 'forward', cat: '', q: '', key: 'pnl', dir: -1};
+const tb = document.getElementById('lb_body');
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function money(x) { if (x == null) return '—'; const s = '$' + Math.abs(x).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); return (x < 0 ? '-' : '+') + s; }
+function pct(x) { if (x == null) return '—'; return (x >= 0 ? '+' : '') + (x * 100).toFixed(2) + '%'; }
+function usd(x) { if (x == null) return '—'; return '$' + Math.abs(x).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+function stClass(s) { return 'st-' + String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-'); }
+function val(r, k) {
+  if (k === 'rank') return 0;
+  const v = r[k];
+  if (v == null) return (k === 'roi' || k === 'win_rate') ? -Infinity : v;
+  return v;
+}
+function render() {
+  let rows = LB[state.kind].filter(r =>
+    (!state.cat || r.category === state.cat) &&
+    (!state.q || (r.username + ' ' + r.name + ' ' + r.category).toLowerCase().includes(state.q)));
+  rows = rows.slice().sort((a, b) => {
+    const va = val(a, state.key), vb = val(b, state.key);
+    if (typeof va === 'string') return state.dir * va.localeCompare(vb);
+    return state.dir * ((va > vb) - (va < vb));
+  });
+  document.getElementById('lb_count').textContent =
+    'Showing ' + rows.length + ' of ' + LB[state.kind].length + ' strategies (' + state.kind + ')';
+  tb.innerHTML = rows.map((r, i) => {
+    const medal = (i < 3) ? ' class=\"medal m' + (i + 1) + '\"' : '';
+    const cls = r.bets ? (r.pnl > 0 ? 'pos' : (r.pnl < 0 ? 'neg' : '')) : '';
+    return '<tr><td><b' + medal + '>#' + (i + 1) + '</b></td>' +
+      '<td><b>@' + esc(r.username) + '</b><br><span class=\"muted\">' + esc(r.name) + '</span></td>' +
+      '<td>' + esc(r.category) + '</td><td>v' + esc(r.version) + '</td>' +
+      '<td class=\"' + cls + '\">' + money(r.pnl) + '</td>' +
+      '<td><b>' + pct(r.roi) + '</b></td>' +
+      '<td>' + (r.win_rate == null ? '—' : (r.win_rate * 100).toFixed(1) + '%') + '</td>' +
+      '<td>' + r.bets + '</td><td>' + usd(r.max_dd) + '</td>' +
+      '<td>' + usd(r.bankroll) + '</td>' +
+      '<td><span class=\"st ' + stClass(r.status) + '\">' + esc(r.status) + '</span></td></tr>';
+  }).join('');
+}
+document.querySelectorAll('th.sortable').forEach(th => th.addEventListener('click', () => {
+  const k = th.dataset.k;
+  if (state.key === k) state.dir *= -1; else { state.key = k; state.dir = (k === 'username' || k === 'category' || k === 'status') ? 1 : -1; }
+  render();
+}));
+document.querySelectorAll('.pills .fbtn').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.pills .fbtn').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); state.cat = b.dataset.cat; render();
+}));
+document.getElementById('lb_q').addEventListener('input', e => { state.q = e.target.value.toLowerCase(); render(); });
+function setKind(k) {
+  state.kind = k;
+  document.getElementById('kind_fwd').classList.toggle('on', k === 'forward');
+  document.getElementById('kind_bt').classList.toggle('on', k === 'backtest');
+  render();
+}
+document.getElementById('kind_fwd').addEventListener('click', () => setKind('forward'));
+document.getElementById('kind_bt').addEventListener('click', () => setKind('backtest'));
+render();
+</script>
+"""
 
 
 def _profit_by_competition(con, kind: str) -> str:
@@ -788,6 +960,30 @@ code { background:#12161c; border:1px solid var(--line); border-radius:5px; padd
 footer { border-top:1px solid var(--line); color:var(--muted); font-size:12.5px;
          padding:18px 20px; margin-top:30px; }
 @media (max-width:720px){ main{padding:12px;} .card .v{font-size:18px;} th,td{padding:6px 7px;} }
+/* --- competition leaderboard (NFLComp-style board) --- */
+.cards.kpis { grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); }
+.cards.kpis .v { font-size:26px; }
+.cards.kpis .small-v { font-size:17px; word-break:break-all; }
+.card .s { color:var(--muted); font-size:11.5px; margin-top:2px; }
+.lb-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:10px 0; }
+.kind-toggle { display:flex; gap:6px; }
+.fbtn { background:var(--panel); color:var(--muted); border:1px solid var(--line);
+       border-radius:999px; padding:5px 13px; font-size:12.5px; cursor:pointer; }
+.fbtn:hover { color:var(--ink); border-color:var(--accent); }
+.fbtn.on { color:var(--accent); border-color:var(--accent); background:#22201a; font-weight:600; }
+.pills { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 4px; }
+#lb_q { flex:1; min-width:200px; }
+th.sortable { cursor:pointer; user-select:none; }
+th.sortable:hover { color:var(--accent); }
+.medal { display:inline-block; min-width:34px; text-align:center; border-radius:6px; padding:1px 6px; }
+.m1 { background:#3a2f14; color:#f2c94c; } .m2 { background:#2b3038; color:#cfd6de; }
+.m3 { background:#33241a; color:#e09a5f; }
+.st { display:inline-block; border-radius:999px; padding:2px 10px; font-size:11px;
+     font-weight:600; white-space:nowrap; background:#222a34; color:var(--muted); }
+.st-active, .st-active--open-bets- { background:#1c2a22; color:var(--good); }
+.st-awaiting-opportunity { background:#232a33; color:var(--muted); }
+.st-backtested { background:#1d2634; color:#6aa8e8; }
+.st-no-historical-data { background:#232a33; color:var(--muted); }
 """
     _write(out_dir, "style.css", css)
 
