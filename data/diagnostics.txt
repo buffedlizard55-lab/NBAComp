@@ -1,4 +1,4 @@
-probe5 2026-09-20T19:54:28Z
+probe5 2026-09-20T21:45:08Z
 events settled page1: http=200 rows=200 cursor=yes
   event: ticker=None title='Game 5: New York at San Antonio' sub='NYK at SAS (Jun 13)' strike=None close=None
   event: ticker=None title='Game 4: San Antonio at New York' sub='SAS at NYK (Jun 10)' strike=None close=None
