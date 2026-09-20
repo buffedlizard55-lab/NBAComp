@@ -1,8 +1,10 @@
 #!/usr/bin/env python
-"""Deep probe: find a WORKING path to ESPN/NBA data from this runner.
+"""Probe #3: pin down the working endpoint matrix.
 
-Tests multiple transport fingerprints (urllib vs curl) and endpoints.
-Writes data/diagnostics.txt. Nothing is fabricated: failures are failures.
+Focus: site.web.api.espn.com (scoreboard/summary/injuries/teams/standings,
+historical dates), basketball-reference reachability, stats.nba.com via Node
+fetch, and Kalshi historical market access (windowed queries, events status,
+candlesticks/trades on real markets).
 """
 from __future__ import annotations
 
@@ -14,112 +16,122 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nbacomp import db, util  # noqa: E402
 from nbacomp import http  # noqa: E402
-from nbacomp.sources import espn, kalshi  # noqa: E402
+from nbacomp.sources import kalshi  # noqa: E402
 
-ESPN_UA = http.USER_AGENT
+OUT = []
 
 
-def curl(url: str, headers: list[str] | None = None, timeout: int = 25) -> tuple[int, bytes]:
-    cmd = ["curl", "-s", "-o", "-", "-w", "%{http_code}", "-m", str(timeout),
-           "-H", f"User-Agent: {ESPN_UA}"]
-    for h in headers or []:
-        cmd += ["-H", h]
-    cmd.append(url)
-    p = subprocess.run(cmd, capture_output=True)
+def log(s):
+    OUT.append(s)
+    print(s, flush=True)
+
+
+def curl(url: str, timeout: int = 25) -> tuple[int, bytes]:
+    p = subprocess.run(["curl", "-s", "-o", "-", "-w", "%{http_code}", "-m", str(timeout),
+                        "-H", f"User-Agent: {http.USER_AGENT}", url], capture_output=True)
     body = p.stdout
     code = body[-3:].decode("ascii", "replace")
     return int(code) if code.isdigit() else 0, body[:-3]
 
 
+def jlen(body: bytes, key: str) -> str:
+    try:
+        js = json.loads(body)
+        v = js
+        for k in key.split("."):
+            v = v.get(k, []) if isinstance(v, dict) else []
+        return str(len(v)) if isinstance(v, list) else "dict"
+    except Exception as e:
+        return f"parse-err {e}"
+
+
 def main():
-    out = []
+    WEB = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba"
 
-    def log(s):
-        out.append(s)
-        print(s, flush=True)
+    # ESPN matrix on the working host
+    for label, url, key in [
+        ("site.web scoreboard today", f"{WEB}/scoreboard", "events"),
+        ("site.web scoreboard 20260115", f"{WEB}/scoreboard?dates=20260115", "events"),
+        ("site.web scoreboard 20250605 (finals)", f"{WEB}/scoreboard?dates=20250605", "events"),
+        ("site.web injuries", f"{WEB}/injuries", "items"),
+        ("site.web teams", f"{WEB}/teams", "sports.0.leagues.0.teams"),
+    ]:
+        code, body = curl(url)
+        log(f"{label}: {code} bytes={len(body)} {key}={jlen(body, key) if code == 200 else '-'}")
 
-    # ---- ESPN via curl (different TLS fingerprint than urllib)
-    code, body = curl("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard")
-    log(f"curl espn.scoreboard: {code} bytes={len(body)} head={body[:120]!r}")
+    # summary for a specific event (from 20260115 board)
+    code, body = curl(f"{WEB}/scoreboard?dates=20260115")
+    event_id = None
     if code == 200:
         try:
             js = json.loads(body)
-            log(f"  events={len(js.get('events') or [])}")
+            evs = js.get("events") or []
+            if evs:
+                event_id = evs[0].get("id")
+                log(f"  sample event id={event_id} date={evs[0].get('date')}")
         except json.JSONDecodeError:
-            log("  json parse failed")
-    code, body = curl("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=20260115")
-    log(f"curl espn.scoreboard(20260115): {code} bytes={len(body)}")
-    code, body = curl("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries")
-    log(f"curl espn.injuries: {code} bytes={len(body)}")
-    code, body = curl("https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard")
-    log(f"curl espn.site-web scoreboard: {code} bytes={len(body)}")
-    code, body = curl("https://sports.core.api.espn.com/v2/sports/basketball/league/nba/injuries?limit=50")
-    log(f"curl espn.core injuries: {code} bytes={len(body)}")
-    # with fuller browser header set
-    hdrs = ["Accept: application/json, text/plain, */*", "Accept-Language: en-US,en;q=0.9",
-            "Origin: https://www.espn.com", "Referer: https://www.espn.com/",
-            "Sec-Fetch-Dest: empty", "Sec-Fetch-Mode: cors", "Sec-Fetch-Site: same-site"]
-    code, body = curl("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard", hdrs)
-    log(f"curl espn.scoreboard +browser-hdrs: {code} bytes={len(body)}")
+            pass
+    if event_id:
+        code, body = curl(f"{WEB}/summary?event={event_id}")
+        ok = code == 200
+        has_box = "boxscore" in body.decode("utf-8", "replace") if ok else False
+        log(f"site.web summary?event={event_id}: {code} bytes={len(body)} has_boxscore={has_box}")
 
-    # ---- NBA.com via curl
-    nbah = ["Referer: https://www.nba.com/", "Origin: https://www.nba.com"]
-    code, body = curl("https://stats.nba.com/stats/scoreboardv2?GameDate=01%2F15%2F2026&LeagueID=00&DayOffset=0",
-                      nbah + ["Accept-Encoding: gzip, deflate, br"], timeout=30)
-    log(f"curl stats.nba.com scoreboardv2: {code} bytes={len(body)} head={body[:100]!r}")
-    code, body = curl("https://data.nba.net/prod/v1/20260115/scoreboard.json", timeout=30)
-    log(f"curl data.nba.net scoreboard: {code} bytes={len(body)} head={body[:100]!r}")
-    code, body = curl("https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json", timeout=30)
-    log(f"curl cdn.nba.net liveData scoreboard: {code} bytes={len(body)} head={body[:100]!r}")
+    # standings via core API
+    code, body = curl("https://sports.core.api.espn.com/v2/sports/basketball/league/nba/standings?season=2025")
+    log(f"core standings 2025: {code} bytes={len(body)}")
+    code, body = curl("https://sports.core.api.espn.com/v2/sports/basketball/league/nba/injuries")
+    log(f"core injuries (no params): {code} bytes={len(body)}")
 
-    # ---- Kalshi deeper probes
-    probe_series = ["KXNBAGAME", "KXNBASPREAD", "KXNBATOTAL", "KXNBA1H", "KXNBAPOINT",
-                    "KXNBAREB", "KXNBAAST", "KXNBAMVP"]
-    found = {}
-    for s in probe_series:
-        r = kalshi.get_series(s)
-        found[s] = bool(r.ok)
-        log(f"kalshi.series {s}: http={r.status} exists={r.ok}")
-    open_markets = kalshi.get_markets("KXNBAGAME", "open", max_pages=2)
-    log(f"kalshi KXNBAGAME open: rows={len(open_markets)}")
-    tickers = [m["ticker"] for m in open_markets[:3]]
-    if tickers:
-        log(f"  sample tickers: {tickers}")
-        m0 = open_markets[0]
-        log(f"  sample market: title={m0.get('title')!r} subtitle={m0.get('market_subtitle')!r} "
-            f"strike={m0.get('strike')} open_interest={m0.get('open_interest')} "
-            f"close_time={m0.get('close_time')} yes_bid={m0.get('yes_bid')} yes_ask={m0.get('yes_ask')}")
-        from nbacomp.sources import kalshi as K
-        now = int(time.time() * 1000)
-        cs = K.get_candlesticks(tickers, now - 48 * 3600 * 1000, now, 60)
-        log(f"kalshi.candlesticks(48h, {len(tickers)} real tickers): entries={len(cs)} "
+    # basketball-reference
+    code, body = curl("https://www.basketball-reference.com/leagues/NBA_2026_games.html")
+    log(f"basketball-reference 2026 games: {code} bytes={len(body)}")
+
+    # stats.nba.com via node fetch (different TLS stack)
+    node_script = ("fetch('https://stats.nba.com/stats/scoreboardv2?GameDate=01%2F15%2F2026&LeagueID=00&DayOffset=0',"
+                   "{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36','Referer':'https://www.nba.com/',"
+                   "'Accept':'application/json'}}).then(r=>r.text().then(t=>"
+                   "console.log('status',r.status,'len',t.length))).catch(e=>console.log('ERR',String(e).slice(0,120)))")
+    p = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, timeout=60)
+    log(f"node stats.nba.com scoreboardv2: {p.stdout.strip()} {p.stderr.strip()[:120]}")
+
+    node_script2 = ("fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard',"
+                    "{headers:{'User-Agent':'Mozilla/5.0'}}).then(r=>r.text().then(t=>"
+                    "console.log('status',r.status,'len',t.length))).catch(e=>console.log('ERR',String(e).slice(0,120)))")
+    p = subprocess.run(["node", "-e", node_script2], capture_output=True, text=True, timeout=60)
+    log(f"node site.api.espn.com scoreboard: {p.stdout.strip()} {p.stderr.strip()[:120]}")
+
+    # Kalshi historical access patterns
+    start = int(time.mktime(time.strptime("2026-01-10", "%Y-%m-%d")))
+    end = int(time.mktime(time.strptime("2026-01-20", "%Y-%m-%d")))
+    r = http.get(f"{kalshi.BASE}/markets", {"series_ticker": "KXNBAGAME",
+                                            "min_close_ts": start, "max_close_ts": end, "limit": 1000})
+    log(f"kalshi markets window 2026-01-10..20 (no status): http={r.status} "
+        f"rows={len((r.json or {}).get('markets') or [])}")
+    if r.ok and (r.json or {}).get("markets"):
+        m0 = r.json["markets"][0]
+        log(f"  sample: {m0.get('ticker')} result={m0.get('result')} close={m0.get('close_time')} "
+            f"yes_open={m0.get('open_interest')}")
+        tk = m0["ticker"]
+        r2 = http.get(f"{kalshi.BASE}/markets/candlesticks",
+                      {"tickers": tk, "start_ts": start, "end_ts": end, "interval": 60})
+        cs = (r2.json or {}).get("candlesticks") or []
+        log(f"kalshi candles real settled ticker: http={r2.status} entries={len(cs)} "
             f"candles={sum(len(e.get('candlesticks') or []) for e in cs)}")
-        ob = kalshi.get_orderbooks(tickers)
-        log(f"kalshi.orderbooks: entries={len(ob)} sample={(ob[0] if ob else None)!r:.200}")
-    for status in ("settled", "finalized", "closed"):
-        rows = kalshi.get_markets("KXNBAGAME", status, max_pages=1)
-        log(f"kalshi KXNBAGAME status={status}: rows={len(rows)}")
-        if rows:
-            m0 = rows[0]
-            log(f"  sample settled: {m0.get('ticker')} result={m0.get('result')} "
-                f"close={m0.get('close_time')}")
+        if cs:
+            log(f"  candle sample: {cs[0].get('candlesticks', [{}])[0]}")
+    r = http.get(f"{kalshi.BASE}/events", {"series_ticker": "KXNBAGAME", "status": "settled", "limit": 5})
+    log(f"kalshi events settled: http={r.status} rows={len((r.json or {}).get('events') or [])}")
+    # more prop series candidates
+    for s in ["KXNBAPTS", "KXNBATHREES", "KXNBATO", "KXNBAPRA", "KXNBADD", "KXNBASTL", "KXNBABLK",
+              "KXNBAREBS", "KXNBAASTS"]:
+        rr = kalshi.get_series(s)
+        log(f"kalshi.series {s}: exists={rr.ok} http={rr.status}")
 
-    # DB log tail
-    try:
-        con = db.connect()
-        rows = con.execute("SELECT ts_utc, task, source, status, detail FROM collection_log "
-                           "ORDER BY id DESC LIMIT 12").fetchall()
-        out.append("collection_log tail:")
-        out.extend(f"  {r['ts_utc']} {r['task']} {r['source']} {r['status']} {r['detail'][:100]}"
-                   for r in rows)
-    except Exception as e:
-        out.append(f"db read failed: {e}")
-
-    os.makedirs("data", exist_ok=True)
     with open("data/diagnostics.txt", "w") as f:
-        f.write("\n".join(out) + "\n")
+        f.write("\n".join(OUT) + "\n")
 
 
 if __name__ == "__main__":
