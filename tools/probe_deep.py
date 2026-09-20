@@ -15,7 +15,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nbacomp import db, util  # noqa: E402
-from nbacomp.sources import espn, http, kalshi  # noqa: E402
+from nbacomp import http  # noqa: E402
+from nbacomp.sources import espn, kalshi  # noqa: E402
 
 ESPN_UA = http.USER_AGENT
 
