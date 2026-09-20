@@ -25,6 +25,9 @@ OUT = []
 def log(s):
     OUT.append(s)
     print(s, flush=True)
+    os.makedirs("data", exist_ok=True)
+    with open("data/diagnostics.txt", "a") as f:
+        f.write(s + "\n")
 
 
 def curl(url: str, timeout: int = 25) -> tuple[int, bytes]:
@@ -47,6 +50,9 @@ def jlen(body: bytes, key: str) -> str:
 
 
 def main():
+    os.makedirs("data", exist_ok=True)
+    with open("data/diagnostics.txt", "w") as f:
+        f.write("probe3 " + time.strftime("%FT%TZ", time.gmtime()) + "\n")
     WEB = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba"
 
     # ESPN matrix on the working host
@@ -89,19 +95,27 @@ def main():
     log(f"basketball-reference 2026 games: {code} bytes={len(body)}")
 
     # stats.nba.com via node fetch (different TLS stack)
-    node_script = ("fetch('https://stats.nba.com/stats/scoreboardv2?GameDate=01%2F15%2F2026&LeagueID=00&DayOffset=0',"
+    try:
+        node_script = ("fetch('https://stats.nba.com/stats/scoreboardv2?GameDate=01%2F15%2F2026&LeagueID=00&DayOffset=0',"
                    "{headers:{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36','Referer':'https://www.nba.com/',"
                    "'Accept':'application/json'}}).then(r=>r.text().then(t=>"
                    "console.log('status',r.status,'len',t.length))).catch(e=>console.log('ERR',String(e).slice(0,120)))")
     p = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, timeout=60)
-    log(f"node stats.nba.com scoreboardv2: {p.stdout.strip()} {p.stderr.strip()[:120]}")
+        p = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, timeout=45)
+        log(f"node stats.nba.com scoreboardv2: {p.stdout.strip()} {p.stderr.strip()[:120]}")
+    except subprocess.TimeoutExpired:
+        log("node stats.nba.com scoreboardv2: TIMEOUT >45s (tarpit)")
 
-    node_script2 = ("fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard',"
+    try:
+        node_script2 = ("fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard',"
                     "{headers:{'User-Agent':'Mozilla/5.0'}}).then(r=>r.text().then(t=>"
                     "console.log('status',r.status,'len',t.length))).catch(e=>console.log('ERR',String(e).slice(0,120)))")
     p = subprocess.run(["node", "-e", node_script2], capture_output=True, text=True, timeout=60)
-    log(f"node site.api.espn.com scoreboard: {p.stdout.strip()} {p.stderr.strip()[:120]}")
+        p = subprocess.run(["node", "-e", node_script2], capture_output=True, text=True, timeout=45)
+        log(f"node site.api.espn.com scoreboard: {p.stdout.strip()} {p.stderr.strip()[:120]}")
+    except subprocess.TimeoutExpired:
+        log("node site.api.espn.com scoreboard: TIMEOUT >45s")
 
     # Kalshi historical access patterns
     start = int(time.mktime(time.strptime("2026-01-10", "%Y-%m-%d")))
@@ -130,8 +144,7 @@ def main():
         rr = kalshi.get_series(s)
         log(f"kalshi.series {s}: exists={rr.ok} http={rr.status}")
 
-    with open("data/diagnostics.txt", "w") as f:
-        f.write("\n".join(OUT) + "\n")
+    pass
 
 
 if __name__ == "__main__":
