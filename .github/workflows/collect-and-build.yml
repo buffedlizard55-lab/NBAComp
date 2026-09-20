@@ -1,0 +1,119 @@
+name: collect-and-build
+
+# Autonomous data collection + strategy pipeline + site build.
+# Runs on schedule (every 6h), on demand, and on push (skipping its own commits).
+concurrency:
+  group: nbacomp
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Run full multi-season backfill first (slow, ~40min)"
+        default: "false"
+  push:
+    paths-ignore:
+      - "data/**"
+      - "index.html"
+      - "leaderboard.html"
+      - "strategies.html"
+      - "upcoming.html"
+      - "positions.html"
+      - "history.html"
+      - "sources.html"
+      - "research.html"
+      - "methodology.html"
+      - "style.css"
+      - "data/history.json"
+
+permissions:
+  contents: write
+
+jobs:
+  collect-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Skip auto-commits
+        id: skip
+        run: |
+          if git log -1 --grep='\[auto\]' --oneline | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Full backfill (on demand)
+        if: steps.skip.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.backfill == 'true'
+        run: |
+          python -m nbacomp.collect backfill-days --start 20241001 --end 20250701
+          python -m nbacomp.collect backfill-days --start 20251001 --end 20260715
+          python -m nbacomp.collect kalshi-discovery
+          python -m nbacomp.collect kalshi-settled-window --start 2025-09-01T00:00:00Z --end 2026-07-15T00:00:00Z || true
+          python -m nbacomp.collect kalshi-candles --start 2025-09-01T00:00:00Z --end 2026-07-15T00:00:00Z || true
+
+      - name: Rolling backfill (catch up last 40 days; full backfill when DB is fresh)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          S=$(date -u -d '-40 days' +%Y%m%d)
+          E=$(date -u +%Y%m%d)
+          THIN=$(python -c "
+import sqlite3,os
+con=sqlite3.connect('data/nbacomp.db')
+n=con.execute('select count(*) from games').fetchone()[0]
+print(n)" 2>/dev/null || echo 0)
+          if [ ! -f data/nbacomp.db ] || [ "$THIN" -lt 500 ]; then
+            echo "DB missing/thin ($THIN games) — running multi-season backfill"
+            python -m nbacomp.collect backfill-days --start 20241001 --end 20250701
+            python -m nbacomp.collect backfill-days --start 20251001 --end "$E"
+            python -m nbacomp.collect kalshi-discovery || true
+            python -m nbacomp.collect kalshi-settled-window --start 2025-09-01T00:00:00Z --end 2026-07-15T00:00:00Z || true
+            python -m nbacomp.collect kalshi-candles --start 2025-09-01T00:00:00Z --end 2026-07-15T00:00:00Z || true
+            python -m nbacomp.collect kalshi-candles --start 2024-10-01T00:00:00Z --end 2025-07-01T00:00:00Z || true
+          else
+            python -m nbacomp.collect backfill-days --start "$S" --end "$E"
+          fi
+
+      - name: Daily collection (schedule+odds, injuries, Kalshi, NBA stats)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          python -m nbacomp.collect kalshi-discovery || true
+          python -m nbacomp.collect kalshi-candles --start "$(date -u -d '-10 days' +%Y-%m-%dT00:00:00Z)" --end "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python -m nbacomp.collect daily
+
+      - name: Pipeline (strategies, backtest, paper engine, settlement, audit, site)
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          python tools/seed_research.py
+          python tools/run_pipeline.py
+
+      - name: Commit data + site
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python - <<'EOF'
+          import sqlite3
+          con = sqlite3.connect('data/nbacomp.db')
+          con.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+          con.close()
+          EOF
+          rm -f data/nbacomp.db-wal data/nbacomp.db-shm
+          git add -A data index.html leaderboard.html strategies.html upcoming.html \
+            positions.html history.html sources.html research.html methodology.html \
+            style.css || true
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "[auto] collect + pipeline + site build $(date -u +%FT%TZ)" || true
+            git push origin HEAD
+          fi

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Methodology — NBAComp</title>
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<header><div class="brand"><a href="index.html">🏀 NBAComp</a>
+<span class="tag">autonomous NBA betting research lab &amp; paper-trading competition</span></div>
+<nav><a href="index.html">Dashboard</a><a href="leaderboard.html">Leaderboard</a><a href="strategies.html">Strategies</a><a href="upcoming.html">Upcoming Bets</a><a href="positions.html">Open Positions</a><a href="history.html">Trade History</a><a href="sources.html">Data Sources</a><a href="research.html">Research</a><a href="methodology.html" class="active">Methodology</a></nav></header>
+<main>
+<h1>Methodology</h1>
+<h2>Decision-time integrity (no look-ahead)</h2>
+<ul>
+<li>Every simulated bet stores <code>decision_utc</code>; model inputs (Elo ratings, rolling team stats,
+rest/travel features) are built strictly from games dated before the decision.</li>
+<li>Backtest prices come from the last <em>fully closed hourly</em> Kalshi candle before the decision
+(+1 tick slippage). A price timestamped after the decision can never be selected — enforced in
+<code>engine.PriceBook</code> and tested in the test-suite.</li>
+<li>Injury adjustments use only listings published before the decision. Final injury status, final lineups,
+closing prices, and game results are never used at decision time.</li>
+</ul>
+<h2>Backtesting</h2>
+<p>Chronological walk over verified game results. Each strategy's state carries forward; a game's result is
+absorbed into the model only after its bets are placed. Settlement uses Kalshi's own recorded result when
+available, cross-checked against the cross-verified final score; disagreements raise anomalies instead of
+silent choices.</p>
+<h2>Forward testing &amp; paper trading</h2>
+<p>When historical prices don't exist (player props, sportsbook lines pre-2026-27), strategies are
+forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
+simulated bet before tipoff, then settled from verified results. The forward ledger is the competition
+leaderboard; backtest records are always displayed separately.</p>
+<h2>Execution realism</h2>
+<ul>
+<li>Kalshi fills: observed orderbook ask (forward) or last closed candle close +1 tick (backtest, depth
+unobservable — labeled), plus Kalshi's published fee schedule: fee = ceil(0.07·C·P·(1−P)) dollars.</li>
+<li>Model-vs-line totals bets (where no historical price source exists) are simulated at standard −110 and
+every such bet row is labeled <i>PRICED-ASSUMPTION</i> — nothing is presented as an observed price.</li>
+<li>Unknown limits (sportsbook max bets, Kalshi tier limits beyond documented rate limits) are recorded as
+unknown, never invented. Kalshi order-book size caps fills at observed depth when books are captured.</li>
+</ul>
+<h2>P&amp;L, bankrolls, sizing</h2>
+<p>Each strategy starts with a $1,000 virtual bankroll. Stake = 25% Kelly capped at 3% of current bankroll,
+min $5, max 25% open exposure. Pushes return the stake (P&amp;L 0). Kalshi push/void handling defers to the
+exchange's recorded result; unresolved markets stay <i>pending</i>, never guessed.</p>
+<h2>Data verification</h2>
+<p>Final scores are cross-checked ESPN ↔ NBA.com; every verification (match/mismatch) is stored. Source
+reachability is probed each collection run and published on the Sources page. Discrepancies raise anomalies,
+are investigated in the research log, and are never silently resolved.</p>
+<h2>Strategy versioning</h2>
+<p>Material rule changes create a new version (e.g., NBA-001 v1.1); history is preserved — bet rows carry the
+version that produced them and are never rewritten.</p>
+<h2>What this site is not</h2>
+<p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
+point is to find out, with real verified data, which hypotheses survive.</p>
+</main>
+<footer>Simulated paper trading only. No real money. Data: ESPN, NBA.com/stats, Kalshi public API —
+see <a href="sources.html">Data Sources</a>. Every number on this site is traceable to a logged,
+timestamped source; unverified data is labeled as such.</footer>
+</body></html>

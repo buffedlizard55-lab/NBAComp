@@ -1,0 +1,607 @@
+"""Static site generator → repo root (GitHub Pages serves main:/).
+
+Clean, fast, mobile-friendly. All numbers come from the database; when data is
+missing the pages say so explicitly (never blank-styled fake content).
+"""
+from __future__ import annotations
+
+import json
+import os
+
+from . import strategies as S
+from .sources_registry import REGISTRY
+
+NAV = [
+    ("index.html", "Dashboard"),
+    ("leaderboard.html", "Leaderboard"),
+    ("strategies.html", "Strategies"),
+    ("upcoming.html", "Upcoming Bets"),
+    ("positions.html", "Open Positions"),
+    ("history.html", "Trade History"),
+    ("sources.html", "Data Sources"),
+    ("research.html", "Research"),
+    ("methodology.html", "Methodology"),
+]
+
+
+def _esc(x) -> str:
+    return (str(x).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def page(title: str, body: str, active: str = "index.html") -> str:
+    links = []
+    for href, label in NAV:
+        cls = ' class="active"' if href == active else ""
+        links.append(f'<a href="{href}"{cls}>{label}</a>')
+    nav = "".join(links)
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(title)} — NBAComp</title>
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<header><div class="brand"><a href="index.html">🏀 NBAComp</a>
+<span class="tag">autonomous NBA betting research lab &amp; paper-trading competition</span></div>
+<nav>{nav}</nav></header>
+<main>{body}</main>
+<footer>Simulated paper trading only. No real money. Data: ESPN, NBA.com/stats, Kalshi public API —
+see <a href="sources.html">Data Sources</a>. Every number on this site is traceable to a logged,
+timestamped source; unverified data is labeled as such.</footer>
+</body></html>"""
+
+
+def table(headers: list[str], rows: list[list], cls: str = "") -> str:
+    if not rows:
+        return "<p class='empty'>No rows yet — data pending collection.</p>"
+    h = "".join(f"<th>{_esc(x)}</th>" for x in headers)
+    trs = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>" for row in rows)
+    return f"<div class='twrap'><table class='{cls}'><thead><tr>{h}</tr></thead><tbody>{trs}</tbody></table></div>"
+
+
+def fmt_money(x) -> str:
+    if x is None:
+        return "—"
+    sign = "+" if x >= 0 else ""
+    return f"{sign}${x:,.2f}"
+
+
+def fmt_pct(x) -> str:
+    if x is None:
+        return "—"
+    return f"{x * 100:+.2f}%"
+
+
+def strategy_performance(con, strategy_id: str, kind: str) -> dict:
+    rows = con.execute(
+        "SELECT * FROM bets WHERE strategy_id=? AND kind=? AND result IN ('win','loss','push','void')",
+        (strategy_id, kind)).fetchall()
+    if not rows:
+        return {"bets": 0}
+    pnl = sum(r["pnl_usd"] or 0 for r in rows)
+    wins = sum(1 for r in rows if r["result"] == "win")
+    decided = sum(1 for r in rows if r["result"] in ("win", "loss"))
+    staked = sum(r["stake_usd"] or 0 for r in rows)
+    curve, peak, mdd = 0.0, 0.0, 0.0
+    for r in sorted(rows, key=lambda r: r["settlement_utc"] or ""):
+        curve += r["pnl_usd"] or 0
+        peak = max(peak, curve)
+        mdd = max(mdd, peak - curve)
+    odds = [abs(float(r["price"])) for r in rows if r["price"] is not None]
+    return {
+        "bets": len(rows), "wins": wins, "win_rate": wins / decided if decided else None,
+        "pnl": round(pnl, 2), "roi": pnl / staked if staked else None,
+        "staked": round(staked, 2), "max_dd": round(mdd, 2),
+        "avg_price": round(sum(odds) / len(odds), 1) if odds else None,
+        "pending": con.execute(
+            "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
+            (strategy_id, kind)).fetchone()["c"],
+    }
+
+
+def build_all(con, out_dir: str = "."):
+    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(os.path.join(out_dir, "data"), exist_ok=True)
+    write_style(out_dir)
+    _write_json(out_dir, "data/audit_summary.json", _audit_summary(con))
+    index(con, out_dir)
+    leaderboard(con, out_dir)
+    strategies_page(con, out_dir)
+    upcoming(con, out_dir)
+    positions(con, out_dir)
+    history(con, out_dir)
+    sources_page(con, out_dir)
+    research_page(con, out_dir)
+    methodology(out_dir)
+
+
+# ------------------------------------------------------------------ pieces
+
+def _leaderboard_rows(con, kind: str) -> list[dict]:
+    out = []
+    for sid, meta in S.STRATEGIES.items():
+        perf = strategy_performance(con, sid, kind)
+        row = {
+            "id": sid, "username": meta["username"], "name": meta["name"],
+            "category": meta["category"], "version": meta["version"], **perf,
+        }
+        br_row = con.execute(
+            "SELECT current FROM bankroll_events WHERE strategy_id=? ORDER BY as_of_utc DESC, id DESC LIMIT 1",
+            (sid,)).fetchone()
+        row["bankroll"] = br_row["current"] if br_row else S.STARTING_BANKROLL
+        if perf.get("bets"):
+            row["bankroll"] = round(S.STARTING_BANKROLL + perf["pnl"], 2)
+        out.append(row)
+    out.sort(key=lambda r: (-(r.get("pnl") or 0), -(r.get("bets") or 0)))
+    return out
+
+
+def _status_of(perf: dict, kind: str) -> str:
+    if kind == "forward":
+        if not perf.get("bets"):
+            return "awaiting-opportunity"
+        if perf.get("pending"):
+            return "active (open bets)"
+        return "active"
+    return "backtested" if perf.get("bets") else "no historical data"
+
+
+def index(con, out_dir):
+    fwd = _leaderboard_rows(con, "forward")
+    bt = _leaderboard_rows(con, "backtest")
+    total_fwd_pnl = sum(r.get("pnl") or 0 for r in fwd)
+    active = sum(1 for r in fwd if r.get("bets"))
+    upd = con.execute("SELECT value FROM meta WHERE key='last_pipeline_utc'").fetchone()
+    games = con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"]
+    verified = con.execute("SELECT COUNT(*) c FROM games WHERE verified=1").fetchone()["c"]
+    inj = con.execute("SELECT COUNT(*) c FROM injuries").fetchone()["c"]
+    kseries = con.execute("SELECT COUNT(DISTINCT series_ticker) c FROM kalshi_markets").fetchone()["c"]
+    upcoming_rows = con.execute(
+        "SELECT * FROM bets WHERE kind='forward' AND result='pending' ORDER BY tipoff_utc LIMIT 8").fetchall()
+    recent = con.execute(
+        "SELECT * FROM bets WHERE result IN ('win','loss') ORDER BY settlement_utc DESC LIMIT 8").fetchall()
+
+    lb = table(
+        ["#", "Username", "Strategy", "Bankroll", "P&L", "ROI", "Bets", "Win %", "Status"],
+        [[i + 1, r["username"], f"<a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a>",
+          fmt_money(r["bankroll"]), fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")),
+          r.get("bets", 0),
+          f"{r['win_rate'] * 100:.0f}%" if r.get("win_rate") is not None else "—",
+          _status_of(r, "forward")] for i, r in enumerate(fwd[:10])])
+
+    body = f"""
+<div class="hero">
+  <h1>NBA Paper-Trading Competition</h1>
+  <p>{len(S.STRATEGIES)} system-generated strategies · ${S.STARTING_BANKROLL:,.0f} virtual bankroll each ·
+     competition window {S.COMPETITION_START} → {S.COMPETITION_END} · primary objective: total return</p>
+  <p class="muted">This is simulated paper trading on real, timestamped market data. No real money. Nothing on this
+  site is betting advice.</p>
+</div>
+<div class="cards">
+  <div class="card"><div class="k">Competition forward P&L</div><div class="v">{fmt_money(total_fwd_pnl)}</div></div>
+  <div class="card"><div class="k">Strategies with live bets</div><div class="v">{active}/{len(S.STRATEGIES)}</div></div>
+  <div class="card"><div class="k">Games in database</div><div class="v">{games:,} <span class="muted">({verified:,} cross-verified)</span></div></div>
+  <div class="card"><div class="k">Injury listings collected</div><div class="v">{inj:,}</div></div>
+  <div class="card"><div class="k">Kalshi NBA series live</div><div class="v">{kseries}</div></div>
+</div>
+<h2>Competition leaderboard <span class="muted">(forward paper trades)</span></h2>
+{lb}
+<p class="muted">Strategies with zero bets are shown as <i>awaiting-opportunity</i> — the 2026-27 season tips off in
+late October 2026; strategies begin betting when verifiable prices and signals exist. Nothing is simulated before
+real data is captured.</p>
+<h2>Upcoming simulated bets</h2>
+{table(["Strategy", "Game", "Tipoff (UTC)", "Market", "Pick", "Price", "Model prob", "Edge"],
+       [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["tipoff_utc"]), _esc(r["market"]),
+         _esc(r["selection"]), _esc(r["price"]), f"{r['model_prob']:.3f}" if r["model_prob"] else "—",
+         f"{r['edge']:+.3f}" if r["edge"] is not None else "—"] for r in upcoming_rows])}
+<h2>Recently settled</h2>
+{table(["Strategy", "Game", "Market", "Pick", "Result", "P&L"],
+       [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["market"]), _esc(r["selection"]),
+         _esc(r["result"]), fmt_money(r["pnl_usd"])] for r in recent])}
+<h2>Backtest snapshot <span class="muted">(separate from forward results — never mixed)</span></h2>
+{table(["Strategy", "Backtest bets", "Win %", "Backtest P&L", "ROI", "Max DD"],
+       [[f"<a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a>", r.get("bets", 0),
+         f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
+         fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")), fmt_money(r.get("max_dd") or 0)]
+        for r in bt if r.get("bets")])}
+<p class="muted">Last pipeline run: {_esc(upd["value"] if upd else "not yet run")}</p>
+"""
+    _write(out_dir, "index.html", page("Dashboard", body, "index.html"))
+
+
+def leaderboard(con, out_dir):
+    fwd = _leaderboard_rows(con, "forward")
+    bt = _leaderboard_rows(con, "backtest")
+    body = f"""
+<h1>Leaderboard</h1>
+<p class="muted">Ranked by total forward P&L (competition objective: strongest returns). Risk metrics are
+displayed for context, not used for ranking. Backtest and forward records are always separate.</p>
+<h2>Forward paper-trading competition</h2>
+{table(["Rank", "Username", "Strategy", "Bankroll", "P&L", "ROI", "Bets", "Win %", "Avg price",
+        "Max DD", "Staked", "Pending", "Status"],
+       [[i + 1, r["username"], f"<a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a>",
+         fmt_money(r["bankroll"]), fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")),
+         r.get("bets", 0), f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
+         r.get("avg_price") or "—", fmt_money(r.get("max_dd") or 0), fmt_money(r.get("staked") or 0),
+         r.get("pending", 0), _status_of(r, "forward")] for i, r in enumerate(fwd)])}
+<h2>Backtest results (historical simulation)</h2>
+{table(["Strategy", "Bets", "Win %", "P&L", "ROI", "Max DD", "Avg price", "Status"],
+       [[f"<a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a>", r.get("bets", 0),
+         f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
+         fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")), fmt_money(r.get("max_dd") or 0),
+         r.get("avg_price") or "—", _status_of(r, "backtest")] for r in bt])}
+"""
+    _write(out_dir, "leaderboard.html", page("Leaderboard", body, "leaderboard.html"))
+
+
+def strategies_page(con, out_dir):
+    cards = []
+    for sid, m in S.STRATEGIES.items():
+        perf_f = strategy_performance(con, sid, "forward")
+        perf_b = strategy_performance(con, sid, "backtest")
+        why = _why_analysis(perf_b, perf_f)
+        srcs = "".join(f"<code>{_esc(s)}</code> " for s in m["data_sources"])
+        markets = "".join(f"<code>{_esc(x)}</code> " for x in m["market_types"])
+        rules = "".join(f"<li>{_esc(r)}</li>" for r in m["entry_rules"])
+        fails = "".join(f"<li>{_esc(f)}</li>" for f in m["failure_modes"])
+        lims = "".join(f"<li>{_esc(f)}</li>" for f in m["data_limitations"])
+        la = _esc(m["lookahead_controls"])
+        bets = con.execute(
+            "SELECT * FROM bets WHERE strategy_id=? ORDER BY decision_utc DESC LIMIT 5",
+            (sid,)).fetchall()
+        bt_rows = table(["Game", "Market", "Pick", "Price", "Model", "Result", "P&L"],
+                        [[_esc(b["game_label"]), _esc(b["market"]), _esc(b["selection"]),
+                          _esc(b["price"]), f"{b['model_prob']:.3f}" if b["model_prob"] else "—",
+                          _esc(b["result"]), fmt_money(b["pnl_usd"])] for b in bets])
+
+        def perf_html(p, label):
+            if not p.get("bets"):
+                return (f"<div class='perf'><b>{label}</b>: no {label.split(' ')[0].lower()} bets yet"
+                        f"{' — ' + _esc(p.get('note')) if p.get('note') else ''}.</div>")
+            return (f"<div class='perf'><b>{label}</b> — bets {p['bets']} · win {p['win_rate'] * 100:.1f}% · "
+                    f"P&L {fmt_money(p['pnl'])} · ROI {fmt_pct(p['roi'])} · maxDD {fmt_money(p['max_dd'])}"
+                    f" · pending {p['pending']}</div>")
+
+        cards.append(f"""
+<div class="strategy-card" id="{sid}">
+<h2>{_esc(m['name'])} <span class="mono">{sid} v{m['version']}</span>
+<span class="pill">{_esc(m['category'])}</span>
+<span class="pill status">{_status_of(perf_f, 'forward')}</span></h2>
+<p class="username">plays as <b>@{_esc(m['username'])}</b></p>
+<p><b>Thesis.</b> {_esc(m['thesis'])}</p>
+<p><b>Rules.</b> {_esc(m['description'])}</p>
+<ul class="rules">{rules}</ul>
+<p><b>Markets.</b> {markets} <br><b>Data sources.</b> {srcs}</p>
+<p><b>Sizing.</b> {_esc(m['sizing_rules'])} · <b>Expected edge.</b> {_esc(m['expected_edge'])}</p>
+<p><b>Look-ahead controls.</b> {la}</p>
+<details><summary>Failure modes</summary><ul>{fails}</ul></details>
+<details><summary>Data limitations</summary><ul>{lims}</ul></details>
+{perf_html(perf_b, 'Backtest (historical simulation)')}
+{perf_html(perf_f, 'Forward (live paper competition)')}
+<details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary>{why}</details>
+<details open><summary>Recent bets (all kinds)</summary>{bt_rows}</details>
+</div>""")
+    body = ("<h1>Strategies</h1>"
+            "<p class='muted'>Every strategy is a versioned, testable hypothesis with explicit rules. "
+            "Backtest and forward records are labeled separately and never mixed.</p>"
+            + "".join(cards))
+    _write(out_dir, "strategies.html", page("Strategies", body, "strategies.html"))
+
+
+def _why_analysis(bt: dict, fwd: dict) -> str:
+    parts = []
+    if bt.get("bets"):
+        if (bt.get("pnl") or 0) > 0 and bt.get("win_rate", 0) > 0.5:
+            parts.append("<b>Why it may have worked:</b> positive backtest P&L with win rate above 50% — "
+                         "consistent with a real pricing gap, but the market may also adapt.")
+        elif (bt.get("pnl") or 0) > 0:
+            parts.append("<b>Why it may have worked:</b> positive P&L despite sub-50% win rate — "
+                         "odds-driven returns; verify average price isn't doing all the work.")
+        else:
+            parts.append("<b>Why it may have failed:</b> negative backtest P&L — the hypothesized "
+                         "edge is absent or already priced in; also check data-quality flags.")
+        parts.append(f"<b>Sample:</b> {bt['bets']} backtest bets. "
+                     + ("Small sample — treat as suggestive, not established." if bt["bets"] < 100
+                        else "Sample size is non-trivial but season-level."))
+    else:
+        parts.append("<b>No backtest observations.</b> This is an explicit data limitation (no free "
+                     "historical prices for these markets), not evidence either way.")
+    if fwd.get("bets"):
+        parts.append(f"<b>Forward so far:</b> {fwd['bets']} settled / {fwd.get('pending', 0)} pending.")
+    else:
+        parts.append("<b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.")
+    return "<p>" + "</p><p>".join(parts) + "</p>"
+
+
+def upcoming(con, out_dir):
+    rows = con.execute(
+        "SELECT * FROM bets WHERE kind='forward' AND result='pending' ORDER BY tipoff_utc").fetchall()
+    body = f"""
+<h1>Upcoming simulated bets</h1>
+<p class="muted">Every intended bet is published here BEFORE the game starts, with the price and model state
+frozen at decision time. If this table is empty, no strategy currently sees a qualifying opportunity —
+that is a result, not an outage.</p>
+{table(["Strategy", "Game", "Tipoff (UTC)", "Market", "Pick", "Side", "Price (¢)", "Model prob",
+        "Mkt prob", "Edge", "Stake", "To win", "Trigger", "Source ts"],
+       [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["tipoff_utc"]), _esc(r["market"]),
+         _esc(r["selection"]), _esc(r["side"]), r["price"],
+         f"{r['model_prob']:.3f}" if r["model_prob"] is not None else "—",
+         f"{r['market_prob']:.3f}" if r["market_prob"] is not None else "—",
+         f"{r['edge']:+.3f}" if r["edge"] is not None else "—",
+         fmt_money(r["stake_usd"]), fmt_money(r["to_win_usd"]),
+         f"<span class='trigger'>{_esc((r['notes'] or '')[:140])}</span>", _esc(r["source_ts"])]
+        for r in rows])}
+"""
+    _write(out_dir, "upcoming.html", page("Upcoming Bets", body, "upcoming.html"))
+
+
+def positions(con, out_dir):
+    rows = con.execute(
+        "SELECT * FROM bets WHERE kind='forward' AND result='pending' "
+        "AND execution_status='simulated_fill' ORDER BY tipoff_utc").fetchall()
+    body = f"""
+<h1>Open positions</h1>
+<p class="muted">Executed (simulated fill) bets awaiting settlement. Entry price and exposure are immutable
+records; current marks come from the latest collected orderbook snapshots.</p>
+{table(["Strategy", "Game", "Tipoff (UTC)", "Market", "Pick", "Entry ¢", "Contracts",
+        "Stake", "To win", "Fees", "Entry ts"],
+       [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["tipoff_utc"]), _esc(r["market"]),
+         _esc(r["selection"]), r["fill_price"], r["contracts"], fmt_money(r["stake_usd"]),
+         fmt_money(r["to_win_usd"]), fmt_money(r["fee_usd"]), _esc(r["source_ts"])] for r in rows])}
+"""
+    _write(out_dir, "positions.html", page("Open Positions", body, "positions.html"))
+
+
+def history(con, out_dir):
+    rows = con.execute("SELECT * FROM bets ORDER BY decision_utc DESC").fetchall()
+    recs = []
+    for r in rows:
+        recs.append({k: r[k] for k in (
+            "bet_id", "kind", "run_id", "strategy_id", "username", "decision_utc", "game_id",
+            "game_label", "tipoff_utc", "market", "selection", "side", "price", "price_format",
+            "source", "source_ts", "model_prob", "market_prob", "edge", "stake_usd", "to_win_usd",
+            "execution_status", "contracts", "fill_price", "fee_usd", "result", "settlement_utc",
+            "settlement_source", "pnl_usd", "roi", "verification", "notes", "strategy_version")})
+    _write_json(out_dir, "data/history.json", recs)
+    body = f"""
+<h1>Trade history</h1>
+<p class="muted">{len(recs)} recorded bets — every simulated execution since inception, backtest and forward
+labeled. Search and filter client-side; nothing is hidden, including losing strategies and flagged rows.</p>
+<input id="q" type="search" placeholder="Search: strategy, team, market, result…">
+<div class="filters">
+  <select id="f_kind"><option value="">all kinds</option><option>forward</option><option>backtest</option></select>
+  <select id="f_result"><option value="">all results</option><option>win</option><option>loss</option>
+    <option>push</option><option>pending</option></select>
+  <select id="f_strat"><option value="">all strategies</option></select>
+</div>
+<p id="count" class="muted"></p>
+<div class="twrap"><table id="hist"><thead><tr>
+<th>Bet</th><th>Kind</th><th>Strategy</th><th>Decision (UTC)</th><th>Game</th><th>Market</th>
+<th>Pick</th><th>Price</th><th>Model</th><th>Result</th><th>Stake</th><th>P&L</th></tr></thead>
+<tbody></tbody></table></div>
+<script>
+const DATA = {json.dumps(recs)};
+const tb = document.querySelector('#hist tbody');
+const sel = document.getElementById('f_strat');
+[...new Set(DATA.map(d => d.username))].sort().forEach(u => {{
+  const o = document.createElement('option'); o.textContent = u; sel.appendChild(o);}});
+function render() {{
+  const q = document.getElementById('q').value.toLowerCase();
+  const k = document.getElementById('f_kind').value;
+  const rs = document.getElementById('f_result').value;
+  const st = document.getElementById('f_strat').value;
+  const rows = DATA.filter(d =>
+    (!k || d.kind === k) && (!rs || d.result === rs) && (!st || d.username === st) &&
+    (!q || JSON.stringify(d).toLowerCase().includes(q)));
+  document.getElementById('count').textContent = rows.length + ' of ' + DATA.length + ' bets';
+  tb.innerHTML = rows.slice(0, 400).map(d =>
+    `<tr><td class="mono">${{d.bet_id}}</td><td>${{d.kind}}</td>
+     <td>${{d.username}}</td><td>${{d.decision_utc}}</td>
+     <td>${{d.game_label || ''}}</td><td>${{d.market}}</td><td>${{d.selection}}</td>
+     <td>${{d.price}} ${{d.price_format}}</td>
+     <td>${{d.model_prob == null ? '—' : (+d.model_prob).toFixed(3)}}</td>
+     <td class="${{d.result}}">${{d.result}}</td>
+     <td>${{$}}${{(d.stake_usd || 0).toFixed(2)}}</td>
+     <td class="${{(d.pnl_usd || 0) >= 0 ? 'pos' : 'neg'}}">${{d.pnl_usd == null ? '—' : (+d.pnl_usd).toFixed(2)}}</td></tr>`
+  ).join('');
+}}
+['q', 'f_kind', 'f_result', 'f_strat'].forEach(id =>
+  document.getElementById(id).addEventListener('input', render));
+render();
+</script>
+"""
+    _write(out_dir, "history.html", page("Trade History", body, "history.html"))
+
+
+def sources_page(con, out_dir):
+    rows = []
+    for s in REGISTRY:
+        st = con.execute("SELECT * FROM source_status WHERE source_id LIKE ?",
+                         (s["id"].split(":")[0] + ":%",)).fetchone()
+        rows.append([
+            f"<b>{_esc(s['name'])}</b><br><span class='mono small'>{_esc(s['id'])}</span>",
+            f"<a href='{_esc(s['url'])}' rel='noopener'>{_esc(s['url'])}</a>",
+            _esc(s["data_type"]), _esc(s["cost"]),
+            "yes" if s["registration_required"] else "no",
+            "yes" if s["paid_plan_required"] else "no",
+            _esc(s["rate_limits"]),
+            _esc(s["reliability"]), _esc(s["last_verified"]),
+            (f"<span class='ok'>OK ({st['http_status']})</span>" if st and st["ok"]
+             else f"<span class='bad'>{_esc(st['detail'] or 'not checked this run')}</span>") if st
+            else "<span class='muted'>checked at collection time</span>",
+            _esc(s["verification_note"]),
+        ])
+    body = f"""
+<h1>Data sources</h1>
+<p class="muted">The core pipeline uses only keyless, free, public sources. Free trials and freemium tiers are
+treated as NOT free. Reachability is re-verified on every collection run and shown below from the latest run.</p>
+{table(["Source", "URL", "Data", "Cost", "Registration", "Paid plan", "Rate limits", "Reliability",
+        "Last verified", "Latest run", "Verification notes"], rows)}
+<h2>Known unavailable data</h2>
+<ul>
+<li><b>Historical sportsbook closing lines (deep history):</b> no free, legal archive was found; paid archives
+exist and are excluded by policy. Consequence: historical backtests run only where Kalshi candlestick history
+exists; totals/spread model bets before that use clearly-labeled price assumptions.</li>
+<li><b>Historical injury reports:</b> no free dated archive — injury strategies are forward-tested first.</li>
+<li><b>Historical order-book depth:</b> Kalshi does not publish historical books; backtest entries use last
+closed hourly trade price +1 tick, labeled as an execution assumption.</li>
+<li><b>Referee assignments:</b> no reliable free historical feed found — referee strategies are NOT claimed.</li>
+</ul>
+"""
+    _write(out_dir, "sources.html", page("Data Sources", body, "sources.html"))
+
+
+def research_page(con, out_dir):
+    rows = con.execute("SELECT * FROM research_log ORDER BY id").fetchall()
+    items = "".join(
+        f"<div class='research-item'><h3>R-{r['id']:03d} · {_esc(r['question'])}</h3>"
+        f"<p><b>Date</b> {_esc(r['ts_utc'][:10])} · <b>Sources</b> {_esc(r['sources_searched'])}</p>"
+        f"<p><b>Found.</b> {_esc(r['data_discovered'] or '—')}</p>"
+        + (f"<p><b>Hypothesis.</b> {_esc(r['hypothesis'])}</p>" if r["hypothesis"] else "")
+        + (f"<p><b>Test.</b> {_esc(r['test_performed'])}</p>" if r["test_performed"] else "")
+        + (f"<p><b>Result.</b> {_esc(r['result'])}</p>" if r["result"] else "")
+        + (f"<p><b>Verification.</b> {_esc(r['verification'])}</p>" if r["verification"] else "")
+        + (f"<p><b>Decision.</b> {_esc(r['decision'])}</p>" if r["decision"] else "")
+        + (f"<p><b>Next.</b> {_esc(r['next_steps'])}</p>" if r["next_steps"] else "")
+        + "</div>" for r in rows)
+    anomalies = con.execute(
+        "SELECT * FROM anomalies ORDER BY detected_utc DESC LIMIT 50").fetchall()
+    an = table(["When (UTC)", "Severity", "Check", "Detail"],
+               [[_esc(a["detected_utc"]),
+                 f"<span class='bad'>{_esc(a['severity'])}</span>" if a["severity"] == "critical"
+                 else _esc(a["severity"]), _esc(a["check_name"]),
+                 f"<code class='small'>{_esc(a['detail_json'][:220])}</code>"] for a in anomalies])
+    body = f"""
+<h1>Research log</h1>
+<p class="muted">Every research question, what was searched, what was found, what was tested, and what was
+decided — so research is auditable and never silently duplicated.</p>
+{items or "<p class='empty'>No research entries.</p>"}
+<h2>Anomaly register (latest 50)</h2>
+<p class="muted">Automated checks run on every pipeline pass. Flags are shown, never silently fixed.</p>
+{an}
+"""
+    _write(out_dir, "research.html", page("Research", body, "research.html"))
+
+
+def methodology(out_dir):
+    body = """
+<h1>Methodology</h1>
+<h2>Decision-time integrity (no look-ahead)</h2>
+<ul>
+<li>Every simulated bet stores <code>decision_utc</code>; model inputs (Elo ratings, rolling team stats,
+rest/travel features) are built strictly from games dated before the decision.</li>
+<li>Backtest prices come from the last <em>fully closed hourly</em> Kalshi candle before the decision
+(+1 tick slippage). A price timestamped after the decision can never be selected — enforced in
+<code>engine.PriceBook</code> and tested in the test-suite.</li>
+<li>Injury adjustments use only listings published before the decision. Final injury status, final lineups,
+closing prices, and game results are never used at decision time.</li>
+</ul>
+<h2>Backtesting</h2>
+<p>Chronological walk over verified game results. Each strategy's state carries forward; a game's result is
+absorbed into the model only after its bets are placed. Settlement uses Kalshi's own recorded result when
+available, cross-checked against the cross-verified final score; disagreements raise anomalies instead of
+silent choices.</p>
+<h2>Forward testing &amp; paper trading</h2>
+<p>When historical prices don't exist (player props, sportsbook lines pre-2026-27), strategies are
+forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
+simulated bet before tipoff, then settled from verified results. The forward ledger is the competition
+leaderboard; backtest records are always displayed separately.</p>
+<h2>Execution realism</h2>
+<ul>
+<li>Kalshi fills: observed orderbook ask (forward) or last closed candle close +1 tick (backtest, depth
+unobservable — labeled), plus Kalshi's published fee schedule: fee = ceil(0.07·C·P·(1−P)) dollars.</li>
+<li>Model-vs-line totals bets (where no historical price source exists) are simulated at standard −110 and
+every such bet row is labeled <i>PRICED-ASSUMPTION</i> — nothing is presented as an observed price.</li>
+<li>Unknown limits (sportsbook max bets, Kalshi tier limits beyond documented rate limits) are recorded as
+unknown, never invented. Kalshi order-book size caps fills at observed depth when books are captured.</li>
+</ul>
+<h2>P&amp;L, bankrolls, sizing</h2>
+<p>Each strategy starts with a $1,000 virtual bankroll. Stake = 25% Kelly capped at 3% of current bankroll,
+min $5, max 25% open exposure. Pushes return the stake (P&amp;L 0). Kalshi push/void handling defers to the
+exchange's recorded result; unresolved markets stay <i>pending</i>, never guessed.</p>
+<h2>Data verification</h2>
+<p>Final scores are cross-checked ESPN ↔ NBA.com; every verification (match/mismatch) is stored. Source
+reachability is probed each collection run and published on the Sources page. Discrepancies raise anomalies,
+are investigated in the research log, and are never silently resolved.</p>
+<h2>Strategy versioning</h2>
+<p>Material rule changes create a new version (e.g., NBA-001 v1.1); history is preserved — bet rows carry the
+version that produced them and are never rewritten.</p>
+<h2>What this site is not</h2>
+<p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
+point is to find out, with real verified data, which hypotheses survive.</p>
+"""
+    _write(out_dir, "methodology.html", page("Methodology", body, "methodology.html"))
+
+
+def write_style(out_dir):
+    css = """
+:root { --bg:#0f1216; --panel:#171c23; --ink:#e8ecf1; --muted:#9aa7b4; --line:#2a323c;
+        --accent:#e8a33d; --good:#3fb96b; --bad:#e05252; --mono:ui-monospace,Menlo,monospace; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink);
+       font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel);
+         position:sticky; top:0; z-index:5; }
+.brand a { color:var(--ink); font-weight:700; font-size:18px; text-decoration:none; }
+.brand .tag { color:var(--muted); margin-left:10px; font-size:12px; }
+nav { margin-top:8px; display:flex; flex-wrap:wrap; gap:2px; }
+nav a { color:var(--muted); text-decoration:none; padding:5px 10px; border-radius:6px; font-size:13.5px; }
+nav a:hover { color:var(--ink); background:#222a34; }
+nav a.active { color:var(--accent); background:#22201a; }
+main { max-width:1200px; margin:0 auto; padding:20px; }
+h1,h2 { font-weight:700; } h1 { font-size:26px; margin:.4em 0; } h2 { font-size:19px; margin-top:1.6em; }
+a { color:var(--accent); }
+.muted { color:var(--muted); font-size:13.5px; } .small { font-size:12px; }
+.mono { font-family:var(--mono); font-size:12.5px; color:var(--muted); }
+.hero { padding:18px 0 6px; } .hero h1 { margin:0 0 6px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:14px 0; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+.card .k { color:var(--muted); font-size:12.5px; } .card .v { font-size:22px; font-weight:700; margin-top:2px; }
+.twrap { overflow-x:auto; border:1px solid var(--line); border-radius:10px; margin:10px 0; }
+table { border-collapse:collapse; width:100%; font-size:13.5px; }
+th { text-align:left; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line);
+     white-space:nowrap; background:var(--panel); position:sticky; top:0;}
+td { padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+tr:last-child td { border-bottom:none; }
+.win,.pos { color:var(--good); font-weight:600; } .loss,.neg,.bad { color:var(--bad); font-weight:600; }
+.push,.void { color:var(--muted); }
+.empty { color:var(--muted); background:var(--panel); border:1px dashed var(--line);
+         padding:14px; border-radius:10px; }
+.pill { display:inline-block; background:#222a34; color:var(--muted); border-radius:999px;
+        padding:2px 10px; font-size:11.5px; margin-left:6px; vertical-align:middle; }
+.pill.status { background:#1c2a22; color:var(--good); }
+.strategy-card { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+                 padding:16px 20px; margin:18px 0; }
+.strategy-card h2 { margin-top:0; } .username { color:var(--muted); margin-top:-6px; }
+.rules { columns:1; } .perf { background:#12161c; border:1px solid var(--line); border-radius:8px;
+         padding:8px 12px; margin:8px 0; font-size:13.5px; }
+details { margin:8px 0; } summary { cursor:pointer; color:var(--muted); }
+.research-item { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+                 padding:12px 16px; margin:12px 0; }
+.research-item h3 { margin:0 0 6px; font-size:15.5px; }
+input[type=search], select { background:var(--panel); color:var(--ink); border:1px solid var(--line);
+        border-radius:8px; padding:8px 10px; font-size:14px; margin:6px 8px 6px 0; }
+#q { width:min(420px,100%); }
+.trigger { color:var(--muted); font-size:12.5px; }
+code { background:#12161c; border:1px solid var(--line); border-radius:5px; padding:1px 5px;
+       font-size:12.5px; }
+footer { border-top:1px solid var(--line); color:var(--muted); font-size:12.5px;
+         padding:18px 20px; margin-top:30px; }
+@media (max-width:720px){ main{padding:12px;} .card .v{font-size:18px;} th,td{padding:6px 7px;} }
+"""
+    _write(out_dir, "style.css", css)
+
+
+def _audit_summary(con) -> dict:
+    rows = con.execute(
+        "SELECT severity, COUNT(*) c FROM anomalies GROUP BY severity").fetchall()
+    return {r["severity"]: r["c"] for r in rows}
+
+
+def _write(out_dir, name, content):
+    with open(os.path.join(out_dir, name), "w") as f:
+        f.write(content)
+
+
+def _write_json(out_dir, name, obj):
+    with open(os.path.join(out_dir, name), "w") as f:
+        json.dump(obj, f, default=str)

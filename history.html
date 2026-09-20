@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trade History — NBAComp</title>
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<header><div class="brand"><a href="index.html">🏀 NBAComp</a>
+<span class="tag">autonomous NBA betting research lab &amp; paper-trading competition</span></div>
+<nav><a href="index.html">Dashboard</a><a href="leaderboard.html">Leaderboard</a><a href="strategies.html">Strategies</a><a href="upcoming.html">Upcoming Bets</a><a href="positions.html">Open Positions</a><a href="history.html" class="active">Trade History</a><a href="sources.html">Data Sources</a><a href="research.html">Research</a><a href="methodology.html">Methodology</a></nav></header>
+<main>
+<h1>Trade history</h1>
+<p class="muted">0 recorded bets — every simulated execution since inception, backtest and forward
+labeled. Search and filter client-side; nothing is hidden, including losing strategies and flagged rows.</p>
+<input id="q" type="search" placeholder="Search: strategy, team, market, result…">
+<div class="filters">
+  <select id="f_kind"><option value="">all kinds</option><option>forward</option><option>backtest</option></select>
+  <select id="f_result"><option value="">all results</option><option>win</option><option>loss</option>
+    <option>push</option><option>pending</option></select>
+  <select id="f_strat"><option value="">all strategies</option></select>
+</div>
+<p id="count" class="muted"></p>
+<div class="twrap"><table id="hist"><thead><tr>
+<th>Bet</th><th>Kind</th><th>Strategy</th><th>Decision (UTC)</th><th>Game</th><th>Market</th>
+<th>Pick</th><th>Price</th><th>Model</th><th>Result</th><th>Stake</th><th>P&L</th></tr></thead>
+<tbody></tbody></table></div>
+<script>
+const DATA = [];
+const tb = document.querySelector('#hist tbody');
+const sel = document.getElementById('f_strat');
+[...new Set(DATA.map(d => d.username))].sort().forEach(u => {
+  const o = document.createElement('option'); o.textContent = u; sel.appendChild(o);});
+function render() {
+  const q = document.getElementById('q').value.toLowerCase();
+  const k = document.getElementById('f_kind').value;
+  const rs = document.getElementById('f_result').value;
+  const st = document.getElementById('f_strat').value;
+  const rows = DATA.filter(d =>
+    (!k || d.kind === k) && (!rs || d.result === rs) && (!st || d.username === st) &&
+    (!q || JSON.stringify(d).toLowerCase().includes(q)));
+  document.getElementById('count').textContent = rows.length + ' of ' + DATA.length + ' bets';
+  tb.innerHTML = rows.slice(0, 400).map(d =>
+    `<tr><td class="mono">${d.bet_id}</td><td>${d.kind}</td>
+     <td>${d.username}</td><td>${d.decision_utc}</td>
+     <td>${d.game_label || ''}</td><td>${d.market}</td><td>${d.selection}</td>
+     <td>${d.price} ${d.price_format}</td>
+     <td>${d.model_prob == null ? '—' : (+d.model_prob).toFixed(3)}</td>
+     <td class="${d.result}">${d.result}</td>
+     <td>${$}${(d.stake_usd || 0).toFixed(2)}</td>
+     <td class="${(d.pnl_usd || 0) >= 0 ? 'pos' : 'neg'}">${d.pnl_usd == null ? '—' : (+d.pnl_usd).toFixed(2)}</td></tr>`
+  ).join('');
+}
+['q', 'f_kind', 'f_result', 'f_strat'].forEach(id =>
+  document.getElementById(id).addEventListener('input', render));
+render();
+</script>
+</main>
+<footer>Simulated paper trading only. No real money. Data: ESPN, NBA.com/stats, Kalshi public API —
+see <a href="sources.html">Data Sources</a>. Every number on this site is traceable to a logged,
+timestamped source; unverified data is labeled as such.</footer>
+</body></html>
