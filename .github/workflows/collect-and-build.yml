@@ -92,12 +92,16 @@ jobs:
           python tools/seed_research.py
           python tools/run_pipeline.py
 
-      - name: Commit data + site
-        if: steps.skip.outputs.skip != 'true'
+      - name: Failure diagnostics
+        if: failure()
+        run: python tools/probe_sources.py || true
+
+      - name: Commit (data + site, or diagnostics on failure)
+        if: always() && steps.skip.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          python tools/db_checkpoint.py
+          if [ -f data/nbacomp.db ]; then python tools/db_checkpoint.py; fi
           rm -f data/nbacomp.db-wal data/nbacomp.db-shm
           git add -A data index.html leaderboard.html strategies.html upcoming.html \
             positions.html history.html sources.html research.html methodology.html \

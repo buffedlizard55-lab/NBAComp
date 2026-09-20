@@ -198,11 +198,21 @@ def kalshi_snapshot(con) -> int:
     book_tickers: list[str] = []
     for s in live_series:
         for status in ("open", "settled"):
-            markets = kalshi.get_markets(s, status=status, max_pages=30)
+            try:
+                markets = kalshi.get_markets(s, status=status, max_pages=30)
+            except Exception as e:
+                db.log_collection(con, "kalshi-snapshot", f"kalshi:{s}", "fail",
+                                  f"status={status}: {e}")
+                continue
             if not markets:
                 continue
             for m in markets:
-                row = kalshi.parse_market(m, CAP2)
+                try:
+                    row = kalshi.parse_market(m, CAP2)
+                except Exception as e:
+                    db.log_anomaly(con, "warn", "kalshi-market-parse-error",
+                                   {"ticker": m.get("ticker"), "err": str(e)[:200]})
+                    continue
                 db.insert(con, "kalshi_markets", row, replace=True)
                 n += 1
                 if row["status"] == "active":
@@ -211,22 +221,48 @@ def kalshi_snapshot(con) -> int:
     # orderbooks for active markets (observability + execution realism)
     got = kalshi.get_orderbooks(book_tickers[:300])
     CAP3 = util.utcnow_iso()
+    books_stored = 0
     for ob in got:
-        t = ob.get("market_ticker") or ob.get("ticker")
-        if not t:
-            continue
-        book = ob.get("orderbook") or {}
-        yes_bids = book.get("yes") or []
-        no_bids = book.get("no") or []
-        yes_asks = [[100 - p, sz] for p, sz in reversed(no_bids)] if no_bids else book.get("yes_ask") or []
-        db.insert(con, "kalshi_orderbooks", {
-            "ticker": t, "captured_utc": CAP3,
-            "yes_bid": yes_bids[0][0] if yes_bids else None,
-            "yes_ask": yes_asks[0][0] if yes_asks else None,
-            "bids": json.dumps(yes_bids), "asks": json.dumps(yes_asks),
-        }, replace=True)
-    db.log_collection(con, "kalshi-snapshot", "kalshi", "ok", f"markets={n} books={len(got)}", rows=n)
+        try:
+            t = ob.get("market_ticker") or ob.get("ticker")
+            if not t:
+                continue
+            book = ob.get("orderbook") or {}
+            yes_bids = _norm_book_side(book.get("yes"))
+            no_bids = _norm_book_side(book.get("no"))
+            yes_asks = [[100 - p, sz] for p, sz in reversed(no_bids)] if no_bids else \
+                _norm_book_side(book.get("yes_ask"))
+            db.insert(con, "kalshi_orderbooks", {
+                "ticker": t, "captured_utc": CAP3,
+                "yes_bid": yes_bids[0][0] if yes_bids else None,
+                "yes_ask": yes_asks[0][0] if yes_asks else None,
+                "bids": json.dumps(yes_bids), "asks": json.dumps(yes_asks),
+            }, replace=True)
+            books_stored += 1
+        except Exception as e:
+            db.log_anomaly(con, "warn", "orderbook-parse-error",
+                           {"ticker": ob.get("market_ticker"), "err": str(e)[:200]})
+    db.log_collection(con, "kalshi-snapshot", "kalshi", "ok",
+                      f"markets={n} books={books_stored}", rows=n)
     return n
+
+
+def _norm_book_side(side) -> list:
+    """Normalize Kalshi order-book side to [[price_cents, size], ...].
+
+    The API has used both list pairs and dict entries ({price, size}); handle
+    both defensively and record nothing rather than crash.
+    """
+    out = []
+    for item in side or []:
+        try:
+            if isinstance(item, dict):
+                out.append([int(item["price"]), int(item.get("size") or 0)])
+            else:
+                out.append([int(item[0]), int(item[1])])
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    return out
 
 
 def kalshi_candles_window(con, series_filter: str | None, start_iso: str, end_iso: str,
