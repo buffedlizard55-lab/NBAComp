@@ -66,12 +66,8 @@ jobs:
         run: |
           S=$(date -u -d '-40 days' +%Y%m%d)
           E=$(date -u +%Y%m%d)
-          THIN=$(python -c "
-import sqlite3,os
-con=sqlite3.connect('data/nbacomp.db')
-n=con.execute('select count(*) from games').fetchone()[0]
-print(n)" 2>/dev/null || echo 0)
-          if [ ! -f data/nbacomp.db ] || [ "$THIN" -lt 500 ]; then
+          if [ ! -f data/nbacomp.db ]; then THIN=0; else THIN=$(python tools/db_game_count.py 2>/dev/null || echo 0); fi
+          if [ "$THIN" -lt 500 ]; then
             echo "DB missing/thin ($THIN games) — running multi-season backfill"
             python -m nbacomp.collect backfill-days --start 20241001 --end 20250701
             python -m nbacomp.collect backfill-days --start 20251001 --end "$E"
@@ -87,7 +83,7 @@ print(n)" 2>/dev/null || echo 0)
         if: steps.skip.outputs.skip != 'true'
         run: |
           python -m nbacomp.collect kalshi-discovery || true
-          python -m nbacomp.collect kalshi-candles --start "$(date -u -d '-10 days' +%Y-%m-%dT00:00:00Z)" --end "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python -m nbacomp.collect kalshi-candles --start "$(date -u -d '-10 days' +%Y-%m-%dT00:00:00Z)" --end "$(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
           python -m nbacomp.collect daily
 
       - name: Pipeline (strategies, backtest, paper engine, settlement, audit, site)
@@ -101,12 +97,7 @@ print(n)" 2>/dev/null || echo 0)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          python - <<'EOF'
-          import sqlite3
-          con = sqlite3.connect('data/nbacomp.db')
-          con.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-          con.close()
-          EOF
+          python tools/db_checkpoint.py
           rm -f data/nbacomp.db-wal data/nbacomp.db-shm
           git add -A data index.html leaderboard.html strategies.html upcoming.html \
             positions.html history.html sources.html research.html methodology.html \
