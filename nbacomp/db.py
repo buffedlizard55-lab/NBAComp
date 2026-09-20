@@ -206,6 +206,7 @@ CREATE TABLE IF NOT EXISTS bets (
   fill_price REAL,
   fee_usd REAL,
   contracts INTEGER,
+  closing_price REAL,                   -- last observed price at tipoff (where available)
   result TEXT,                          -- win|loss|push|void|pending
   settlement_utc TEXT,
   settlement_source TEXT,
@@ -252,6 +253,7 @@ BEGIN
     OR NEW.fill_price IS NOT OLD.fill_price
     OR NEW.fee_usd IS NOT OLD.fee_usd
     OR NEW.contracts IS NOT OLD.contracts
+    OR NEW.closing_price IS NOT OLD.closing_price
     OR NEW.verification IS NOT OLD.verification
     OR NEW.notes IS NOT OLD.notes
     THEN RAISE(ABORT, 'bets are append-only: only result/settlement_utc/settlement_source/pnl_usd/roi may change')

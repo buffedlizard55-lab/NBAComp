@@ -76,26 +76,93 @@ def strategy_performance(con, strategy_id: str, kind: str) -> dict:
         "SELECT * FROM bets WHERE strategy_id=? AND kind=? AND result IN ('win','loss','push','void')",
         (strategy_id, kind)).fetchall()
     if not rows:
-        return {"bets": 0}
+        pending = con.execute(
+            "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
+            (strategy_id, kind)).fetchone()["c"]
+        return {"bets": 0, "pending": pending}
     pnl = sum(r["pnl_usd"] or 0 for r in rows)
     wins = sum(1 for r in rows if r["result"] == "win")
+    losses = sum(1 for r in rows if r["result"] == "loss")
+    pushes = sum(1 for r in rows if r["result"] == "push")
+    voids = sum(1 for r in rows if r["result"] == "void")
     decided = sum(1 for r in rows if r["result"] in ("win", "loss"))
     staked = sum(r["stake_usd"] or 0 for r in rows)
+    sorted_rows = sorted(rows, key=lambda r: r["settlement_utc"] or "")
     curve, peak, mdd = 0.0, 0.0, 0.0
-    for r in sorted(rows, key=lambda r: r["settlement_utc"] or ""):
+    pnl_series = []
+    for r in sorted_rows:
         curve += r["pnl_usd"] or 0
         peak = max(peak, curve)
         mdd = max(mdd, peak - curve)
+        pnl_series.append(r["pnl_usd"] or 0)
+    # volatility: std of bet P&L (sample std)
+    n = len(pnl_series)
+    if n >= 2:
+        mean = sum(pnl_series) / n
+        var = sum((x - mean) ** 2 for x in pnl_series) / (n - 1)
+        vol = var ** 0.5
+    else:
+        vol = None
+    # streaks (longest winning and losing streaks, in chronological order)
+    longest_win = longest_loss = cur_win = cur_loss = 0
+    for r in sorted_rows:
+        if r["result"] == "win":
+            cur_win += 1; cur_loss = 0
+            longest_win = max(longest_win, cur_win)
+        elif r["result"] == "loss":
+            cur_loss += 1; cur_win = 0
+            longest_loss = max(longest_loss, cur_loss)
+        else:
+            cur_win = cur_loss = 0
+    # largest win/loss
+    decided_pnls = [r["pnl_usd"] for r in rows if r["result"] in ("win", "loss")]
+    largest_win = max(decided_pnls) if decided_pnls else None
+    largest_loss = min(decided_pnls) if decided_pnls else None
     odds = [abs(float(r["price"])) for r in rows if r["price"] is not None]
+    pending = con.execute(
+        "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
+        (strategy_id, kind)).fetchone()["c"]
     return {
-        "bets": len(rows), "wins": wins, "win_rate": wins / decided if decided else None,
+        "bets": len(rows), "wins": wins, "losses": losses, "pushes": pushes,
+        "voids": voids, "win_rate": wins / decided if decided else None,
+        "loss_rate": losses / decided if decided else None,
         "pnl": round(pnl, 2), "roi": pnl / staked if staked else None,
         "staked": round(staked, 2), "max_dd": round(mdd, 2),
+        "volatility": round(vol, 2) if vol is not None else None,
+        "largest_win": round(largest_win, 2) if largest_win is not None else None,
+        "largest_loss": round(largest_loss, 2) if largest_loss is not None else None,
+        "longest_win": longest_win, "longest_loss": longest_loss,
         "avg_price": round(sum(odds) / len(odds), 1) if odds else None,
-        "pending": con.execute(
-            "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
-            (strategy_id, kind)).fetchone()["c"],
+        "pending": pending,
     }
+
+
+def strategy_profit_by(con, strategy_id: str, kind: str, group_by: str) -> dict[str, dict]:
+    """Profit / bet count grouped by some dimension (market/team/player/month)."""
+    rows = con.execute(
+        "SELECT * FROM bets WHERE strategy_id=? AND kind=? AND result IN ('win','loss','push','void')",
+        (strategy_id, kind)).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        if group_by == "market":
+            key = r["market"] or "unknown"
+        elif group_by == "month":
+            ts = r["settlement_utc"] or r["decision_utc"] or ""
+            key = (ts[:7]) if ts else "unknown"
+        elif group_by == "team":
+            lab = r["game_label"] or ""
+            key = lab.split("@")[1].strip().split()[0] if "@" in lab else "unknown"
+        elif group_by == "player":
+            sel = r["selection"] or ""
+            key = sel.split()[0] if sel else "unknown"
+        else:
+            key = "all"
+        d = out.setdefault(key, {"pnl": 0.0, "bets": 0, "wins": 0})
+        d["pnl"] += r["pnl_usd"] or 0
+        d["bets"] += 1
+        if r["result"] == "win":
+            d["wins"] += 1
+    return out
 
 
 def build_all(con, out_dir: str = "."):
@@ -216,21 +283,95 @@ def leaderboard(con, out_dir):
 <p class="muted">Ranked by total forward P&L (competition objective: strongest returns). Risk metrics are
 displayed for context, not used for ranking. Backtest and forward records are always separate.</p>
 <h2>Forward paper-trading competition</h2>
-{table(["Rank", "Username", "Strategy", "Bankroll", "P&L", "ROI", "Bets", "Win %", "Avg price",
-        "Max DD", "Staked", "Pending", "Status"],
-       [[i + 1, r["username"], f"<a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a>",
-         fmt_money(r["bankroll"]), fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")),
-         r.get("bets", 0), f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
-         r.get("avg_price") or "—", fmt_money(r.get("max_dd") or 0), fmt_money(r.get("staked") or 0),
-         r.get("pending", 0), _status_of(r, "forward")] for i, r in enumerate(fwd)])}
+<table class='muted'><thead><tr>
+<th>Rank</th><th>Username</th><th>Strategy</th><th>Bankroll</th><th>P&amp;L</th><th>ROI</th>
+<th>Bets</th><th>Win %</th><th>Avg price</th><th>Max DD</th><th>Volatility</th>
+<th>Largest W/L</th><th>Longest streaks</th><th>Staked</th><th>Pending</th><th>Status</th>
+</tr></thead><tbody>
+{''.join(_leaderboard_row(r, i, kind='forward') for i, r in enumerate(fwd))}
+</tbody></table>
+<h3>Forward P&L by month (competition-wide)</h3>
+{_profit_by_competition(con, "forward")}
+<h3>Forward P&L by strategy-category</h3>
+{_profit_by_category(con, "forward")}
 <h2>Backtest results (historical simulation)</h2>
-{table(["Strategy", "Bets", "Win %", "P&L", "ROI", "Max DD", "Avg price", "Status"],
-       [[f"<a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a>", r.get("bets", 0),
-         f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
-         fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")), fmt_money(r.get("max_dd") or 0),
-         r.get("avg_price") or "—", _status_of(r, "backtest")] for r in bt])}
+<table class='muted'><thead><tr>
+<th>Strategy</th><th>Bets</th><th>Win %</th><th>P&amp;L</th><th>ROI</th><th>Max DD</th>
+<th>Volatility</th><th>Staked</th><th>Status</th>
+</tr></thead><tbody>
+{''.join(_leaderboard_row(r, 0, kind='backtest') for r in bt)}
+</tbody></table>
 """
     _write(out_dir, "leaderboard.html", page("Leaderboard", body, "leaderboard.html"))
+
+
+def _leaderboard_row(r, i, kind="forward") -> str:
+    rank = i + 1 if kind == "forward" else ""
+    pnl = r.get("pnl") or 0
+    pnl_class = "pos" if pnl > 0 and r.get("bets", 0) > 0 else ("neg" if pnl < 0 else "")
+    win_pct = f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—"
+    vol = f"${r['volatility']:.2f}" if r.get("volatility") is not None else "—"
+    biggest_w = fmt_money(r.get("largest_win"))
+    biggest_l = fmt_money(r.get("largest_loss"))
+    if kind == "forward":
+        return (f"<tr><td>{rank}</td><td>{_esc(r['username'])}</td>"
+                f"<td><a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a></td>"
+                f"<td>{fmt_money(r['bankroll'])}</td>"
+                f"<td class='{pnl_class}'>{fmt_money(pnl)}</td>"
+                f"<td>{fmt_pct(r.get('roi'))}</td>"
+                f"<td>{r.get('bets', 0)}</td>"
+                f"<td>{win_pct}</td>"
+                f"<td>{r.get('avg_price') or '—'}</td>"
+                f"<td>{fmt_money(r.get('max_dd') or 0)}</td>"
+                f"<td>{vol}</td>"
+                f"<td>{biggest_w} / {biggest_l}</td>"
+                f"<td>{r.get('longest_win', 0)}W / {r.get('longest_loss', 0)}L</td>"
+                f"<td>{fmt_money(r.get('staked') or 0)}</td>"
+                f"<td>{r.get('pending', 0)}</td>"
+                f"<td>{_status_of(r, kind)}</td></tr>")
+    return (f"<tr><td><a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a></td>"
+            f"<td>{r.get('bets', 0)}</td>"
+            f"<td>{win_pct}</td>"
+            f"<td class='{pnl_class}'>{fmt_money(pnl)}</td>"
+            f"<td>{fmt_pct(r.get('roi'))}</td>"
+            f"<td>{fmt_money(r.get('max_dd') or 0)}</td>"
+            f"<td>{vol}</td>"
+            f"<td>{fmt_money(r.get('staked') or 0)}</td>"
+            f"<td>{_status_of(r, kind)}</td></tr>")
+
+
+def _profit_by_competition(con, kind: str) -> str:
+    rows = con.execute(
+        "SELECT substr(COALESCE(settlement_utc, decision_utc), 1, 7) m, "
+        "COALESCE(SUM(pnl_usd),0) p, COUNT(*) c FROM bets WHERE kind=? AND "
+        "result IN ('win','loss','push','void') GROUP BY 1 ORDER BY 1",
+        (kind,)).fetchall()
+    if not rows:
+        return "<p class='empty'>No settled bets yet.</p>"
+    body = "<table><thead><tr><th>Month</th><th>P&L</th><th>Bets</th></tr></thead><tbody>"
+    for r in rows:
+        body += (f"<tr><td>{_esc(r['m'])}</td>"
+                 f"<td>{fmt_money(r['p'])}</td>"
+                 f"<td>{r['c']}</td></tr>")
+    body += "</tbody></table>"
+    return body
+
+
+def _profit_by_category(con, kind: str) -> str:
+    rows = con.execute(
+        "SELECT s.category, COALESCE(SUM(b.pnl_usd),0) p, COUNT(*) c FROM bets b "
+        "JOIN strategies s ON s.strategy_id=b.strategy_id "
+        "WHERE b.kind=? AND b.result IN ('win','loss','push','void') GROUP BY 1 "
+        "ORDER BY p DESC", (kind,)).fetchall()
+    if not rows:
+        return "<p class='empty'>No settled bets yet.</p>"
+    body = "<table><thead><tr><th>Strategy category</th><th>P&L</th><th>Bets</th></tr></thead><tbody>"
+    for r in rows:
+        body += (f"<tr><td>{_esc(r['category'])}</td>"
+                 f"<td>{fmt_money(r['p'])}</td>"
+                 f"<td>{r['c']}</td></tr>")
+    body += "</tbody></table>"
+    return body
 
 
 def strategies_page(con, out_dir):
@@ -252,14 +393,26 @@ def strategies_page(con, out_dir):
                         [[_esc(b["game_label"]), _esc(b["market"]), _esc(b["selection"]),
                           _esc(b["price"]), f"{b['model_prob']:.3f}" if b["model_prob"] else "—",
                           _esc(b["result"]), fmt_money(b["pnl_usd"])] for b in bets])
+        # profit breakdowns
+        fwd_by_market = strategy_profit_by(con, sid, "forward", "market")
+        fwd_by_team = strategy_profit_by(con, sid, "forward", "team")
+        fwd_by_month = strategy_profit_by(con, sid, "forward", "month")
+        fwd_breakdowns = _profit_breakdown_html(fwd_by_market, "market") + \
+                         _profit_breakdown_html(fwd_by_team, "team") + \
+                         _profit_breakdown_html(fwd_by_month, "month")
 
         def perf_html(p, label):
             if not p.get("bets"):
                 return (f"<div class='perf'><b>{label}</b>: no {label.split(' ')[0].lower()} bets yet"
                         f"{' — ' + _esc(p.get('note')) if p.get('note') else ''}.</div>")
-            return (f"<div class='perf'><b>{label}</b> — bets {p['bets']} · win {p['win_rate'] * 100:.1f}% · "
+            base = (f"<div class='perf'><b>{label}</b> — bets {p['bets']} · win {p['win_rate'] * 100:.1f}% · "
                     f"P&L {fmt_money(p['pnl'])} · ROI {fmt_pct(p['roi'])} · maxDD {fmt_money(p['max_dd'])}"
-                    f" · pending {p['pending']}</div>")
+                    f" · pending {p['pending']}")
+            base += f" · vol {fmt_money(p['volatility'])}" if p.get('volatility') is not None else ""
+            base += (f" · largest W {fmt_money(p['largest_win'])} / L {fmt_money(p['largest_loss'])}"
+                     f" · streaks {p['longest_win']}W / {p['longest_loss']}L")
+            base += "</div>"
+            return base
 
         cards.append(f"""
 <div class="strategy-card" id="{sid}">
@@ -277,6 +430,7 @@ def strategies_page(con, out_dir):
 <details><summary>Data limitations</summary><ul>{lims}</ul></details>
 {perf_html(perf_b, 'Backtest (historical simulation)')}
 {perf_html(perf_f, 'Forward (live paper competition)')}
+<details><summary>Forward breakdowns (market / team / month)</summary>{fwd_breakdowns or "<p class='empty'>No forward bets yet.</p>"}</details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary>{why}</details>
 <details open><summary>Recent bets (all kinds)</summary>{bt_rows}</details>
 </div>""")
@@ -285,6 +439,17 @@ def strategies_page(con, out_dir):
             "Backtest and forward records are labeled separately and never mixed.</p>"
             + "".join(cards))
     _write(out_dir, "strategies.html", page("Strategies", body, "strategies.html"))
+
+
+def _profit_breakdown_html(by: dict, dim: str) -> str:
+    if not by:
+        return ""
+    rows = "".join(f"<tr><td>{_esc(k)}</td><td>{d.get('bets', 0)}</td>"
+                   f"<td>{d.get('wins', 0)}</td>"
+                   f"<td>{fmt_money(d.get('pnl', 0))}</td></tr>"
+                   for k, d in sorted(by.items()))
+    return ("<table><thead><tr><th>" + _esc(dim).title() +
+            "</th><th>Bets</th><th>Wins</th><th>P&L</th></tr></thead><tbody>" + rows + "</tbody></table>")
 
 
 def _why_analysis(bt: dict, fwd: dict) -> str:
@@ -359,8 +524,9 @@ def history(con, out_dir):
             "bet_id", "kind", "run_id", "strategy_id", "username", "decision_utc", "game_id",
             "game_label", "tipoff_utc", "market", "selection", "side", "price", "price_format",
             "source", "source_ts", "model_prob", "market_prob", "edge", "stake_usd", "to_win_usd",
-            "execution_status", "contracts", "fill_price", "fee_usd", "result", "settlement_utc",
-            "settlement_source", "pnl_usd", "roi", "verification", "notes", "strategy_version")})
+            "execution_status", "contracts", "fill_price", "fee_usd", "closing_price",
+            "result", "settlement_utc", "settlement_source", "pnl_usd", "roi",
+            "verification", "notes", "strategy_version")})
     _write_json(out_dir, "data/history.json", recs)
     body = f"""
 <h1>Trade history</h1>
@@ -369,6 +535,9 @@ labeled. Search and filter client-side; nothing is hidden, including losing stra
 <input id="q" type="search" placeholder="Search: strategy, team, market, result…">
 <div class="filters">
   <select id="f_kind"><option value="">all kinds</option><option>forward</option><option>backtest</option></select>
+  <select id="f_market"><option value="">all markets</option><option>kalshi:winner</option>
+    <option>total</option><option>kalshi:prop:rebounds</option>
+    <option>kalshi:prop:assists</option><option>kalshi:prop:points</option></select>
   <select id="f_result"><option value="">all results</option><option>win</option><option>loss</option>
     <option>push</option><option>pending</option></select>
   <select id="f_strat"><option value="">all strategies</option></select>
@@ -376,7 +545,7 @@ labeled. Search and filter client-side; nothing is hidden, including losing stra
 <p id="count" class="muted"></p>
 <div class="twrap"><table id="hist"><thead><tr>
 <th>Bet</th><th>Kind</th><th>Strategy</th><th>Decision (UTC)</th><th>Game</th><th>Market</th>
-<th>Pick</th><th>Price</th><th>Model</th><th>Result</th><th>Stake</th><th>P&L</th></tr></thead>
+<th>Pick</th><th>Price</th><th>Closing</th><th>Model</th><th>Result</th><th>Stake</th><th>P&L</th></tr></thead>
 <tbody></tbody></table></div>
 <script>
 const DATA = {json.dumps(recs)};
@@ -389,8 +558,10 @@ function render() {{
   const k = document.getElementById('f_kind').value;
   const rs = document.getElementById('f_result').value;
   const st = document.getElementById('f_strat').value;
+  const m = document.getElementById('f_market').value;
   const rows = DATA.filter(d =>
-    (!k || d.kind === k) && (!rs || d.result === rs) && (!st || d.username === st) &&
+    (!k || d.kind === k) && (!m || d.market === m) && (!rs || d.result === rs) &&
+    (!st || d.username === st) &&
     (!q || JSON.stringify(d).toLowerCase().includes(q)));
   document.getElementById('count').textContent = rows.length + ' of ' + DATA.length + ' bets';
   tb.innerHTML = rows.slice(0, 400).map(d =>
@@ -398,13 +569,14 @@ function render() {{
      <td>${{d.username}}</td><td>${{d.decision_utc}}</td>
      <td>${{d.game_label || ''}}</td><td>${{d.market}}</td><td>${{d.selection}}</td>
      <td>${{d.price}} ${{d.price_format}}</td>
+     <td>${{d.closing_price == null ? '—' : (+d.closing_price).toFixed(1) + 'c'}}</td>
      <td>${{d.model_prob == null ? '—' : (+d.model_prob).toFixed(3)}}</td>
      <td class="${{d.result}}">${{d.result}}</td>
      <td>${{$}}${{(d.stake_usd || 0).toFixed(2)}}</td>
      <td class="${{(d.pnl_usd || 0) >= 0 ? 'pos' : 'neg'}}">${{d.pnl_usd == null ? '—' : (+d.pnl_usd).toFixed(2)}}</td></tr>`
   ).join('');
 }}
-['q', 'f_kind', 'f_result', 'f_strat'].forEach(id =>
+['q', 'f_kind', 'f_result', 'f_strat', 'f_market'].forEach(id =>
   document.getElementById(id).addEventListener('input', render));
 render();
 </script>
@@ -433,18 +605,28 @@ def sources_page(con, out_dir):
     body = f"""
 <h1>Data sources</h1>
 <p class="muted">The core pipeline uses only keyless, free, public sources. Free trials and freemium tiers are
-treated as NOT free. Reachability is re-verified on every collection run and shown below from the latest run.</p>
+treated as NOT free. Reachability is re-verified on every collection run and shown below from the latest run.
+If a source stops working mid-pipeline: <code>(1)</code> the failure is logged into
+<code>collection_log</code> with HTTP status; <code>(2)</code> the affected subscriber
+strategies get no signal in that run (no fallback to invented data); <code>(3)</code> the source-status row
+flips to <code>ok=0</code> and is surfaced on this page; <code>(4)</code> the audit pass raises an anomaly.
+The site does not depend on any single fragile endpoint.</p>
 {table(["Source", "URL", "Data", "Cost", "Registration", "Paid plan", "Rate limits", "Reliability",
         "Last verified", "Latest run", "Verification notes"], rows)}
-<h2>Known unavailable data</h2>
+<h2>Known unavailable data (documented, not assumed)</h2>
 <ul>
 <li><b>Historical sportsbook closing lines (deep history):</b> no free, legal archive was found; paid archives
 exist and are excluded by policy. Consequence: historical backtests run only where Kalshi candlestick history
-exists; totals/spread model bets before that use clearly-labeled price assumptions.</li>
+exists; totals/spread model bets before that use clearly-labeled price assumptions (PRICED-ASSUMPTION).</li>
 <li><b>Historical injury reports:</b> no free dated archive — injury strategies are forward-tested first.</li>
 <li><b>Historical order-book depth:</b> Kalshi does not publish historical books; backtest entries use last
 closed hourly trade price +1 tick, labeled as an execution assumption.</li>
 <li><b>Referee assignments:</b> no reliable free historical feed found — referee strategies are NOT claimed.</li>
+<li><b>NBA.com/stats advanced tracking data (drives, touches, etc.):</b> reachable from some networks but
+blocked from GitHub Actions runners (Akamai 403 / connection tarpit). Replaced by ESPN box scores + Basketball-Reference
+verification. Sister site NBAInjuryReport documented the same fingerprint mismatch.</li>
+<li><b>Pre-2024-25 historical totals lines:</b> no free historical archive of sportsbook totals, so pre-2025
+totals backtests are not attempted. Forecast models run forward from collection start.</li>
 </ul>
 """
     _write(out_dir, "sources.html", page("Data Sources", body, "sources.html"))
@@ -494,6 +676,7 @@ rest/travel features) are built strictly from games dated before the decision.</
 <code>engine.PriceBook</code> and tested in the test-suite.</li>
 <li>Injury adjustments use only listings published before the decision. Final injury status, final lineups,
 closing prices, and game results are never used at decision time.</li>
+<li>The forward engine refuses to place any bet less than 1 hour before tipoff (execution-latency guard).</li>
 </ul>
 <h2>Backtesting</h2>
 <p>Chronological walk over verified game results. Each strategy's state carries forward; a game's result is
@@ -505,6 +688,21 @@ silent choices.</p>
 forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
 simulated bet before tipoff, then settled from verified results. The forward ledger is the competition
 leaderboard; backtest records are always displayed separately.</p>
+<h2>Closing-line capture (where available)</h2>
+<p>When a forward bet settles, the engine stores the last observed Kalshi candle close before tipoff in
+the bet row's <code>closing_price</code> column. This is the closing-line value at the simulated decision
+time; absences (no candles) are recorded as NULL, never guessed.</p>
+<h2>Live / in-game betting — explicitly out of scope</h2>
+<p>The current Kalshi NBA offering closes each winner market at tipoff and does not provide live in-game
+prices. The forward engine therefore enforces a 1-hour pre-tip execution-latency guard and produces no
+in-running decisions. Live betting research would require a different venue with observable in-game prices
+and is documented as an explicit scope gap, not attempted.</p>
+<h2>Overtime (OT) handling</h2>
+<p>Kalshi game-winner markets are 'final-score' markets — overtime is included by exchange convention
+(verified in settler behavior; tested). The system does not currently exploit any OT-specific edge
+because Kalshi does not sell OT-only markets on regular-season NBA. Strategy NBA-018 OvertoneOlive is an
+<em>observer</em>: it counts OT games (via box score <code>OT</code> period) so the OT-incidence rate can
+be tracked against strategy outcomes, without placing OT-only bets.</p>
 <h2>Execution realism</h2>
 <ul>
 <li>Kalshi fills: observed orderbook ask (forward) or last closed candle close +1 tick (backtest, depth
@@ -516,15 +714,18 @@ unknown, never invented. Kalshi order-book size caps fills at observed depth whe
 </ul>
 <h2>P&amp;L, bankrolls, sizing</h2>
 <p>Each strategy starts with a $1,000 virtual bankroll. Stake = 25% Kelly capped at 3% of current bankroll,
-min $5, max 25% open exposure. Pushes return the stake (P&amp;L 0). Kalshi push/void handling defers to the
-exchange's recorded result; unresolved markets stay <i>pending</i>, never guessed.</p>
+min $5, max 25% open exposure (enforced via the audit <code>exposure-cap-violated</code> check). Pushes return
+the stake (P&amp;L 0). Kalshi push/void handling defers to the exchange's recorded result; unresolved markets
+stay <i>pending</i>, never guessed.</p>
 <h2>Data verification</h2>
 <p>Final scores are cross-checked ESPN ↔ NBA.com; every verification (match/mismatch) is stored. Source
 reachability is probed each collection run and published on the Sources page. Discrepancies raise anomalies,
 are investigated in the research log, and are never silently resolved.</p>
 <h2>Strategy versioning</h2>
 <p>Material rule changes create a new version (e.g., NBA-001 v1.1); history is preserved — bet rows carry the
-version that produced them and are never rewritten.</p>
+version that produced them and are never rewritten. Each bet row references both <code>strategy_id</code>
+and <code>strategy_version</code> at execution time, so historical performance can always be sliced by
+the version that produced it.</p>
 <h2>What this site is not</h2>
 <p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
 point is to find out, with real verified data, which hypotheses survive.</p>

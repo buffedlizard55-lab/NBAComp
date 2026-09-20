@@ -309,6 +309,107 @@ register("NBA-014", version="1.0.0", name="Blowout Blair", username="BlowoutBlai
          data_limitations=["requires prop series discovery"],
          lookahead_controls=["props priced only from snapshots before decision"])
 
+register("NBA-015", version="1.0.0", name="DefRtg Lena", username="DefRtgLena",
+         category="Defensive Matchup",
+         thesis=("When a top-5 ranked defense (by DRtg) hosts a bottom-5 offense (by ORtg), "
+                 "the market underprices the spread/total interaction."),
+         description=("Computes each team's rolling-15 defensive rating from points allowed per "
+                      "possession. When home_DRtg <= league 5th pct AND away_ORtg >= league "
+                      "80th pct, bet UNDER on the game total (price assumed -110)."),
+         market_types=["kalshi:total", "total"],
+         data_sources=["nba:teamgamelogs", "espn:scoreboard", "kalshi:markets"],
+         entry_rules=["home_team_rolling games >= 10", "away_team_rolling games >= 10",
+                      "home_DRtg <= 110", "away_ORtg >= 115", "model total <= line - 4"],
+         exit_rules=["settle on final score"],
+         sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
+         historical_window="same as price history availability",
+         expected_edge="no assumed edge; hypothesis under test",
+         failure_modes=["rate stats noisy early season", "matchup effect already in price"],
+         data_limitations=["DRtg/ORtg are estimated from team gamelogs (no opponent shot splits)"],
+         lookahead_controls=["rolling windows strictly exclude the current game"])
+
+register("NBA-016", version="1.0.0", name="FoulTone Fern", username="FoulToneFern",
+         category="Foul Rate / Free Throws",
+         thesis=("Matchups involving teams with very different foul tendencies (high FTA rate vs "
+                 "low FTA rate allowed) move totals more than the market initially prices."),
+         description=("Identifies game where one team's rolling FTA/game >= 26 AND opponent's "
+                      "rolling opp_FTA/game <= 19. Uses the totals model; bets UNDER the line "
+                      "when the model is below the line and the gap exceeds 5 points."),
+         market_types=["kalshi:total", "total"],
+         data_sources=["nba:teamgamelogs", "espn:scoreboard"],
+         entry_rules=["both rolling-10 games >= 5",
+                      "(home_fta - away_opp_fta >= 7) OR (away_fta - home_opp_fta >= 7)",
+                      "model total <= line - 5"],
+         exit_rules=["settle on final score"],
+         sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
+         historical_window="same as price history availability",
+         expected_edge="no assumed edge; hypothesis under test",
+         failure_modes=["referees swap trends across seasons", "small samples"],
+         data_limitations=["FT attempts only - free throw rate approximated"],
+         lookahead_controls=["rolling windows strictly exclude the current game"])
+
+register("NBA-017", version="1.0.0", name="PaceMatch Quincy", username="PaceMatchQuincy",
+         category="Pace Mismatch",
+         thesis=("Large pace mismatches (>= 5 possessions) systematically produce higher "
+                 "variance in game totals than the market's implied variance."),
+         description=("Computes a pace mismatch index = abs(home_pace - away_pace). When index >= 5 "
+                      "and the model total disagrees with the line by >= 5 points, bet the model's "
+                      "direction (no clear over/under bias)."),
+         market_types=["kalshi:total", "total"],
+         data_sources=["nba:teamgamelogs", "espn:scoreboard"],
+         entry_rules=["rolling-15 games >= 5 each",
+                      "abs(home_pace - away_pace) >= 5",
+                      "|model_total - line| >= 5"],
+         exit_rules=["settle on final score"],
+         sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
+         historical_window="same as price history availability",
+         expected_edge="no assumed edge; hypothesis under test",
+         failure_modes=["fast team forced into slow game by coach", "small samples"],
+         data_limitations=["no opponent-pace interaction in current rolling formulation"],
+         lookahead_controls=["rolling windows strictly exclude the current game"])
+
+register("NBA-018", version="1.0.0", name="Overtone Olive", username="OvertoneOlive",
+         category="Overtone Watcher",
+         thesis=("Final-score markets may settle differently from regulation markets; a few "
+                 "games each season go to overtime, which is included in the 'final' metric "
+                 "and which can swing the total outcome by 5-12 points."),
+         description=("STATUS: monitored-only. Whenever a game goes to OT (visible from the "
+                      "box score's `OT` period in the summary feed), the bet log records the "
+                      "outcome vs the strategy's signal and updates a separate OT-incidence "
+                      "counter. No OT betting line is currently offered by Kalshi on regular-"
+                      "season markets (documented)."),
+         market_types=["final-score watcher"],
+         data_sources=["espn:summary"],
+         entry_rules=["ot_period observed in box score"],
+         exit_rules=["increment ot_counter"],
+         sizing_rules="no stake (observer strategy; logged for future OT market discovery)",
+         historical_window="monitored going forward",
+         expected_edge="unknown - no OT market currently available",
+         failure_modes=["no executable signal"],
+         data_limitations=["no Kalshi OT-specific market",
+                            "regulation-only MML/total markets may settle differently"],
+         lookahead_controls=["OT detection strictly after game status = final"])
+
+register("NBA-019", version="1.0.0", name="LineupSpot Larry", username="LineupSpotLarry",
+         category="Starting Lineup",
+         thesis=("Confirmed bench scorers moving into the starting lineup modestly raise team "
+                 "early-game scoring rates, which the full-game price has not always absorbed."),
+         description=("STATUS: awaiting free starting-lineup data. NBA.com official starting "
+                      "lineups are posted ~30 min before tipoff; our collector records them when "
+                      "reachable (stats.nba.com is currently blocked from CI). Activates and "
+                      "tracks actual vs expected rolling min for the promoted starter."),
+         market_types=["1h (KXNBA1H) when available", "first-quarter"],
+         data_sources=["nba:starters (status blocked in current env)", "espn:summary"],
+         entry_rules=["promoted-starter minutes-rolling >= 22", "edge vs market >= 0.04",
+                      "starting-lineup feed verifiable"],
+         exit_rules=["settle at quarter / half / game conclusion"],
+         sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
+         historical_window="forward-only until lineup source is verified",
+         expected_edge="no assumed edge; hypothesis under test",
+         failure_modes=["limited lineup historical archive", "announcement timing"],
+         data_limitations=["no free historical starting-lineup archive was found"],
+         lookahead_controls=["only lineups published strictly before decision"])
+
 
 COMPETITION_START = "2026-09-20"
 COMPETITION_END = "2027-09-19"
