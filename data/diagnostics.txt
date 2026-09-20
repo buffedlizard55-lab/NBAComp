@@ -1,14 +1,28 @@
-espn.scoreboard: http=403 ok=False bytes=442 err=HTTP 403 t=0.1s body[:160]=b'<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don\'t have permission to access "http&#58;&#47;&#47;site&#46;api&#46;espn&#46;com&#47;apis&#47;site&#47;v2&#47;spor'
-espn.scoreboard(20260115): http=403 ok=False bytes=447 err=HTTP 403 t=1.1s body[:160]=b'<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don\'t have permission to access "http&#58;&#47;&#47;site&#46;api&#46;espn&#46;com&#47;apis&#47;site&#47;v2&#47;spor'
-espn.injuries: http=403 ok=False bytes=438 err=HTTP 403 t=0.9s body[:160]=b'<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don\'t have permission to access "http&#58;&#47;&#47;site&#46;api&#46;espn&#46;com&#47;apis&#47;site&#47;v2&#47;spor'
-nba.teamstats: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.7s body[:160]=b''
-nba.teamgamelogs: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.9s body[:160]=b''
-nba.scoreboardv2: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.8s body[:160]=b''
-kalshi.series KXNBAGAME: http=200 ok=True bytes=1586 err=None t=0.1s body[:160]=b'{"series":{"additional_prohibitions":["Current players, coaches, and staff of the league, association, or organization(s) governing the event. For college leagues/associations specifically, or where o'
-kalshi.markets KXNBAGAME open: rows=6 t=0.4s
-kalshi.markets KXNBAGAME settled: rows=0 t=0.3s
-kalshi.candlesticks: rows=0 t=0.3s
-
+curl espn.scoreboard: 403 bytes=442 head=b'<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don\'t have permission to access "ht'
+curl espn.scoreboard(20260115): 403 bytes=447
+curl espn.injuries: 403 bytes=440
+curl espn.site-web scoreboard: 200 bytes=9821
+curl espn.core injuries: 404 bytes=52
+curl espn.scoreboard +browser-hdrs: 403 bytes=442
+curl stats.nba.com scoreboardv2: 0 bytes=0 head=b''
+curl data.nba.net scoreboard: 0 bytes=0 head=b''
+curl cdn.nba.net liveData scoreboard: 403 bytes=445 head=b"<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don't have perm"
+kalshi.series KXNBAGAME: http=200 exists=True
+kalshi.series KXNBASPREAD: http=200 exists=True
+kalshi.series KXNBATOTAL: http=200 exists=True
+kalshi.series KXNBA1H: http=200 exists=True
+kalshi.series KXNBAPOINT: http=404 exists=False
+kalshi.series KXNBAREB: http=200 exists=True
+kalshi.series KXNBAAST: http=200 exists=True
+kalshi.series KXNBAMVP: http=200 exists=True
+kalshi KXNBAGAME open: rows=6
+  sample tickers: ['KXNBAGAME-26OCT20OKCSAS-SAS', 'KXNBAGAME-26OCT20OKCSAS-OKC', 'KXNBAGAME-26OCT20PHINYK-PHI']
+  sample market: title='San Antonio wins' subtitle=None strike=None open_interest=None close_time=2026-10-23T01:30:00Z yes_bid=None yes_ask=None
+kalshi.candlesticks(48h, 3 real tickers): entries=0 candles=0
+kalshi.orderbooks: entries=1 sample={'orderbook_fp': {'no_dollars': [], 'yes_dollars': []}, 'ticker': 'KXNBAGAME-26OCT20OKCSAS-SAS,KXNBAGAME-26OCT20OKCSAS-OKC,KXNBAGAME-26OCT20PHINYK-PHI'}
+kalshi KXNBAGAME status=settled: rows=0
+kalshi KXNBAGAME status=finalized: rows=0
+kalshi KXNBAGAME status=closed: rows=0
 collection_log tail:
   2026-09-20T19:36:16Z espn-day espn fail 20260920: HTTP 403
   2026-09-20T19:36:15Z espn-day espn fail 20260919: HTTP 403
@@ -22,16 +36,3 @@ collection_log tail:
   2026-09-20T19:36:07Z espn-day espn fail 20260911: HTTP 403
   2026-09-20T19:36:06Z espn-day espn fail 20260910: HTTP 403
   2026-09-20T19:36:05Z espn-day espn fail 20260909: HTTP 403
-  2026-09-20T19:36:04Z espn-day espn fail 20260908: HTTP 403
-  2026-09-20T19:36:03Z espn-day espn fail 20260907: HTTP 403
-  2026-09-20T19:36:02Z espn-day espn fail 20260906: HTTP 403
-  2026-09-20T19:36:01Z espn-day espn fail 20260905: HTTP 403
-  2026-09-20T19:36:00Z espn-day espn fail 20260904: HTTP 403
-  2026-09-20T19:35:59Z espn-day espn fail 20260903: HTTP 403
-  2026-09-20T19:35:58Z espn-day espn fail 20260902: HTTP 403
-  2026-09-20T19:35:57Z espn-day espn fail 20260901: HTTP 403
-  2026-09-20T19:35:56Z espn-day espn fail 20260831: HTTP 403
-  2026-09-20T19:35:55Z espn-day espn fail 20260830: HTTP 403
-  2026-09-20T19:35:54Z espn-day espn fail 20260829: HTTP 403
-  2026-09-20T19:35:53Z espn-day espn fail 20260828: HTTP 403
-  2026-09-20T19:35:52Z espn-day espn fail 20260827: HTTP 403
