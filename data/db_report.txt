@@ -1,48 +1,58 @@
 === table row counts ===
 games                  4346
-odds_snapshots         480
+odds_snapshots         528
 injuries               0
-team_gamelogs          1720
-player_gamelogs        23295
+team_gamelogs          2032
+player_gamelogs        27433
 team_season_stats      0
 kalshi_markets         59
 kalshi_candles         524
-kalshi_orderbooks      78
+kalshi_orderbooks      84
 strategies             24
 bets                   10
 bankroll_events        10
 verifications          10
-anomalies              239
-audit_log              2749
+anomalies              254
+audit_log              2761
 research_log           13
 source_status          39
-collection_log         1595
+collection_log         1680
 empty tables: injuries, team_season_stats
 games span: 2023-10-05 .. 2026-11-02 finals=4173 verified=5
 === collection log (last 25) ===
-2026-09-21T23:17:48Z signal-backtest        engine                   ok       rows=6981   sigbt-2026-09-21: games=4173 signals=6981 (outcome-only validation; no prices used)
-2026-09-21T23:17:46Z backtest               engine                   ok       rows=0      bt-2026-09-20: bets=0
-2026-09-21T23:17:43Z bref-backfill          basketball-reference     skipped  rows=0      2026-september: offseason, no monthly page exists
-2026-09-21T23:17:43Z boxscores              espn                     ok       rows=0      2026-09-20
-2026-09-21T23:17:43Z kalshi-settled-history kalshi:KXNBAGAME         empty    rows=0      games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
-2026-09-21T23:17:43Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-YES ok       rows=0      http=200 trades=0
-2026-09-21T23:17:43Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NYK ok       rows=0      http=200 trades=0
-2026-09-21T23:17:42Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NO ok       rows=0      http=200 trades=0
-2026-09-21T23:17:42Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-ATL ok       rows=0      http=200 trades=0
-2026-09-21T23:17:33Z kalshi-backfill        kalshi                   empty    rows=0      settled markets not exposed by public API (verified 2026-09-21); forward candle accumulation is the history source
-2026-09-21T23:17:33Z kalshi-backfill        kalshi:KXNBAPRA          ok       rows=0      events=0 skipped=0 markets_total=0
-2026-09-21T23:17:33Z kalshi-backfill        kalshi:KXNBABLK          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-21T23:17:31Z kalshi-backfill        kalshi:KXNBASTL          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-21T23:17:30Z kalshi-backfill        kalshi:KXNBAAST          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-21T23:17:28Z kalshi-backfill        kalshi:KXNBAREB          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-21T23:17:26Z kalshi-backfill        kalshi:KXNBAPTS          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-21T23:17:24Z kalshi-backfill        kalshi:KXNBAMVP          ok       rows=1      events=1 skipped=0 markets_total=0
-2026-09-21T23:17:23Z kalshi-backfill        kalshi:KXNBA1H           ok       rows=0      events=0 skipped=0 markets_total=0
-2026-09-21T23:17:23Z kalshi-backfill        kalshi:KXNBATOTAL        ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-21T23:17:22Z kalshi-backfill        kalshi:KXNBASPREAD       ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-21T23:17:20Z kalshi-backfill        kalshi:KXNBAGAME         ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-21T23:17:18Z kalshi-candles-forward kalshi                   ok       rows=403    tickers=6 candles=403 window=2026-09-18T23:17:18Z..2026-09-21T23:17:18Z
-2026-09-21T23:17:18Z kalshi-snapshot        kalshi                   ok       rows=59     open_markets=59 books=6 rejected=0
-2026-09-21T23:17:15Z kalshi-snapshot        kalshi:KXNBAPRA          ok       rows=0      open_markets=0
-2026-09-21T23:17:15Z kalshi-snapshot        kalshi:KXNBABLK          ok       rows=0      open_markets=0
-=== collector crashes recorded (since 2026-09-21T23:14:07Z): 0 ===
+2026-09-21T23:22:39Z signal-backtest        engine                   ok       rows=7303   sigbt-2026-09-21: games=4173 signals=7303 (outcome-only validation; no prices used)
+2026-09-21T23:22:36Z backtest               engine                   ok       rows=0      bt-2026-09-20: bets=0
+2026-09-21T23:22:34Z bref-backfill          basketball-reference     skipped  rows=0      2026-september: offseason, no monthly page exists
+2026-09-21T23:22:34Z boxscores              espn                     ok       rows=0      2026-09-20
+2026-09-21T23:22:34Z kalshi-settled-history kalshi:KXNBAGAME         empty    rows=0      games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
+2026-09-21T23:22:34Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-YES ok       rows=0      http=200 trades=0
+2026-09-21T23:22:34Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NYK ok       rows=0      http=200 trades=0
+2026-09-21T23:22:33Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NO ok       rows=0      http=200 trades=0
+2026-09-21T23:22:33Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-ATL ok       rows=0      http=200 trades=0
+2026-09-21T23:22:24Z kalshi-backfill        kalshi                   empty    rows=0      settled markets not exposed by public API (verified 2026-09-21); forward candle accumulation is the history source
+2026-09-21T23:22:24Z kalshi-backfill        kalshi:KXNBAPRA          ok       rows=0      events=0 skipped=0 markets_total=0
+2026-09-21T23:22:24Z kalshi-backfill        kalshi:KXNBABLK          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-21T23:22:22Z kalshi-backfill        kalshi:KXNBASTL          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-21T23:22:20Z kalshi-backfill        kalshi:KXNBAAST          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-21T23:22:19Z kalshi-backfill        kalshi:KXNBAREB          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-21T23:22:17Z kalshi-backfill        kalshi:KXNBAPTS          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-21T23:22:15Z kalshi-backfill        kalshi:KXNBAMVP          ok       rows=1      events=1 skipped=0 markets_total=0
+2026-09-21T23:22:14Z kalshi-backfill        kalshi:KXNBA1H           ok       rows=0      events=0 skipped=0 markets_total=0
+2026-09-21T23:22:14Z kalshi-backfill        kalshi:KXNBATOTAL        ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-21T23:22:12Z kalshi-backfill        kalshi:KXNBASPREAD       ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-21T23:22:11Z kalshi-backfill        kalshi:KXNBAGAME         ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-21T23:22:09Z kalshi-candles-forward kalshi                   ok       rows=403    tickers=6 candles=403 window=2026-09-18T23:22:09Z..2026-09-21T23:22:09Z
+2026-09-21T23:22:09Z kalshi-snapshot        kalshi                   ok       rows=59     open_markets=59 books=6 rejected=0
+2026-09-21T23:22:06Z kalshi-snapshot        kalshi:KXNBAPRA          ok       rows=0      open_markets=0
+2026-09-21T23:22:06Z kalshi-snapshot        kalshi:KXNBABLK          ok       rows=0      open_markets=0
+=== collector crashes recorded (since 2026-09-21T23:18:54Z): 5 ===
+2026-09-21T23:19:04Z sbr-2022-23 (sbr)
+OperationalError('table hist_odds has no column named spread_printed_row')
+2026-09-21T23:19:04Z sbr-2021-22 (sbr)
+OperationalError('table hist_odds has no column named spread_printed_row')
+2026-09-21T23:19:04Z sbr-2020-21 (sbr)
+OperationalError('table hist_odds has no column named spread_printed_row')
+2026-09-21T23:19:03Z sbr-2019-20 (sbr)
+OperationalError('table hist_odds has no column named spread_printed_row')
+2026-09-21T23:19:03Z sbr-2018-19 (sbr)
+OperationalError('table hist_odds has no column named spread_printed_row')
