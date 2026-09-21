@@ -44,10 +44,15 @@ def run_backtest(con, seasons: list[str], run_id: str, start_iso: str | None = N
     by_game: dict[str, dict[str, engine.KalshiMarketInfo]] = {}
     for info in mapping.values():
         if info.market_type in ("winner", "spread", "total"):
-            by_game.setdefault(info.game_id, {})[info.market_type] = info
+            # store_winner files the HOME team's market as "winner" (live
+            # shape is one market per team) and keeps the other side around.
+            engine.store_winner(by_game.setdefault(info.game_id, {}), info)
 
     elo = EloModel()
     rolling = RollingTeamState(window=15)
+    # Schedule-only state (rest/B2B/road-trip/travel need dates+venues, not
+    # box scores): fed from finals chronologically, strictly-prior per game.
+    sched = RollingTeamState(window=15)
     log_by_team: dict[str, list] = {}
     for r in con.execute("SELECT * FROM team_gamelogs ORDER BY game_date_et"):
         log_by_team.setdefault(r["team"], []).append(dict(r))
@@ -81,8 +86,8 @@ def run_backtest(con, seasons: list[str], run_id: str, start_iso: str | None = N
             "home": g["home_team"], "away": g["away_team"],
             "h_roll": rolling.team_rolling(g["home_team"]),
             "a_roll": rolling.team_rolling(g["away_team"]),
-            "h_rest": rolling.rest_and_travel(g["home_team"], gdate, True),
-            "a_rest": rolling.rest_and_travel(g["away_team"], gdate, False),
+            "h_rest": sched.rest_and_travel(g["home_team"], gdate, True),
+            "a_rest": sched.rest_and_travel(g["away_team"], gdate, False),
             "winner": winner, "total": by_game.get(g["game_id"], {}).get("total"),
             "book": book, "rolling_history": rolling.history,
             "total_line": espn_total_line(con, g["game_id"], decision),
@@ -109,6 +114,10 @@ def run_backtest(con, seasons: list[str], run_id: str, start_iso: str | None = N
 
         # update state WITH this game only after its bets are placed
         elo.update(g["home_team"], g["away_team"], g["home_score"], g["away_score"])
+        sched.add_game({"team": g["home_team"], "game_date_et": gdate,
+                        "is_home": 1, "venue_team": None})
+        sched.add_game({"team": g["away_team"], "game_date_et": gdate,
+                        "is_home": 0, "venue_team": g["home_team"]})
         advance(g["home_team"], _next_day(gdate))
         advance(g["away_team"], _next_day(gdate))
 
@@ -279,11 +288,27 @@ def _kalshi_side_prices(ctx, price_h):
     return p_home, 1.0 - p_home
 
 
+def _px(ctx) -> engine.PricePoint | None:
+    """Decision-time price: live observed ask in forward, candles in backtest.
+
+    The backtest never sets ctx["live_price"], so its price path is purely
+    historical candles (proven by test). The forward engine sets it to the
+    observed orderbook ask — without this override the shared evaluators
+    would look up (nonexistent) candles and forward would never fire.
+    """
+    if ctx.get("live_price") is not None:
+        return ctx["live_price"]
+    w = ctx.get("winner")
+    if w is None:
+        return None
+    return ctx["book"].kalshi_price_at(w.ticker, ctx["decision"])
+
+
 def eval_rest(ctx):
     h, a = ctx["h_rest"], ctx["a_rest"]
     if not h or not a or not (a.get("b2b") and h.get("rest_days", 0) >= 2):
         return []
-    price = ctx["book"].kalshi_price_at(ctx["winner"].ticker, ctx["decision"])
+    price = _px(ctx)
     if not price:
         return []
     p_home, _ = _winner_probs(ctx)
@@ -296,7 +321,7 @@ def eval_rest(ctx):
 
 
 def eval_elo(ctx):
-    price = ctx["book"].kalshi_price_at(ctx["winner"].ticker, ctx["decision"])
+    price = _px(ctx)
     if not price:
         return []
     p_home, p_away = _winner_probs(ctx)
@@ -310,10 +335,18 @@ def eval_elo(ctx):
 
 
 def eval_linemove(ctx):
-    tip = util.parse_iso(ctx["game"]["tipoff_utc"])
-    base_target = util.to_iso(tip - timedelta(hours=48))
-    base = ctx["book"].kalshi_price_around(ctx["winner"].ticker, base_target, window_hours=12)
-    now = ctx["book"].kalshi_price_at(ctx["winner"].ticker, ctx["decision"])
+    # Forward: live ask + T-48h orderbook-history baseline (both observed).
+    # Backtest: decision candle + T-48h candle baseline. No mixing, ever.
+    if ctx.get("live_price") is not None:
+        now = ctx["live_price"]
+        base = ctx.get("live_baseline")
+    else:
+        tip = util.parse_iso(ctx["game"]["tipoff_utc"])
+        if tip is None or ctx.get("winner") is None:
+            return []
+        base_target = util.to_iso(tip - timedelta(hours=48))
+        base = ctx["book"].kalshi_price_around(ctx["winner"].ticker, base_target, window_hours=12)
+        now = ctx["book"].kalshi_price_at(ctx["winner"].ticker, ctx["decision"])
     if not base or not now:
         return []
     move = now.price_cents - base.price_cents
@@ -331,7 +364,7 @@ def eval_injury(ctx):
     flags = ctx["inj_flag"]
     if not (flags.get(ctx["home"]) or flags.get(ctx["away"])):
         return []
-    price = ctx["book"].kalshi_price_at(ctx["winner"].ticker, ctx["decision"])
+    price = _px(ctx)
     if not price:
         return []
     p_home, p_away = _winner_probs(ctx)
@@ -354,7 +387,7 @@ def eval_homecourt(ctx):
     na = _split_net(ctx, ctx["away"], False)
     if nh is None or na is None or nh - na <= 4.0:
         return []
-    price = ctx["book"].kalshi_price_at(ctx["winner"].ticker, ctx["decision"])
+    price = _px(ctx)
     if not price:
         return []
     p_home, _ = _winner_probs(ctx)
@@ -384,7 +417,7 @@ def eval_travel(ctx):
     a = ctx["a_rest"]
     if not a or a.get("road_trip_len", 0) < 5 or a.get("tz_shift", 0) < 2:
         return []
-    price = ctx["book"].kalshi_price_at(ctx["winner"].ticker, ctx["decision"])
+    price = _px(ctx)
     if not price:
         return []
     p_home, _ = _winner_probs(ctx)

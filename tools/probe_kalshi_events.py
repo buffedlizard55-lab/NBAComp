@@ -60,14 +60,19 @@ def main():
             time.sleep(0.3)
         log(f"  walked {pages} pages, seen={seen} oldest={oldest.get('ticker')} "
             f"close={oldest.get('close_time')}")
-        # markets of one settled event
+        # markets of one settled event (identity is event_ticker; settled
+        # event rows carry NO 'ticker' key — KeyError crashed probe5)
         ev0 = evs[0]
-        rm = get("/markets", {"event_ticker": ev0["ticker"], "limit": 100})
+        ev0t = ev0.get("event_ticker") or ev0.get("ticker")
+        rm = get("/markets", {"event_ticker": ev0t, "limit": 100})
         ms = (rm.json or {}).get("markets") or []
-        log(f"markets of {ev0['ticker']}: rows={len(ms)}")
+        log(f"markets of {ev0t}: rows={len(ms)}")
         for m in ms[:4]:
-            log(f"  {m.get('ticker')} title={m.get('title')!r} sub={m.get('market_subtitle')!r} "
-                f"result={m.get('result')} yes_bid={m.get('yes_bid')} cap={m.get('cap')}")
+            log(f"  {m.get('ticker')} title={m.get('title')!r} "
+                f"sub={m.get('yes_sub_title') or m.get('market_subtitle')!r} "
+                f"result={m.get('result')} "
+                f"bid={m.get('yes_bid_dollars') or m.get('yes_bid')} "
+                f"ask={m.get('yes_ask_dollars') or m.get('yes_ask')}")
         if ms:
             tk = ms[0]["ticker"]
             close_iso = ms[0].get("close_time")
@@ -75,9 +80,9 @@ def main():
             import datetime as dt
             t_end = int(time.time())
             t_start = t_end - 400 * 86400
-            rc = get("/markets/candlesticks", {"tickers": tk, "start_ts": t_start,
-                                               "end_ts": t_end, "interval": 1440})
-            cs = (rc.json or {}).get("candlesticks") or []
+            rc = get("/markets/candlesticks", {"market_tickers": tk, "start_ts": t_start,
+                                               "end_ts": t_end, "period_interval": 1440})
+            cs = (rc.json or {}).get("markets") or []
             n = sum(len(e.get("candlesticks") or []) for e in cs)
             log(f"candles(1d) for {tk}: http={rc.status} entries={len(cs)} candles={n}")
             if cs and cs[0].get("candlesticks"):

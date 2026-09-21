@@ -48,10 +48,14 @@ jobs:
       - name: Skip auto-commits
         id: skip
         run: |
-          if git log -1 --grep='\[auto\]' --oneline | grep -q .; then
+          # Fixed-string match (-F): the old --grep='\[auto\]' regex collapsed
+          # into a character class and matched nearly EVERY commit, so all of
+          # 2026-09-21's runs silently took the probe-only path (daily
+          # collection + pipeline never executed). Verified by job-step audit.
+          if git log -1 --format=%s | grep -qF '[auto]'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-          if git log -1 --grep='\[probe\]' --oneline | grep -q .; then
+          if git log -1 --format=%s | grep -qF '[probe]'; then
             echo "probe=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -69,23 +73,32 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/diagnostics.txt || true
           git commit -m "[auto] deep probe $(date -u +%FT%TZ)" || true
-          git push origin HEAD || true
+          git pull --rebase origin "${GITHUB_REF_NAME}" || git rebase --abort || true
+          git push origin HEAD || (sleep 30 && git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin HEAD) || true
 
       - name: Full backfill part 1 — schedule/results (two seasons)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         run: |
           python -m nbacomp.collect backfill-days --start 20241001 --end 20250701
           python -m nbacomp.collect backfill-days --start 20251001 --end "$(date -u +%Y%m%d)"
 
+      - name: Full backfill part 1b — Basketball-Reference schedule/results (incl. 2026-27 openers)
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
+        continue-on-error: true
+        run: |
+          python -m nbacomp.collect backfill-bref-months --months "2025:october,2025:november,2025:december,2025:january,2025:february,2025:march,2025:april,2025:may,2025:june"
+          python -m nbacomp.collect backfill-bref-months --months "2026:october,2026:november,2026:december,2026:january,2026:february,2026:march,2026:april,2026:may,2026:june"
+          python -m nbacomp.collect backfill-bref-months --months "2027:october"
+
       - name: Full backfill part 2 — independent verification (Basketball-Reference)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         continue-on-error: true
         run: |
           python -m nbacomp.collect verify-bref-months --months "2025:october,2025:november,2025:december,2025:january,2025:february,2025:march,2025:april,2025:may,2025:june"
           python -m nbacomp.collect verify-bref-months --months "2026:october,2026:november,2026:december,2026:january,2026:february,2026:march,2026:april,2026:may,2026:june"
 
       - name: Full backfill part 3 — Kalshi history (discovery, settled events, candles)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         continue-on-error: true
         run: |
           python -m nbacomp.collect kalshi-discovery
@@ -93,13 +106,13 @@ jobs:
           python -m nbacomp.collect kalshi-candles --series KXNBAGAME --start 2024-10-01T00:00:00Z --end "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Full backfill part 4 — box scores 2025-26 (player + team logs)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         continue-on-error: true
         run: |
           python -m nbacomp.collect boxscores --start 20251001 --end 20260715
 
       - name: Full backfill part 5 — box scores 2024-25 (player + team logs)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         continue-on-error: true
         run: |
           python -m nbacomp.collect boxscores --start 20241001 --end 20250715
@@ -108,7 +121,8 @@ jobs:
         if: steps.skip.outputs.skip != 'true'
         run: |
           python -m nbacomp.collect kalshi-discovery || true
-          python -m nbacomp.collect daily
+          python -m nbacomp.collect daily 2>&1 | tee data/daily.log
+          test ${PIPESTATUS[0]} -eq 0
 
       - name: Pipeline (strategies, backtest, paper engine, settlement, audit, site)
         if: steps.skip.outputs.skip != 'true'
@@ -122,11 +136,11 @@ jobs:
         run: python tools/probe_sources.py || true
 
       - name: Commit (data + site, or diagnostics on failure)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && (success() || failure())
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ -f data/nbacomp.db ]; then python tools/db_checkpoint.py; fi
+          if [ -f data/nbacomp.db ]; then python tools/db_checkpoint.py || true; fi
           rm -f data/nbacomp.db-wal data/nbacomp.db-shm
           git add -A data index.html leaderboard.html strategies.html upcoming.html \
             positions.html history.html sources.html research.html methodology.html \
@@ -135,5 +149,10 @@ jobs:
             echo "nothing to commit"
           else
             git commit -m "[auto] collect + pipeline + site build $(date -u +%FT%TZ)" || true
-            git push origin HEAD || true
+            # concurrent runs race here (2026-09-21: a probe commit landed
+            # mid-run and the bare push died silently). Rebase-then-push so
+            # collection results survive; a final failure still exits 0 and
+            # the next scheduled run re-collects.
+            git pull --rebase origin "${GITHUB_REF_NAME}" || git rebase --abort || true
+            git push origin HEAD || (sleep 30 && git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin HEAD) || true
           fi

@@ -29,7 +29,9 @@ silent choices.</p>
 <p>When historical prices don't exist (player props, sportsbook lines pre-2026-27), strategies are
 forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
 simulated bet before tipoff, then settled from verified results. The forward ledger is the competition
-leaderboard; backtest records are always displayed separately.</p>
+leaderboard; backtest records are always displayed separately. Kalshi lists one winner market per team, so
+the home team's market is the priced leg (away bets are its NO side); rest/B2B/road-trip features are fed
+from schedule history rather than box scores, so they work from the first game of a season.</p>
 <h2>Closing-line capture (where available)</h2>
 <p>When a forward bet settles, the engine stores the last observed Kalshi candle close before tipoff in
 the bet row's <code>closing_price</code> column. This is the closing-line value at the simulated decision
@@ -60,9 +62,10 @@ min $5, max 25% open exposure (enforced via the audit <code>exposure-cap-violate
 the stake (P&amp;L 0). Kalshi push/void handling defers to the exchange's recorded result; unresolved markets
 stay <i>pending</i>, never guessed.</p>
 <h2>Data verification</h2>
-<p>Final scores are cross-checked ESPN ↔ NBA.com; every verification (match/mismatch) is stored. Source
-reachability is probed each collection run and published on the Sources page. Discrepancies raise anomalies,
-are investigated in the research log, and are never silently resolved.</p>
+<p>Final scores are cross-checked ESPN ↔ Basketball-Reference (stats.nba.com is unreachable from our
+collectors — documented on the Sources page, not silently substituted); every verification (match/mismatch)
+is stored. Source reachability is probed each collection run and published on the Sources page.
+Discrepancies raise anomalies, are investigated in the research log, and are never silently resolved.</p>
 <h2>Strategy versioning</h2>
 <p>Material rule changes create a new version (e.g., NBA-001 v1.1); history is preserved — bet rows carry the
 version that produced them and are never rewritten. Each bet row references both <code>strategy_id</code>

@@ -2,18 +2,22 @@
 
 Verified transport reality (GitHub Actions runners, 2026-09-20 — see
 data/diagnostics.txt and the research log):
-- ESPN site.api.espn.com: 403 (Akamai fingerprint) → use site.web host.
+- ESPN: both API hosts 403 urllib fingerprints from runner IPs; requests
+  fall back to Node-fetch transport automatically (same public data; the
+  transport used is recorded in source_status.detail).
 - stats.nba.com / data.nba.net / cdn.nba.com: blocked or tarpitted → replaced
   by ESPN box scores + Basketball-Reference verification.
 - Kalshi public market data: fully accessible (keyless).
+- Basketball-Reference: reachable; monthly pages backfill schedule + finals.
 
 Commands:
   backfill-days        ESPN scoreboard per day (schedule/results/odds)
+  backfill-bref-months BRef monthly pages -> games rows (finals + scheduled)
   verify-bref-months   Basketball-Reference monthly score verification
   boxscores            ESPN box scores for a date range (player + team logs)
   daily                schedule/odds/injuries/Kalshi/boxscores catch-up
   kalshi-discovery     probe candidate NBA series; record what exists
-  kalshi-backfill      settled events -> markets (full history walk)
+  kalshi-backfill      settled events -> markets (recent history walk)
   kalshi-snapshot      open markets + orderbooks (forward prices)
   kalshi-candles       candlesticks for winner markets in a window
 """
@@ -47,7 +51,8 @@ def save_source_status(con, source_id: str, r, detail: str = ""):
 
 def collect_espn_day(con, day: str, verify: bool = False) -> int:
     r = espn.scoreboard(day)
-    save_source_status(con, "espn:scoreboard", r, detail=f"date={day}")
+    save_source_status(con, "espn:scoreboard", r,
+                       detail=f"date={day} via={getattr(r, 'transport', '?')}")
     if not r.ok:
         db.log_collection(con, "espn-day", "espn", "fail", f"{day}: {r.error}")
         return 0
@@ -248,24 +253,27 @@ def kalshi_snapshot(con) -> int:
                 continue
             db.insert(con, "kalshi_markets", row, replace=True)
             n += 1
-            if s == "KXNBAGAME":
+            if s in ("KXNBAGAME", "KXNBASPREAD", "KXNBATOTAL", "KXNBA1H", "KXNBAQ1"):
                 book_tickers.append(row["ticker"])
         time.sleep(0.3)
     # per-ticker orderbooks (batch endpoint shape unreliable in probes)
     books = 0
     CAP3 = util.utcnow_iso()
-    for t in book_tickers[:40]:
+    for t in book_tickers[:100]:
         r = kalshi.get_orderbook(t)
         if not r.ok:
             continue
         book = r.json or {}
         ob = book.get("orderbook") or book.get("orderbook_fp") or {}
-        yes_bids = _norm_side(ob.get("yes") or ob.get("yes_dollars"))
-        no_bids = _norm_side(ob.get("no") or ob.get("no_dollars"))
-        yes_asks = [[100 - p, sz] for p, sz in reversed(no_bids)] if no_bids else []
+        # Live shape 2026-09-20: yes_dollars/no_dollars ascending [[price, size]]
+        # as DOLLAR STRINGS ("0.5400"). Best bid is the LAST level, not the
+        # first — the old code stored level[0] (1c garbage) as yes_bid.
+        yes_bids = sorted(_norm_side(ob.get("yes") or ob.get("yes_dollars")))
+        no_bids = sorted(_norm_side(ob.get("no") or ob.get("no_dollars")))
+        yes_asks = sorted([[100 - p, sz] for p, sz in no_bids]) if no_bids else []
         db.insert(con, "kalshi_orderbooks", {
             "ticker": t, "captured_utc": CAP3,
-            "yes_bid": yes_bids[0][0] if yes_bids else None,
+            "yes_bid": yes_bids[-1][0] if yes_bids else None,
             "yes_ask": yes_asks[0][0] if yes_asks else None,
             "bids": json.dumps(yes_bids), "asks": json.dumps(yes_asks),
         }, replace=True)
@@ -277,20 +285,44 @@ def kalshi_snapshot(con) -> int:
 
 
 def _norm_side(side) -> list:
+    """Normalize one orderbook side to [[cents, size], ...].
+
+    Live shape 2026-09-20: dollar strings (["0.5400", "12.50"]) — int()
+    raised ValueError on every level, so books silently stored ZERO levels.
+    Strings containing '.' scale x100; plain ints/floats pass through.
+    """
     out = []
     for item in side or []:
         try:
             if isinstance(item, dict):
-                out.append([int(item["price"]), int(item.get("size") or 0)])
+                p, s = item["price"], item.get("size") or 0
             else:
-                out.append([int(item[0]), int(item[1])])
+                p, s = item[0], item[1]
+            if isinstance(p, str) and "." in p:
+                p = int(round(float(p) * 100))
+            else:
+                p = int(float(p))
+            out.append([p, int(float(s))])
         except (KeyError, IndexError, TypeError, ValueError):
             continue
     return out
 
 
-def kalshi_backfill(con, max_pages: int = 40, recent_days: int | None = None) -> int:
+def kalshi_backfill(con, max_pages: int = 5, recent_days: int | None = None) -> int:
     """Walk SETTLED events per series (cursor pagination), store their markets.
+
+    Default is deliberately shallow (5 pages x 200 events per series): each
+    event costs one markets fetch, so the old 40-page default meant 8000+
+    requests per series and never finished inside a workflow run. Pass an
+    explicit max_pages (CLI --pages) for deliberate deep history walks.
+
+    HONEST LIMIT (verified 2026-09-21): settled Kalshi markets are NOT
+    retrievable via any public endpoint (/markets?event_ticker,
+    /events/{ticker}, series+status filters, and direct ticker GETs all
+    return empty/404 for settled rows), so this walk currently yields zero
+    markets. It is kept (bounded) because Kalshi could re-expose settled
+    rows at any time; forward candle accumulation is the real history
+    source. A zero yield is logged as such, never hidden.
 
     This is how historical Kalshi NBA data is obtained: the /markets endpoint
     with a series+status filter returns nothing for settled history; the
@@ -336,7 +368,7 @@ def kalshi_backfill(con, max_pages: int = 40, recent_days: int | None = None) ->
                 if dates and min(dates) < cutoff:
                     break
             time.sleep(0.25)
-        n_events = skipped = 0
+        n_events = skipped = empty_streak = 0
         for e in events:
             ev_ticker = e.get("event_ticker") or e.get("ticker")
             if not ev_ticker:
@@ -345,7 +377,17 @@ def kalshi_backfill(con, max_pages: int = 40, recent_days: int | None = None) ->
             ev_date = engine.parse_event_ticker(ev_ticker)[0]
             if cutoff and ev_date and ev_date < cutoff:
                 continue
+            if empty_streak >= 3:
+                # Settled markets are API-unexposed (verified 2026-09-21):
+                # after 3 consecutive empty events, stop burning a request
+                # per event (400+/series) and just finish the walk.
+                skipped += 1
+                continue
             ms = kalshi.get_markets_by_event(ev_ticker)
+            if not ms:
+                empty_streak += 1
+            else:
+                empty_streak = 0
             for m in ms:
                 try:
                     row = kalshi.parse_market(m, CAP2)
@@ -358,8 +400,12 @@ def kalshi_backfill(con, max_pages: int = 40, recent_days: int | None = None) ->
             total += len(ms)
             time.sleep(0.2)
         db.log_collection(con, "kalshi-backfill", f"kalshi:{s}", "ok",
-                          f"events={n_events} skipped_no_ticker={skipped} markets_total={total}",
+                          f"events={n_events} skipped={skipped} markets_total={total}",
                           rows=n_events)
+    if total == 0:
+        db.log_collection(con, "kalshi-backfill", "kalshi", "empty",
+                          "settled markets not exposed by public API (verified 2026-09-21); "
+                          "forward candle accumulation is the history source", rows=0)
     return total
 
 
@@ -374,24 +420,69 @@ def kalshi_candles_window(con, series_filter: str | None, start_iso: str, end_is
     start = int(util.parse_iso(start_iso).timestamp())
     end = int(util.parse_iso(end_iso).timestamp())
     got = kalshi.get_candlesticks(tickers, start * 1000, end * 1000, interval)
+    n = _store_candles(con, got, interval)
+    db.log_collection(con, "kalshi-candles", "kalshi", "ok" if n else "empty",
+                      f"tickers={len(tickers)} candles={n} window={start_iso}..{end_iso}", rows=n)
+    return n
+
+
+def kalshi_candles_forward(con, days: int = 3, interval: int = 60) -> int:
+    """Candles for currently OPEN game markets (forward history accumulation).
+
+    Settled markets are NOT exposed by the public API (verified 2026-09-21:
+    /markets?event_ticker, /events/{t}, series+status, and direct ticker GETs
+    all return empty/404 for settled rows), so this forward accumulation is
+    the ONLY Kalshi price-history source. Run every collection; idempotent
+    (PK ticker/interval/ts_utc, INSERT OR IGNORE).
+    """
+    now = util.utcnow_iso()
+    start_iso = util.to_iso(util.parse_iso(now) - timedelta(days=days))
+    rows = con.execute(
+        "SELECT ticker FROM kalshi_markets WHERE status IN ('active', 'open') "
+        "AND series_ticker IN ('KXNBAGAME','KXNBASPREAD','KXNBATOTAL','KXNBA1H','KXNBAQ1') "
+        "AND close_time IS NOT NULL AND close_time >= ?", (now,)).fetchall()
+    tickers = [r["ticker"] for r in rows]
+    if not tickers:
+        db.log_collection(con, "kalshi-candles-forward", "kalshi", "empty",
+                          "no open game markets stored yet", rows=0)
+        return 0
+    start = int(util.parse_iso(start_iso).timestamp())
+    end = int(util.parse_iso(now).timestamp())
+    got = kalshi.get_candlesticks(tickers, start * 1000, end * 1000, interval)
+    n = _store_candles(con, got, interval)
+    db.log_collection(con, "kalshi-candles-forward", "kalshi", "ok" if n else "empty",
+                      f"tickers={len(tickers)} candles={n} window={start_iso}..{now}", rows=n)
+    return n
+
+
+def _store_candles(con, got: list[dict], interval: int) -> int:
     n = 0
     C = util.utcnow_iso()
     for entry in got:
         t = entry.get("market_ticker")
         for c in entry.get("candlesticks") or []:
-            ts = c.get("ts") or c.get("timestamp_ms")
+            # Live shape 2026-09-20: {"end_period_ts": 1788..., "price":
+            # {"open_dollars": "0.38", ...}, "volume_fp": "707.69"}. The old
+            # keys (ts/open/high/...) never existed -> every row was NULLs.
+            raw_ts = c.get("end_period_ts")
+            ts = _ms_iso(raw_ts if raw_ts is not None
+                         else (c.get("ts") or c.get("timestamp_ms")))
+            if ts and raw_ts is not None and interval:
+                # end_period_ts is the candle CLOSE; the DB invariant (and
+                # PriceBook's look-ahead guard) is ts = candle OPEN.
+                ts = util.to_iso(util.parse_iso(ts) - timedelta(seconds=interval * 60))
             price = c.get("price") or {}
             db.insert(con, "kalshi_candles", {
                 "ticker": t, "interval": interval,
-                "ts_utc": _ms_iso(ts),
-                "open": price.get("open"), "high": price.get("high"),
-                "low": price.get("low"), "close": price.get("close"),
-                "volume": c.get("volume"),
+                "ts_utc": ts,
+                "open": _dollars_to_cents(price.get("open_dollars"), price.get("open")),
+                "high": _dollars_to_cents(price.get("high_dollars"), price.get("high")),
+                "low": _dollars_to_cents(price.get("low_dollars"), price.get("low")),
+                "close": _dollars_to_cents(price.get("close_dollars"), price.get("close")),
+                "volume": _contracts(c.get("volume_fp"), c.get("volume")),
                 "captured_utc": C,
             })
             n += 1
-    db.log_collection(con, "kalshi-candles", "kalshi", "ok" if n else "empty",
-                      f"tickers={len(tickers)} candles={n} window={start_iso}..{end_iso}", rows=n)
     return n
 
 
@@ -407,17 +498,46 @@ def _ms_iso(ts) -> str | None:
         return None
 
 
+def _dollars_to_cents(*vals) -> int | None:
+    """First present value as integer cents (dollar strings x100)."""
+    for v in vals:
+        if v is None or v == "":
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(v, str) and "." in v:
+            return int(round(f * 100))
+        return int(f)
+    return None
+
+
+def _contracts(*vals) -> int | None:
+    """First present value as integer contracts (never rescaled)."""
+    for v in vals:
+        if v is None or v == "":
+            continue
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 # ------------------------------------------------------------------ CLI
 
 def main():
     ap = argparse.ArgumentParser(description="NBAComp data collection")
-    ap.add_argument("command", choices=["backfill-days", "verify-bref-months", "boxscores",
-                                        "daily", "kalshi-discovery", "kalshi-backfill",
+    ap.add_argument("command", choices=["backfill-days", "backfill-bref-months", "verify-bref-months",
+                                        "boxscores", "daily", "kalshi-discovery", "kalshi-backfill",
                                         "kalshi-snapshot", "kalshi-candles"])
     ap.add_argument("--start", help="YYYYMMDD or ISO")
     ap.add_argument("--end", help="inclusive")
-    ap.add_argument("--months", help="e.g. 2025-10,2025-11 for bref verify")
+    ap.add_argument("--months", help="e.g. 2026:october,2026:november (season-end-year:month)")
     ap.add_argument("--series", default=None)
+    ap.add_argument("--pages", type=int, default=None,
+                    help="kalshi-backfill event pages per series (default 5)")
     args = ap.parse_args()
 
     with db.get_db() as con:
@@ -426,11 +546,15 @@ def main():
         elif args.command == "verify-bref-months" and args.months:
             # tokens are season-end-year:monthname, e.g. 2026:january
             # (Oct-Dec of calendar year Y belong to season ending Y+1)
-            items = []
-            for token in args.months.split(","):
-                y, m = token.strip().split(":")
-                items.append((int(y), m.strip()))
-            print(f"verified: {verify_bref_months(con, items)}")
+            print(f"verified: {verify_bref_months(con, _parse_month_tokens(args.months))}")
+        elif args.command == "backfill-bref-months" and args.months:
+            tot = {"parsed": 0, "inserted": 0, "merged": 0, "skipped": 0}
+            for y, m in _parse_month_tokens(args.months):
+                st = bref.backfill_month(con, y, m)
+                for k in tot:
+                    tot[k] += st.get(k, 0)
+                time.sleep(1.0)
+            print(f"bref backfill: {tot}")
         elif args.command == "boxscores" and args.start:
             d0 = datetime.strptime(args.start, "%Y%m%d")
             d1 = datetime.strptime(args.end, "%Y%m%d") if args.end else d0
@@ -441,32 +565,70 @@ def main():
                 d += timedelta(days=1)
             print(f"boxscore rows: {n}")
         elif args.command == "daily":
+            # Per-task isolation: one crashing source must not discard the
+            # other tasks' work (get_db commits only at clean exit, so each
+            # task commits separately; tracebacks go to stdout AND the
+            # collection_log, never swallowed).
+            def run_task(name, fn, *a, **k):
+                try:
+                    out = fn(*a, **k)
+                    con.commit()
+                    return out
+                except Exception:
+                    import traceback
+                    tb = traceback.format_exc()
+                    print(f"TASK-FAIL {name}:\n{tb}", flush=True)
+                    try:
+                        db.log_collection(con, f"daily-{name}", "nbacomp", "crash",
+                                          tb[-1500:])
+                        con.commit()
+                    except Exception:
+                        pass
+                    return None
+
             now = datetime.now(timezone.utc)
             d = now - timedelta(days=2)
             for _ in range(11):
-                collect_espn_day(con, d.strftime("%Y%m%d"))
+                run_task("espn-day", collect_espn_day, con, d.strftime("%Y%m%d"))
                 d += timedelta(days=1)
-            collect_injuries(con)
-            kalshi_snapshot(con)
+            run_task("injuries", collect_injuries, con)
+            run_task("kalshi-snapshot", kalshi_snapshot, con)
+            # candles for open markets: the ONLY Kalshi history source
+            # (settled markets are not API-exposed). Idempotent.
+            run_task("kalshi-candles-forward", kalshi_candles_forward, con)
             # recent settled events (settlement ground truth for forward bets)
-            kalshi_backfill(con, max_pages=2)
+            run_task("kalshi-backfill", kalshi_backfill, con, max_pages=2)
             # yesterday's boxscores (player logs + rolling features)
             y = now - timedelta(days=1)
-            collect_boxscores(con, y.strftime("%Y%m%d"))
-            # bref verification for the current month
-            bref.verify_month(con, now.year, _month_name(now.month))
+            run_task("boxscores", collect_boxscores, con, y.strftime("%Y%m%d"))
+            # BRef: backfill + verify the current month. Oct-Dec belong to the
+            # season ending NEXT year (2026-10 -> season-end 2027).
+            seas_end = now.year + (1 if now.month >= 10 else 0)
+            run_task("bref-backfill", bref.backfill_month, con, seas_end,
+                     _month_name(now.month))
+            run_task("bref-verify", bref.verify_month, con, seas_end,
+                     _month_name(now.month))
         elif args.command == "kalshi-discovery":
             found = kalshi_discovery(con)
             print(json.dumps({k: v for k, v in found.items() if v["exists"]}, indent=2))
         elif args.command == "kalshi-backfill":
-            print(f"markets stored: {kalshi_backfill(con)}")
+            kw = {"max_pages": args.pages} if args.pages else {}
+            print(f"markets stored: {kalshi_backfill(con, **kw)}")
         elif args.command == "kalshi-snapshot":
             print(f"open markets: {kalshi_snapshot(con)}")
         elif args.command == "kalshi-candles":
-            end = util.utcnow_iso()
+            end = args.end or util.utcnow_iso()
             start = util.parse_iso(args.start) if args.start else util.parse_iso(end) - timedelta(days=30)
             n = kalshi_candles_window(con, args.series, util.to_iso(start), end)
             print(f"candles: {n}")
+
+
+def _parse_month_tokens(months: str) -> list[tuple[int, str]]:
+    items = []
+    for token in months.split(","):
+        y, m = token.strip().split(":")
+        items.append((int(y), m.strip().lower()))
+    return items
 
 
 def _month_name(m: int) -> str:

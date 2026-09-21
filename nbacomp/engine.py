@@ -49,6 +49,10 @@ class KalshiMarketInfo:
     result: str | None = None
     title: str = ""
     subtitle: str = ""
+    # For winner markets: the team YES pays on (live shape 2026-09-20 is one
+    # market per team, e.g. ...OKCSAS-SAS "San Antonio wins"). None = unknown
+    # (legacy single-market rows) -> legacy home=YES behavior is kept.
+    team: str | None = None
 
 
 def match_teams_in_text(text: str) -> set[str]:
@@ -103,6 +107,46 @@ def subtitle_dates(sub) -> list[str]:
         except ValueError:
             continue
     return out
+
+
+def market_team(ticker: str | None, title: str | None, subtitle: str | None) -> str | None:
+    """Which team a winner market pays YES on, or None if unknowable.
+
+    Primary: the market ticker suffix (live shape ...{EVENT}-{TEAM}, verified
+    2026-09-20). Fallback: title/subtitle naming exactly one team
+    ("San Antonio wins"). Anything ambiguous returns None and callers keep
+    the legacy home=YES assumption (never a guess).
+    """
+    if ticker and "-" in ticker:
+        seg = ticker.rsplit("-", 1)[1].upper()
+        if seg in TEAM_NAMES:
+            return seg
+    teams = match_teams_in_text(f"{title or ''} {subtitle or ''}")
+    if len(teams) == 1:
+        return next(iter(teams))
+    return None
+
+
+def store_winner(entry: dict, info: KalshiMarketInfo) -> None:
+    """File a winner market into a per-game entry, preferring the home side.
+
+    entry["winner"] is the home team's market when one is stored (so the YES
+    side is always the home team, as the pricing code assumes); the other
+    side's market is kept as entry["winner_away"] for observed (non-derived)
+    away pricing and team-exact settlement.
+    """
+    if info.market_type != "winner":
+        entry[info.market_type] = info
+        return
+    if info.team and info.home and info.team != info.home:
+        # Away-team market: NEVER the priced leg (pricing assumes YES=home).
+        entry.setdefault("winner_away", info)
+        return
+    cur = entry.get("winner")
+    if cur is None:
+        entry["winner"] = info
+    elif info.team and info.home and info.team == info.home and cur.team != cur.home:
+        entry["winner"] = info
 
 
 def parse_event_ticker(event_ticker: str):
@@ -199,7 +243,8 @@ def map_kalshi_markets(con) -> dict[str, KalshiMarketInfo]:
             market_type=m["market_type"] or "unknown", game_id=g["game_id"],
             home=g["home_team"], away=g["away_team"],
             strike=json.loads(m["strike_values"] or "{}"), result=m["result"],
-            title=m["title"] or "", subtitle=m["subtitle"] or "")
+            title=m["title"] or "", subtitle=m["subtitle"] or "",
+            team=market_team(m["ticker"], m["title"], m["subtitle"]))
     return infos
 
 
@@ -221,9 +266,12 @@ class PriceBook:
                 "AND close IS NOT NULL ORDER BY ticker, ts_utc"):
             self._candles.setdefault(r["ticker"], []).append((r["ts_utc"], float(r["close"])))
         self._books: dict[str, tuple[str, float]] = {}
+        self._ask_history: dict[str, list[tuple[str, float]]] = {}
         for r in con.execute(
                 "SELECT ticker, captured_utc, yes_ask FROM kalshi_orderbooks "
                 "WHERE yes_ask IS NOT NULL ORDER BY captured_utc"):
+            self._ask_history.setdefault(r["ticker"], []).append(
+                (r["captured_utc"], float(r["yes_ask"])))
             prev = self._books.get(r["ticker"])
             if prev is None or r["captured_utc"] >= prev[0]:
                 self._books[r["ticker"]] = (r["captured_utc"], float(r["yes_ask"]))
@@ -267,6 +315,21 @@ class PriceBook:
     def kalshi_live_ask(self, ticker: str) -> PricePoint | None:
         b = self._books.get(ticker)
         return PricePoint(b[0], b[1], "orderbook_ask") if b else None
+
+    def kalshi_ask_at(self, ticker: str, ts_iso: str) -> PricePoint | None:
+        """Last observed orderbook ask at or before ts (forward baselines).
+
+        Our own snapshots are timestamped observations, so an as-of lookup is
+        look-ahead-safe by construction. Returns None until snapshots exist.
+        """
+        hist = (getattr(self, "_ask_history", None) or {}).get(ticker) or []
+        best = None
+        for ts, ask in hist:
+            if ts <= ts_iso:
+                best = PricePoint(ts, ask, "orderbook_ask")
+            else:
+                break
+        return best
 
 
 def espn_odds_at(con, game_id: str, decision_iso: str, market: str) -> dict | None:
@@ -313,16 +376,24 @@ def apply_settlement_kalshi(con, info: KalshiMarketInfo, bet: dict, home_score, 
     market (priced 100 − home price). The desired resolution therefore
     inverts with bet["side"] — this must be honored for BOTH the recorded
     Kalshi result and the score inference.
+
+    Live shape 2026-09-20 is one market per team, so when info.team names the
+    team YES pays on, resolution is computed against THAT team instead of the
+    legacy home=YES assumption (which mis-settles away-team markets).
     """
     if info.market_type == "winner":
         side = bet.get("side") or "home"
-        took_no = side == "away"
+        if info.team and info.home and info.away:
+            bet_team = info.home if side == "home" else info.away
+            took_no = (bet_team != info.team)
+        else:
+            took_no = side == "away"
     else:
         took_no = False  # non-winner markets are bet YES only
         side = "home"
     if info.result in ("yes", "no"):
         want = "no" if took_no else "yes"
-        if info.market_type == "winner":
+        if info.market_type == "winner" and home_score is not None and away_score is not None:
             inferred = settle_score_based("winner", home_score, away_score, side, None)
         else:
             inferred = None
@@ -349,7 +420,8 @@ def _strike(info: KalshiMarketInfo, default) -> float | None:
     try:
         sv = info.strike
         for k in ("above", "below", "strike", "value", "strike_value",
-                  "greater", "less", "over_under"):
+                  "greater", "less", "over_under", "line", "total_line",
+                  "floor_strike", "cap_strike"):
             if k in sv and sv[k] is not None:
                 return float(sv[k])
     except (TypeError, ValueError):
