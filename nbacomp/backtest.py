@@ -81,6 +81,10 @@ def run_backtest(con, seasons: list[str], run_id: str, start_iso: str | None = N
         advance(g["away_team"], gdate)
 
         winner = by_game.get(g["game_id"], {}).get("winner")
+        h_hist = [r for r in sched.history.get(g["home_team"], [])
+                  if r.get("game_date_et") and r["game_date_et"] < gdate]
+        a_hist = [r for r in sched.history.get(g["away_team"], [])
+                  if r.get("game_date_et") and r["game_date_et"] < gdate]
         ctx = {
             "game": g, "decision": decision, "elo": elo,
             "home": g["home_team"], "away": g["away_team"],
@@ -88,6 +92,10 @@ def run_backtest(con, seasons: list[str], run_id: str, start_iso: str | None = N
             "a_roll": rolling.team_rolling(g["away_team"]),
             "h_rest": sched.rest_and_travel(g["home_team"], gdate, True),
             "a_rest": sched.rest_and_travel(g["away_team"], gdate, False),
+            "h_prev": h_hist[-1] if h_hist else None,
+            "a_prev": a_hist[-1] if a_hist else None,
+            "h_streak": team_streak(h_hist),
+            "a_streak": team_streak(a_hist),
             "winner": winner, "total": by_game.get(g["game_id"], {}).get("total"),
             "book": book, "rolling_history": rolling.history,
             "total_line": espn_total_line(con, g["game_id"], decision),
@@ -109,15 +117,30 @@ def run_backtest(con, seasons: list[str], run_id: str, start_iso: str | None = N
                     except Exception as e:
                         db.log_anomaly(con, "warn", "strategy-eval-error",
                                        {"strategy": sid, "err": str(e)[:200], "game": g["game_id"]})
+            # de-duplicate within the run (same strategy can emit the same
+            # signal twice from two code paths, e.g. both teams hot)
+            seen_sigs: set = set()
+            placed_markets: set = set()
             for sig in signals:
-                n_bets += _place_kalshi_bet(con, ctx, sig, winner, price_h, run_id, bankroll, CUR)
+                key = (sig.strategy_id, sig.market, sig.selection, sig.side)
+                if key in seen_sigs:
+                    continue
+                seen_sigs.add(key)
+                n_bets += _place_kalshi_bet(con, ctx, sig, winner, price_h,
+                                            run_id, bankroll, CUR, placed_markets)
 
         # update state WITH this game only after its bets are placed
         elo.update(g["home_team"], g["away_team"], g["home_score"], g["away_score"])
+        hw = 1 if (g["home_score"] or 0) > (g["away_score"] or 0) else 0
+        # scores + W/L feed the streak/bounce rules (NBA-020/021); the row is
+        # only visible to STRICTLY LATER games in the chronological loop.
         sched.add_game({"team": g["home_team"], "game_date_et": gdate,
-                        "is_home": 1, "venue_team": None})
+                        "is_home": 1, "venue_team": None, "pts": g["home_score"],
+                        "opp_pts": g["away_score"], "wl": "W" if hw else "L"})
         sched.add_game({"team": g["away_team"], "game_date_et": gdate,
-                        "is_home": 0, "venue_team": g["home_team"]})
+                        "is_home": 0, "venue_team": g["home_team"],
+                        "pts": g["away_score"], "opp_pts": g["home_score"],
+                        "wl": "L" if hw else "W"})
         advance(g["home_team"], _next_day(gdate))
         advance(g["away_team"], _next_day(gdate))
 
@@ -131,23 +154,70 @@ def _next_day(d: str) -> str:
     return (date(y, m, dd) + timedelta(days=1)).isoformat()
 
 
+def team_streak(rows: list[dict]) -> int:
+    """Current streak from strictly-prior finals: +N win streak, -N loss streak.
+
+    Uses the final score only (an OT loss is a loss — the games table stores
+    final scores, so no regulation/OT distinction is possible or needed).
+    """
+    n = 0
+    for r in reversed(rows or []):
+        wl = r.get("wl")
+        if not wl:
+            break
+        if n == 0:
+            n = 1 if wl == "W" else -1
+            continue
+        expect = "W" if n > 0 else "L"
+        if wl != expect:
+            break
+        n = n + 1 if n > 0 else n - 1
+    return n
+
+
 def _place_kalshi_bet(con, ctx, sig: S.Signal, winner: engine.KalshiMarketInfo,
-                      price_h: engine.PricePoint, run_id: str, bankroll: dict, CUR: str) -> int:
+                      price_h: engine.PricePoint, run_id: str, bankroll: dict, CUR: str,
+                      placed_markets: set | None = None) -> int:
     meta = S.STRATEGIES[sig.strategy_id]
     br = bankroll.setdefault(sig.strategy_id, S.STARTING_BANKROLL)
     prob = sig.model_prob
     if not 0.0 < prob < 1.0:
         return 0
+    # One bet per strategy per market per game: a strategy emitting two
+    # opposite signals in the same game (e.g. NBA-010 hot home + cold away
+    # both on totals) would otherwise hedge itself.
+    if placed_markets is not None:
+        mk = (sig.strategy_id, sig.market)
+        if mk in placed_markets:
+            return 0
+        placed_markets.add(mk)
+    # Never double-bet a game+market already bet by this strategy in this
+    # run (re-runs with more rolling data must not add a conflicting bet).
+    if con.execute(
+            "SELECT 1 FROM bets WHERE strategy_id=? AND game_id=? AND market=? "
+            "AND run_id=? LIMIT 1",
+            (sig.strategy_id, ctx["game"]["game_id"], sig.market, run_id)).fetchone():
+        return 0
+    directional = sig.strategy_id == "NBA-004"
     if sig.market == "kalshi:winner":
         tick = price_h if sig.selection == "home" else engine.PricePoint(
             price_h.ts_utc, 100.0 - price_h.price_cents, "no_side_derived")
         mkt_prob = tick.price_cents / 100.0
-        # Kelly payout odds = the decimal odds actually paid (Kalshi price c
-        # pays 1:1 on c/100 staked -> decimal 100/c). Passing the MODEL's fair
-        # decimal (1/p) would make Kelly f* identically zero -> no bets ever.
-        stake = S.stake_for(br, prob, 100.0 / tick.price_cents)
-        if stake <= 0:
-            return 0
+        if directional:
+            # NBA-004 (v1.1.0): no independent probability estimate exists for
+            # a move-follow rule, so Kelly is undefined (f = 0 for every
+            # price). Fixed 1% stake, bet row labeled directional.
+            stake = round(br * S.LINE_MOVE_STAKE_PCT, 2)
+            if stake < S.MIN_STAKE:
+                return 0
+            prob = mkt_prob  # honest: no probability edge claimed
+        else:
+            # Kelly payout odds = the decimal odds actually paid (Kalshi price c
+            # pays 1:1 on c/100 staked -> decimal 100/c). Passing the MODEL's fair
+            # decimal (1/p) would make Kelly f* identically zero -> no bets ever.
+            stake = S.stake_for(br, prob, 100.0 / tick.price_cents)
+            if stake <= 0:
+                return 0
         contracts, cost = engine.simulate_fill_kalshi(stake, tick.price_cents)
         if contracts <= 0:
             return 0
@@ -180,7 +250,9 @@ def _place_kalshi_bet(con, ctx, sig: S.Signal, winner: engine.KalshiMarketInfo,
             "pnl_usd": round(pnl, 2), "roi": round(pnl / cost, 4) if cost else 0,
             "verification": ("price: last closed hourly candle before decision +1 tick "
                              "(historical book depth unobservable — documented)"),
-            "notes": sig.trigger[:500]}, replace=True)
+            "notes": (("[directional move-follow; model_prob = market prob, fixed 1% "
+                       "stake] " if directional else "") + sig.trigger[:450]),
+        }, replace=False)  # append-only: re-runs must never rewrite history
         if result in ("win", "loss"):
             bankroll[sig.strategy_id] = br + pnl
         return 1
@@ -215,7 +287,7 @@ def _place_kalshi_bet(con, ctx, sig: S.Signal, winner: engine.KalshiMarketInfo,
             "pnl_usd": round(pnl, 2), "roi": round(pnl / stake, 4),
             "verification": ("PRICED-ASSUMPTION: no free historical totals price source; "
                              "simulated at standard -110. Labeled, not hidden."),
-            "notes": sig.trigger[:500]}, replace=True)
+            "notes": sig.trigger[:500]}, replace=False)  # append-only
         bankroll[sig.strategy_id] = br + pnl
         return 1
     return 0
@@ -429,6 +501,92 @@ def eval_travel(ctx):
     return []
 
 
+def eval_blowout(ctx):
+    """NBA-020: the team that lost its previous game by >= 18 bounces."""
+    for side, prev, team in (("home", ctx.get("h_prev"), ctx["home"]),
+                             ("away", ctx.get("a_prev"), ctx["away"])):
+        if not prev or prev.get("pts") is None or prev.get("opp_pts") is None:
+            continue
+        margin = prev["pts"] - prev["opp_pts"]
+        if margin > -18:
+            continue
+        price = _px(ctx)
+        if not price:
+            return []
+        p_home, p_away = _winner_probs(ctx)
+        p_side = (p_home if side == "home" else p_away) + 0.02  # bounce hypothesis
+        mkt_home = price.price_cents / 100.0
+        mkt_side = mkt_home if side == "home" else 1.0 - mkt_home
+        if p_side - mkt_side >= 0.04:
+            sig = _sig(ctx, "NBA-020", side, p_side, mkt_side, price,
+                       f"{team} lost previous game by {abs(margin):.0f} pts (bounce rule)")
+            return [sig]
+    return []
+
+
+def eval_streak(ctx):
+    """NBA-021: fade the market's overreaction to 4+ game streaks.
+
+    Winning streak: the market overvalues the hot team -> bet the OTHER side
+    (its probability rises by the overvaluation, +0.03). Losing streak: the
+    market overfades the cold team -> bet ON it (+0.03).
+    """
+    for side, streak in (("home", ctx.get("h_streak") or 0),
+                         ("away", ctx.get("a_streak") or 0)):
+        if abs(streak) < 4:
+            continue
+        price = _px(ctx)
+        if not price:
+            return []
+        p_home, p_away = _winner_probs(ctx)
+        if streak > 0:
+            bet_side = "away" if side == "home" else "home"
+            p_bet = (p_away if bet_side == "away" else p_home) + 0.03
+            label = (f"fade {ctx[side]} {streak}-game WIN streak "
+                     "(market assumed to overvalue the hot team)")
+        else:
+            bet_side = side
+            p_bet = (p_home if bet_side == "home" else p_away) + 0.03
+            label = (f"back {ctx[side]} {abs(streak)}-game LOSS streak "
+                     "(market assumed to overfade the cold team)")
+        p_bet = min(0.97, p_bet)
+        mkt_home = price.price_cents / 100.0
+        mkt_bet = mkt_home if bet_side == "home" else 1.0 - mkt_home
+        if p_bet - mkt_bet >= 0.04:
+            sig = _sig(ctx, "NBA-021", bet_side, p_bet, mkt_bet, price, label)
+            return [sig]
+    return []
+
+
+def eval_rest_total(ctx):
+    """NBA-022: rest asymmetry (3+ days vs 1 day) raises the total (+4 pts)."""
+    hr, ar = ctx.get("h_rest"), ctx.get("a_rest")
+    if not hr or not ar:
+        return []
+    rests = (float(hr.get("rest_days", 3.0)), float(ar.get("rest_days", 3.0)))
+    if not (max(rests) >= 3.0 and min(rests) <= 1.0):
+        return []
+    setup = _total_setup(ctx)
+    if not setup:
+        return []
+    exp, line = setup
+    exp_adj = exp + 4.0
+    diff = exp_adj - line
+    if diff < 6.0:
+        return []
+    p_side = util.norm_cdf(diff / SD_TOTAL)
+    if p_side - 0.524 < 0.02:
+        return []
+    return [S.Signal(
+        strategy_id="NBA-022", game_id=ctx["game"]["game_id"], market="total",
+        selection=f"over {line:g}", side="over", price=-110, price_format="american",
+        source="kalshi:strike|espn:line", model_prob=p_side, market_prob=0.524,
+        trigger=(f"rest asymmetry home/away={rests[0]:.0f}/{rests[1]:.0f} days; "
+                 f"model {exp:.1f}+4 vs line {line:g} ({diff:+.1f})"),
+        game_label=f"{ctx['away']} @ {ctx['home']} {ctx['game']['game_date_et']}",
+        tipoff_utc=ctx["game"]["tipoff_utc"])]
+
+
 def _total_setup(ctx):
     if not ctx["h_roll"] or not ctx["a_roll"]:
         return None
@@ -557,4 +715,10 @@ EVALUATORS = {
     "NBA-007": eval_travel,
     "NBA-010": eval_regime,
     "NBA-011": eval_oreb_total,
+    "NBA-020": eval_blowout,
+    "NBA-021": eval_streak,
+    "NBA-022": eval_rest_total,
 }
+# NBA-013 (1H markets) is forward-only: no historical 1H price series exists
+# (KXNBA1H candles accumulate from first listing forward), so it has no
+# backtest evaluator by design — not an omission.

@@ -71,14 +71,14 @@ publishes the entire pipeline as a static GitHub Pages site.
 > offseason), no box scores (cursor `20241028`), and **no bets of any kind** — so still
 > **0 backtested strategies, 0 forward-tested strategies, $0 P&L**.
 
-## Strategies discovered (19, all v1.0.0)
+## Strategies discovered (22; most v1.0.0, three revised this pass)
 
 | ID | Username | Category | Win condition |
 |----|----------|----------|--------------|
 | NBA-001 | RestEdgeRaven | Rest & Scheduling (B2B fade) | Back-to-back away vs 2+ day-rested home |
 | NBA-002 | PacePulsePete | Pace & Totals | Rolling pace/efficiency total vs line |
 | NBA-003 | EloOracle | Team Ratings / Moneyline | MOV-adjusted Elo vs Kalshi winner market |
-| NBA-004 | LineMoveTracker | Market Movement | Follow 48h→2h move ≥8¢ |
+| NBA-004 v1.1.0 | LineMoveTracker | Market Movement | Follow 48h→2h move ≥8¢ — now a labeled directional rule with a fixed 1% stake (model_prob = market prob, edge = 0 by construction; it tracks market efficiency, it is not claimed to have model edge) |
 | NBA-005 | InjuryIQIvan | Injuries | Top-2-min Out/Doubtful → opponent winner |
 | NBA-006 | HomeCourtHana | Home/Away | Home rolling home net vs away rolling road net |
 | NBA-007 | RoadWarriorRex | Travel & Schedule Spots | 5+-road-trip finale + 2+ tz shift |
@@ -87,17 +87,23 @@ publishes the entire pipeline as a static GitHub Pages site.
 | NBA-010 | RegimeRanger | Three-Point Regression | Rolling 10 3P% vs season 3P% (totals bias) |
 | NBA-011 | ProfileSage | Shot Profile / OREB | Combined OREB rate matchup vs pace total |
 | NBA-012 | MarketMirrorMia | Cross-Market Divergence | Devigged ESPN ML vs Kalshi ≥4pp |
-| NBA-013 | QuarterQuest | Quarter / Half Markets | Awaiting KXNBA1H/KXNBAQ1 discovery |
+| NBA-013 v1.1.0 | QuarterQuest | Quarter / Half Markets | KXNBA1H live: P(team leads at half) = Φ(Elo-margin/8) vs the 1H ask, 4pp edge gate; settles on Kalshi result, else captured Q1+Q2 scores, else void (stake returned) |
 | NBA-014 | BlowoutBlair | Game Script / Garbage Time | Elo margin ≥13 → starter-points under |
 | NBA-015 | DefRtgLena | Defensive Matchup | Top DRtg vs top ORtg → under total |
 | NBA-016 | FoulToneFern | Foul Rate / Free Throws | FTA-vs-opp FTA mismatch → totals bias |
 | NBA-017 | PaceMatchQuincy | Pace Mismatch | abs(pace mismatch) ≥5 → model total |
 | NBA-018 | OvertoneOlive | Overtone Watcher | OT-game counter (no executable market yet) |
 | NBA-019 | LineupSpotLarry | Starting Lineup | Bench scorer promoted → 1H edge |
+| NBA-020 | BlowoutBounce | Bounce Back | Team lost previous game by ≥18 → bet that team |
+| NBA-021 | StreakSkeptic | Streak Fade | Fade 4+ game streaks (counter-hypothesis) |
+| NBA-022 | RestRigidity | Rest & Scheduling (Totals) | 3+ rest days vs ≤1 day → model total +4, OVER (−110 priced assumption, labeled) |
 
 All entries have unique usernames, version numbers (semver),
 explicit entry rules, exit rules, sizing rules, expected edge,
-failure modes, data limitations, and look-ahead controls.
+failure modes, data limitations, and look-ahead controls. Version
+history is preserved: the v1.0.0 rule text of NBA-004/NBA-013 is kept
+in the registry metadata and their old results would be labeled with
+the old version — no history is rewritten.
 
 ## Strategies backtested (chronologically, no look-ahead)
 
@@ -127,8 +133,42 @@ competition.
   markets; for non-Kalshi markets the verified final score decides; conflicts
   raise anomalies rather than silent resolution.
 - **Look-ahead guards**: enforced in code (PriceBook, append-only DB trigger,
-  no bet inside 1h of tipoff) and tested (38 regression tests cover candle
-  closure, side awareness, no-lookahead, dedup, append-only).
+no bet inside 1h of tipoff) and tested (38 regression tests cover candle
+closure, side awareness, no-lookahead, dedup, append-only).
+
+## Signal validation (outcome-only — no prices, not P&L)
+
+Because no free historical price series exists for any NBA market (see
+Source limitations), a price-taking backtest is impossible without
+fabrication. `nbacomp/signal_backtest.py` therefore validates each
+strategy's **decision rule** against verified final results only: games
+are walked chronologically, Elo + rolling state are fed strictly from
+prior games, and each price-free rule (NBA-001/002/003/006/007/020/021
+plus totals NBA-002/022) is evaluated with no price input. Outcomes are
+whether the picked side won (winner rules) or the model-total error
+(total rules), against league base rates and the in-sample season-mean
+total. Every row is stored (`signal_backtests`, run_id, strategy version,
+decision timestamp, season, side) and summarized per season + pooled
+(`signal_backtest_summary`). The site renders these sections explicitly
+labeled **"decision rule vs verified outcomes (NO market prices; not
+P&L)"** and never mixes them with backtest or forward results.
+
+First run on the committed database (2,788 final games, run
+`smoke-2026-09-21`, logged as R-013):
+
+| Strategy | n | Hit rate | Base rate | Reading |
+|----------|----|----------|-----------|---------|
+| NBA-001 B2B rest | 74 | 66.2% | 54.8% | positive signal |
+| NBA-003 Elo | 1666 | 64.7% | 52.3% | positive signal (large sample) |
+| NBA-007 road trip | 36 | 58.3% | 54.8% | weakly positive, small n |
+| NBA-020 blowout bounce | 669 | 40.1% | 50.3% | **negative** — bounce-back picks lose |
+| NBA-021 streak fade | 990 | 34.2% | 49.8% | **negative** — streaks persist |
+| NBA-002 total model | — | MAE 17.08 | 16.72 | at/below trivial baseline (box coverage partial) |
+| NBA-022 rest total | — | MAE 18.64 | 16.72 | below trivial baseline so far |
+
+NBA-020/021 remain live in the competition as versioned hypotheses; the
+data rejects their rules historically, and the site shows that rather
+than hiding it.
 
 ## Strategies forward-tested (live paper competition)
 
@@ -138,27 +178,49 @@ workflow_dispatch), capturing:
 
 - Live Kalshi orderbook ask for the home-YES side (NO side derived as 100−ask).
 - ESPN moneyline snapshots for divergence detection (NBA-012).
-- Recent ESPN or Kalshi-strike totals/spread lines for NBA-002/010/011.
+- Recent ESPN or Kalshi-strike totals/spread lines for NBA-002/010/011/022.
+- KXNBA1H orderbook asks for NBA-013 (team-leads-at-half).
 - Prop market discovery for NBA-008/009/014 (auto-activates when discovered).
 - Injury adjustments from the ESPN injury board for NBA-005.
 - Closing-line capture at settlement (where candles exist).
 
 Every bet is timestamped at decision time and at settlement time;
-exposure is capped at 25% of bankroll per strategy.
+exposure is capped at 25% of bankroll per strategy. Settlement uses
+only observed data, in priority order: Kalshi recorded result → verified
+final score / captured in-game quarter scores / verified box score vs the
+strike frozen at decision. When a bet is unresolvable 48h after tipoff it
+is **void** (stake returned, no P&L, anomaly logged) — never a guess.
 
-**Result to date: 0 forward bets.** The engine needs (a) upcoming games with
-tipoffs and (b) a mapped Kalshi winner market with a live ask; at `53465b8`
-neither existed (0 games, 0 markets, and the 2026-27 season has not tipped
-off). The leaderboard therefore shows 19 strategies at their $1,000 starting
-bankroll with 0 bets and status `awaiting-opportunity`.
+**Result to date: 9 forward bets, 0 settled.** The first bets were placed by
+the pipeline run of 2026-09-21T04:34Z: NBA-002 (pace/efficiency totals)
+fired UNDER on nine 2026-27 preseason/opening-week games (2026-10-20 →
+2026-10-30) where the model total (215–230) sat 8.7–21.9 points below the
+captured ESPN total line. Each row: real captured line with timestamp,
+`PRICED-ASSUMPTION` label (simulated at standard −110 — no free totals
+price source exists), model/market probability, edge, Kelly-capped stake
+($23.51–$30.00), bankroll event, and the trigger text (model total vs
+line) in `notes`. All 9 are `pending` — the season has not tipped off. No
+other strategy's rules currently fire against live data: winner-market
+strategies wait for the 2026-10-20 KXNBAGAME asks, and NBA-013 waits for
+KXNBA1H markets to open. The leaderboard shows 22 strategies; NBA-002 is
+`active (open bets)` with 9 open, the rest `awaiting-opportunity`.
+
+An earlier revision of this section said 0 forward bets because at
+`53465b8` neither upcoming games with tipoffs nor mapped Kalshi markets
+existed. Both conditions now hold and the engine placed real, timestamped
+bets on the first run in which its rule fired — this is the competition
+starting, not a test artifact.
 
 ## Current paper-trading strategies
 
-All 19 strategies are registered and represented on the leaderboard, each
+All 22 strategies are registered and represented on the leaderboard, each
 with a $1,000 virtual wallet, sorted by total forward P&L (the primary
-competition objective). **Every one of them currently has 0 bets and $0 P&L**
-(`data/leaderboard.json` at `53465b8`: 19 entries, all `pnl: 0.0`,
-`bets: 0`, `status: "awaiting-opportunity"`).
+competition objective). **Currently: 9 open bets (all NBA-002, pending),
+0 settled, $0 P&L.** No strategy has a settled bet yet, so no ROI, win
+rate, or drawdown is claimed. No result of any strategy is ever modified
+after the fact: bet rows are append-only (a DB trigger blocks updates to
+every decision-state column), and settlement outcomes can only move a
+pending bet to win/loss/push/void once.
 
 Two separate reasons, both real:
 
@@ -184,6 +246,14 @@ The core pipeline uses only **keyless, free, public** sources:
 - **NBA.com/stats (stats.nba.com)** — registered but unreachable from
   CI runners (Akamai 403 / connection tarpitting); collectors exist for
   when network conditions allow.
+- **BallDon'tLie API v1 (keyless)** — added this pass: multi-season game
+  lists, per-game box scores and season aggregates. Roles: (1) deepen box
+  scores for seasons the per-game ESPN walk has not reached yet, (2)
+  independent final-score cross-check (conflicts are critical anomalies,
+  never silently resolved — the source is a separate pipeline, i.e.
+  semi-independent), (3) the team rows it provides have OREB=NULL and the
+  model treats such rows as pace-unavailable (never 0). Reachability from
+  CI runners is verified at runtime and recorded in `source_status`.
 - **Basketball-Reference** — independent score verification (BREF monthly
   results pages; HTML scraping).
 - **Kalshi trade-api v2** — public (no-key) market-data endpoint for NBA
@@ -380,13 +450,20 @@ Repair verified by executing it against a copy of the committed 3,393-row databa
 
 | Deleting the 46 `pts=NULL` rows left `team_gamelogs` at **0** — the backfill cursor had already passed those days, so nothing was re-collected | run `3572932`: `team_gamelogs=0` | the backfill restarts at the first final-game date whenever a repair drops rows, and otherwise stays finished |
 
-### Still open
+### Fixed in the bet-integrity & settlement pass (2026-09-21)
 
-- The `audit.run_checks` `injury-listing-late` query joins on team
-  abbrev without considering game-direction; a Player X injury with
-  Team A might trigger a flag against the WRONG game if Team A has
-  two games against different opponents in the same week. Documented
-  as info-level (not critical).
+| Defect | Evidence | Fix |
+|--------|----------|-----|
+| Bet rows could be rewritten after the fact (no DB-level protection of decision state) | none observed — protection gap | `trg_bets_append_only` rebuilt to freeze every decision-state column (`strike`, `market_ticker`, `prop_player`, price, model/market prob, edge, …); placement is append-only with a pre-insert dedup; unit-tested |
+| A strategy could hedge itself (same strategy, over AND under, same game) | code review | `_dedup_per_strategy` keeps only the max-edge signal per strategy per market per game; unit-tested |
+| 1H bets were unresolvable: no settlement path existed for KXNBA1H once a final landed | NBA-013 had no settlement chain | `_settle_1h`: Kalshi recorded result → captured Q1+Q2 cumulative scores (tied half = push) → void with stake returned 48h after tipoff + `unresolvable-1h-settlement` anomaly; unit-tested incl. alias resolution |
+| Prop bets had no settlement path and no frozen decision state (strike/player/ticker) | no prop settlement code existed | `strike`, `market_ticker`, `prop_player` frozen on the bet row at placement (immutable); `_settle_prop` settles on the verified box score vs the frozen strike (exact line = push), cross-checks any captured Kalshi result (mismatch = `prop-settlement-mismatch` critical anomaly, box score stays truth), voids with stake returned when no box score exists 48h on |
+| Bets pointed at a game_id that a later merge re-keyed (silent orphans after dedup) | 497 games merged in the team-vocab repair | `game_aliases` + `engine.resolve_game_id()` (max 5 hops); settlement follows aliases; `alias-target-missing` audit check |
+| `injury-listing-late` flagged injuries against the wrong game (team abbrev, no game direction) | see "still open" note in earlier revision | replaced by `injury-listed-after-own-game` (own-team finals only, within 7 days, info) + `injury-published-after-capture`, `injury-future-capture-ts`, `duplicate-injury-listing` (warn) |
+| OREB=NULL team rows would silently overstate pace by ~12 possessions | BallDon'tLie team rows have no OREB split | `RollingTeamState` reports pace/efficiency as None with `pace_available=False` when OREB is missing in any window row; pace-based rules skip the game (never substitute 0); `dreb` is always None (no source provides it) |
+| Stat-integrity audit checks missing for the spec's "impossible statistics, timestamp errors" requirement | gap | `future-dated-gamelogs` (critical), `impossible-player-stat`, `impossible-team-stat`, `gamelogs-for-unfinalized-game`, `non-monotonic-quarter-scores` |
+
+### Still open
 - `_parse_prop_subtitle` substring-match on player names can in rare
   cases match a name that contains another player's name as a prefix
   (e.g. "Ja" matching "Ja Morant" before "James Harden"). Mitigated
@@ -394,6 +471,15 @@ Repair verified by executing it against a copy of the committed 3,393-row databa
 - The PR #2 first run showed an `action_required` status (Node.js 20
   deprecation warning). Subsequent runs all `success`. Tracking the
   Node 20 action if it persists.
+- BallDon'tLie reachability from GitHub Actions runners is unverified
+  (the sandbox has no egress). The collectors log failures and the ESPN
+  walk remains primary; the first scheduled run will confirm.
+- Kalshi prop-series settlement cross-check assumes YES = "Over X.5" on
+  prop series; if a prop bet's market settles the opposite way the
+  `prop-settlement-mismatch` anomaly will surface it (the box score is
+  still the settlement truth), and the assumption gets corrected.
+- `data/daily.log` was 0 bytes at the last local snapshot although the
+  previous run had completed; re-check on the next read.
 
 ## Known limitations
 
@@ -417,6 +503,9 @@ See **Source limitations** above. Additional structural limits:
 | `parse_team_boxscore` fills `pts` | run `35553997534` stored 46 `team_gamelogs` rows with `pts=NULL`, which would have starved every pace/efficiency feature | pending next run |
 | `espn-backfill` budget 20 → 113 days/run | the walk needs to reach 2023-10 to cover two full seasons | cursor moved `20260901` → `20260511` in run `35553997534` |
 | box-score collectors take `espn:`-namespaced ids only | 41 requests were spent on `bref:` rows whose id is not an ESPN event id | 46 team / 664 player rows landed once the ids matched |
+| `sources/balldontlie.py` + three resumable collectors (seasons, games, boxes), request budget ~150/run, per-run cursors in `meta` | the ESPN per-game box walk is measured at ~2 weeks to reach 2023-24; deep-history box scores and an independent final-score cross-check are available keyless from BallDon'tLie | pending first Actions run (sandbox has no egress; reachability from runners unverified and honestly logged either way) |
+| quarter-score collection from ESPN summaries (`quarter_scores` table, cumulative observed scores only) | KXNBA1H settlement needs the captured halftime score as its fallback source | pending next run |
+| `signal_backtest.py` + pipeline wiring | no free historical prices exist, so decision rules are validated outcome-only (see Signal validation section) | 5,994 rule firings over 2,788 final games in the smoke run; results in R-013 |
 
 ## Recommended next research areas
 
@@ -446,12 +535,13 @@ Run in this pass, in a fresh venv (`python3 -m venv .venv && .venv/bin/pip
 install pytest`), on `arena/01a0c1af-nbacomp`:
 
 ```
-.venv/bin/python -m pytest tests   ->  104 passed
+.venv/bin/python -m pytest tests   ->  131 passed
 
 tests/test_collect_and_backtest.py   9 tests
 tests/test_core.py                  45 tests
 tests/test_live_shapes.py           18 tests
-tests/test_pipeline_fixes.py        30 tests   (new this pass)
+tests/test_pipeline_fixes.py        33 tests
+tests/test_wave2.py                 26 tests   (new this pass)
 ```
 
 The new file pins every defect above: snapshot stores markets that omit
@@ -489,3 +579,9 @@ What remains genuinely unverified is labelled as such: whether Kalshi exposes
 candlesticks or a trade tape for settled NBA markets (probed every run, answer
 recorded in `meta`), and every strategy's actual edge — no strategy has a
 single settled bet, so no performance claim of any kind is made.
+
+The signal-validation numbers in this report are explicitly **signal quality,
+not betting performance**: they measure how often a decision rule picks the
+winning side against verified results, with no prices and no P&L, and they are
+presented only as such. In particular, NBA-020 and NBA-021 show negative
+historical signals, and that is published rather than hidden.

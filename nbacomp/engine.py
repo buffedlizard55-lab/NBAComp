@@ -280,6 +280,36 @@ def map_kalshi_markets(con) -> dict[str, KalshiMarketInfo]:
     return infos
 
 
+def alias_game(con, old_game_id: str, new_game_id: str, reason: str) -> None:
+    """Record that a game row was superseded (bets keep the original id).
+
+    The bets table is append-only and its trigger ABORTS any game_id rewrite,
+    so duplicate-merge repairs must never `UPDATE bets SET game_id`. The
+    alias table is the only bridge between a historical bet's game_id and the
+    canonical games row (2026-09-21 latent defect: `UPDATE bets` inside
+    repair_team_vocab / _merge_espn_game_row would have raised the moment
+    the first forward bet existed).
+    """
+    from . import db, util
+    db.insert(con, "game_aliases", {
+        "old_game_id": old_game_id, "new_game_id": new_game_id,
+        "reason": reason, "created_utc": util.utcnow_iso()}, replace=True)
+    db.log_audit(con, "alias", "game-alias", new_game_id,
+                 {"old": old_game_id, "reason": reason})
+
+
+def resolve_game_id(con, game_id: str) -> str:
+    """Follow alias chains (max 5 hops) to the canonical game id."""
+    cur = game_id
+    for _ in range(5):
+        row = con.execute("SELECT new_game_id FROM game_aliases WHERE old_game_id=?",
+                          (cur,)).fetchone()
+        if not row:
+            return cur
+        cur = row["new_game_id"]
+    return cur
+
+
 @dataclass
 class PricePoint:
     ts_utc: str

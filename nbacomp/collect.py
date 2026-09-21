@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nbacomp import db, engine, util  # noqa: E402
+from nbacomp.sources import balldontlie as bdlt  # noqa: E402
 from nbacomp.sources import bref, espn, kalshi  # noqa: E402
 
 CAP = util.utcnow_iso()
@@ -59,6 +60,7 @@ def collect_espn_day(con, day: str, verify: bool = False) -> int:
     games = espn.parse_scoreboard(r.json)
     for g in games:
         odds = g.pop("_odds", None)
+        quarters = g.pop("_quarters", None)
         if not (engine.is_nba_team(g["home_team"]) and engine.is_nba_team(g["away_team"])):
             db.log_anomaly(con, "info", "non-nba-game-skipped",
                            {"game_id": g["game_id"], "home": g["home_team"],
@@ -66,19 +68,45 @@ def collect_espn_day(con, day: str, verify: bool = False) -> int:
             continue
         g["home_team"] = engine.canon_team(g["home_team"])
         g["away_team"] = engine.canon_team(g["away_team"])
+        # A re-fetch must never wipe a verification earned by an earlier
+        # cross-check (2026-09-21: INSERT OR REPLACE with verified=0
+        # silently downgraded verified rows on every daily run).
+        prev = con.execute(
+            "SELECT verified, verified_against FROM games WHERE game_id=?",
+            (g["game_id"],)).fetchone()
+        verified = prev["verified"] if prev else 0
+        verified_against = prev["verified_against"] if prev else None
         row = {
             "game_id": g["game_id"], "source": g["source"], "season": g["season"],
             "game_date_et": g["game_date_et"] or "", "tipoff_utc": g["tipoff_utc"],
             "home_team": g["home_team"], "away_team": g["away_team"],
             "home_score": g["home_score"], "away_score": g["away_score"],
             "status": g["status"], "neutral_site": g["neutral_site"],
-            "source_updated_utc": None, "captured_utc": CAP, "verified": 0,
+            "source_updated_utc": None, "captured_utc": CAP,
+            "verified": verified, "verified_against": verified_against,
         }
         db.insert(con, "games", row, replace=True)
         if odds:
             _store_espn_odds(con, odds)
+        if quarters:
+            _store_quarters(con, g["game_id"], quarters)
     db.log_collection(con, "espn-day", "espn", "ok", f"date={day}", rows=len(games))
     return len(games)
+
+
+def _store_quarters(con, game_id: str, quarters: list[tuple[int, int, int]]):
+    """Persist observed cumulative per-quarter scores (in-game snapshots).
+
+    Used later for 1H/quarter settlement and OT detection. INSERT OR REPLACE
+    is fine here: each quarter's cumulative score is monotonically observed,
+    and a later snapshot of the SAME quarter can only confirm it (the value
+    for a completed quarter is final once the next quarter exists, and a
+    re-observation of a live quarter simply updates to the freshest truth).
+    """
+    for q, h, a in quarters:
+        db.insert(con, "quarter_scores", {
+            "game_id": game_id, "quarter": q, "home_score": h, "away_score": a,
+            "captured_utc": util.utcnow_iso(), "source": "espn:scoreboard"}, replace=True)
 
 
 def _store_espn_odds(con, odds: dict):
@@ -300,6 +328,8 @@ def _merge_espn_game_row(con, row: dict) -> str:
         (row["game_date_et"], row["away_team"], row["home_team"])).fetchall()
     same = [e for e in existing if e["game_id"] == row["game_id"]]
     if same:
+        # keep any verification earned by an earlier cross-check
+        row["verified"] = max(e["verified"] or 0 for e in same)
         db.insert(con, "games", row, replace=True)
         return "updated"
     others = [e for e in existing if not (e["source"] or "").startswith("espn")]
@@ -404,6 +434,40 @@ def espn_backfill_resumable(con, days_per_run: int = 113,
 # (observed 2026-09-21: bref-backfill/bref-verify "2026-september: HTTP 404").
 BREF_GAME_MONTHS = {"october", "november", "december", "january", "february",
                     "march", "april", "may", "june"}
+
+
+def bref_verify_recent(con, min_rows: int = 50) -> dict:
+    """Cross-verify the most recent month that has final games in the DB.
+
+    The daily `bref-month` task is skipped in the offseason (Jul/Aug/Sep have
+    no BRef page), which left `verifications` at 0 forever after the season
+    ended (2026-09-21: 2,788 finals, 0 verified). This pins verification to
+    the latest month that actually has finals — e.g. June 2026 while the
+    2026-27 season is in its offseason — so the cross-check keeps running
+    year-round. Re-fetches the monthly page whenever that month has fewer
+    than `min_rows` verification rows (cheap: one request, ~1 rps).
+    """
+    row = con.execute(
+        "SELECT MAX(substr(game_date_et,1,7)) m FROM games WHERE status='final'").fetchone()
+    if not row or not row["m"]:
+        db.log_collection(con, "bref-verify-recent", "basketball-reference", "skipped",
+                          "no final games in database")
+        return {"skipped": "no-finals"}
+    y, mo = row["m"].split("-")
+    month = _month_name(int(mo))
+    cal_year = int(y)
+    # Oct-Dec of calendar year Y belong to the season ENDING in Y+1
+    # (same mapping as bref.calendar_year_for, applied in reverse).
+    season_end = cal_year + (1 if month in ("october", "november", "december") else 0)
+    n = con.execute(
+        "SELECT COUNT(*) c FROM verifications WHERE claim LIKE ?",
+        (f"final score % on {y}-{mo}%",)).fetchone()["c"]
+    if n >= min_rows:
+        db.log_collection(con, "bref-verify-recent", "basketball-reference", "ok",
+                          f"{y}-{mo}: {n} verifications already recorded")
+        return {"month": f"{y}-{mo}", "verified": n, "fetched": False}
+    verified = bref.verify_month(con, season_end, month)
+    return {"month": f"{y}-{mo}", "verified": verified, "fetched": True}
 
 
 def bref_current_month(con, now: datetime | None = None) -> dict:
@@ -1086,6 +1150,347 @@ def _contracts(*vals) -> int | None:
     return None
 
 
+# ------------------------------------------------------------------ BallDon'tLie
+#
+# Free, keyless bulk season data (https://www.balldontlie.io/api/v1). Added
+# 2026-09-21: the ESPN box-score walk covers one game per request and takes
+# ~2 weeks to reach 2023-24; BallDon'tLie serves whole seasons (game lists +
+# per-game box scores + per-season aggregates) keyless, which makes
+# multi-season signal validation possible and gives an independent
+# final-score cross-check (semi-independent: a different service aggregating
+# public league data — recorded as such in the registry).
+#
+# HONESTY NOTES:
+# - The `seasons[]` parameter's year semantics are checked against the actual
+#   game dates and the `season` labels in the response; whatever the source
+#   says is what is stored (a mismatch is an anomaly, not silently corrected).
+# - Team box rows derived from summed per-player stats have OREB=NULL (the
+#   source does not split rebounds): consumers must treat pace as unavailable
+#   for such rows (model.RollingTeamState does), never as 0.
+
+BDLT_SEASONS = [2020, 2021, 2022, 2023, 2024]  # requested years; verified from data
+BDLT_CURSOR_KEY = "bdlt_boxscore_cursor"
+
+
+def bdlt_check_and_store_season_games(con, season_start_year: int) -> dict:
+    """Fetch one season's game list; verify/insert games; sanity-check the
+    season semantics from the returned data. Returns stats."""
+    stats = {"games": 0, "verified": 0, "mismatches": 0, "inserted": 0,
+             "date_range": None, "labels": set()}
+    page = 1
+    while True:
+        r = bdlt.season_games(season_start_year, page=page)
+        save_source_status(con, "balldontlie:games", r,
+                           detail=f"seasons[]={season_start_year} page={page}")
+        if not r.ok:
+            db.log_collection(con, "bdlt-season-games", "balldontlie", "fail",
+                               f"seasons[]={season_start_year} page={page}: {r.error}")
+            return stats
+        games, meta = bdlt.parse_game_list(r.json)
+        if not games:
+            break
+        for g in games:
+            stats["labels"].add(g["raw_season"])
+            lo, hi = stats["date_range"] or (g["game_date_et"], g["game_date_et"])
+            stats["date_range"] = (min(lo, g["game_date_et"]), max(hi, g["game_date_et"]))
+            have = con.execute(
+                "SELECT game_id, status, home_score, away_score, verified FROM games "
+                "WHERE game_date_et=? AND home_team=? AND away_team=?",
+                (g["game_date_et"], g["home_team"], g["away_team"])).fetchone()
+            if have:
+                if g["home_score"] is not None and g["away_score"] is not None:
+                    if (have["home_score"] == g["home_score"]
+                            and have["away_score"] == g["away_score"]):
+                        if not have["verified"]:
+                            con.execute("UPDATE games SET verified=1, "
+                                        "verified_against=COALESCE(verified_against,'') || "
+                                        "'+balldontlie' WHERE game_id=?",
+                                        (have["game_id"],))
+                            db.insert(con, "verifications", {
+                                "checked_utc": util.utcnow_iso(),
+                                "claim": (f"final score {have['game_id']} "
+                                          f"{g['away_team']}@{g['home_team']} on {g['game_date_et']}"),
+                                "primary_source": "balldontlie",
+                                "primary_value": f"{g['away_score']}-{g['home_score']}",
+                                "secondary_source": "games table (espn/bref)",
+                                "secondary_value": f"{have['away_score']}-{have['home_score']}",
+                                "status": "match", "discrepancy": None})
+                        stats["verified"] += 1
+                    else:
+                        db.insert(con, "verifications", {
+                            "checked_utc": util.utcnow_iso(),
+                            "claim": (f"final score conflict {g['away_team']}@{g['home_team']} "
+                                      f"on {g['game_date_et']}"),
+                            "primary_source": "balldontlie",
+                            "primary_value": f"{g['away_score']}-{g['home_score']}",
+                            "secondary_source": "games table (espn/bref)",
+                            "secondary_value": f"{have['away_score']}-{have['home_score']}",
+                            "status": "mismatch",
+                            "discrepancy": f"existing={have['game_id']}"})
+                        db.log_anomaly(con, "critical", "score-mismatch-balldontlie",
+                                       {"date": g["game_date_et"],
+                                        "matchup": f"{g['away_team']}@{g['home_team']}",
+                                        "bdlt": f"{g['away_score']}-{g['home_score']}",
+                                        "stored": have["game_id"],
+                                        "stored_score": f"{have['away_score']}-{have['home_score']}"})
+                        stats["mismatches"] += 1
+                continue
+            # new game (no ESPN/BRef row yet): store under the bdlt identity
+            db.insert(con, "games", {
+                "game_id": f"bdlt:{g['bdlt_id']}", "source": "balldontlie",
+                "season": g["season"], "game_date_et": g["game_date_et"],
+                "tipoff_utc": None,  # balldontlie gives date only — never invented
+                "home_team": g["home_team"], "away_team": g["away_team"],
+                "home_score": g["home_score"], "away_score": g["away_score"],
+                "status": "final" if (g["home_score"] is not None
+                                      and g["away_score"] is not None) else "scheduled",
+                "neutral_site": 0, "source_updated_utc": None,
+                "captured_utc": util.utcnow_iso(), "verified": 0}, replace=True)
+            stats["inserted"] += 1
+        stats["games"] += len(games)
+        if page * 250 >= (meta.get("total_count") or 0):
+            break
+        page += 1
+        time.sleep(0.2)
+    # season-semantics sanity check (never corrected, only flagged)
+    lo, hi = (stats["date_range"] or (None, None))
+    expected_lo = f"{season_start_year}-10-01"
+    expected_hi = f"{season_start_year + 1}-06-30"
+    ok_range = lo and hi and lo >= expected_lo and hi <= expected_hi
+    if not ok_range:
+        db.log_anomaly(con, "warn", "bdlt-season-range-unexpected",
+                       {"requested": season_start_year, "observed_range": stats["date_range"],
+                        "labels": sorted(stats["labels"]),
+                        "detail": "the seasons[] parameter's year semantics differ from "
+                                  "expectation; data stored under the source's own labels"})
+    db.insert(con, "meta", {"key": f"bdlt_season_games:{season_start_year}",
+                            "value": json.dumps(stats, default=str),
+                            "updated_utc": util.utcnow_iso()}, replace=True)
+    db.log_collection(con, "bdlt-season-games", "balldontlie", "ok",
+                      f"seasons[]={season_start_year} games={stats['games']} "
+                      f"inserted={stats['inserted']} verified={stats['verified']} "
+                      f"mismatches={stats['mismatches']} range={lo}..{hi} "
+                      f"labels={sorted(stats['labels'])}", rows=stats["games"])
+    return stats
+
+
+def _bdlt_boxscore_cursor(con) -> tuple[int, int]:
+    row = con.execute("SELECT value FROM meta WHERE key=?", (BDLT_CURSOR_KEY,)).fetchone()
+    if not row:
+        return BDLT_SEASONS[0], 0
+    try:
+        s, o = row["value"].split(":")
+        return int(s), int(o)
+    except (ValueError, AttributeError):
+        return BDLT_SEASONS[0], 0
+
+
+def bdlt_boxscores_resumable(con, max_games: int = 150) -> dict:
+    """Box scores for `bdlt:` final games without team_gamelogs yet.
+
+    Cursor = (season_start_year, offset) — offset is the index within the
+    season's game list — walked oldest-season-first. Games whose row already
+    has team_gamelogs from any source are skipped (a request is never spent
+    twice on one game). A fetch failure stops the walk WITHOUT advancing the
+    cursor past the failed game (retried next run). Budget exhaustion saves
+    the cursor at the exact index where it stopped.
+    """
+    season, offset = _bdlt_boxscore_cursor(con)
+    stats = {"season": season, "offset": offset, "fetched": 0, "skipped": 0,
+             "stopped": None, "done": False, "budget": max_games}
+    processed = 0
+    while season in BDLT_SEASONS:
+        page_no = offset // 250 + 1
+        r = bdlt.season_games(season, page=page_no)
+        save_source_status(con, "balldontlie:games", r,
+                           detail=f"boxscore-walk seasons[]={season} p={page_no}")
+        if not r.ok:
+            stats["stopped"] = f"season={season} page={page_no}: {r.error}"
+            break
+        games, meta = bdlt.parse_game_list(r.json)
+        if not games:
+            season = _next_bdlt_season(season)
+            offset = 0
+            if season not in BDLT_SEASONS:
+                stats["done"] = True
+                break
+            continue
+        stop_at: int | None = None
+        for i, g in enumerate(games):
+            idx = offset + i
+            if processed >= max_games:
+                stop_at = idx
+                break
+            gid = f"bdlt:{g['bdlt_id']}"
+            if not con.execute("SELECT 1 FROM games WHERE game_id=?", (gid,)).fetchone():
+                continue  # game list not stored yet; bdlt-season-games covers it
+            covered = con.execute(
+                "SELECT 1 FROM team_gamelogs WHERE game_id=? LIMIT 1", (gid,)).fetchone()
+            if covered:
+                stats["skipped"] += 1
+                continue
+            processed += 1
+            r2 = bdlt.game_boxscore(g["bdlt_id"])
+            save_source_status(con, "balldontlie:boxscore", r2, detail=str(g["bdlt_id"]))
+            if not r2.ok:
+                stats["stopped"] = f"{gid}: {r2.error}"
+                stop_at = idx  # cursor does NOT advance past the failed game
+                break
+            box = bdlt.parse_boxscore(r2.json)
+            if box is None:
+                db.log_anomaly(con, "warn", "bdlt-boxscore-unparsed",
+                               {"bdlt_id": g["bdlt_id"]})
+                stats["skipped"] += 1
+                continue
+            _store_bdlt_boxscore(con, gid, box)
+            stats["fetched"] += 1
+            time.sleep(0.2)
+        if stop_at is not None:
+            _save_bdlt_cursor(con, season, stop_at)
+            break
+        offset = offset + len(games)
+        if offset >= (meta.get("total_count") or 0):
+            season = _next_bdlt_season(season)
+            offset = 0
+            if season not in BDLT_SEASONS:
+                stats["done"] = True
+                break
+    if not stats["done"] and stats["stopped"] is None:
+        _save_bdlt_cursor(con, season, offset)
+    stats["season"], stats["offset"] = season, offset
+    db.log_collection(con, "bdlt-boxscores", "balldontlie",
+                      "done" if stats["done"] else ("fail" if stats["stopped"] else "ok"),
+                      json.dumps(stats, default=str), rows=stats["fetched"])
+    return stats
+
+
+def _next_bdlt_season(season: int) -> int:
+    i = BDLT_SEASONS.index(season)
+    return BDLT_SEASONS[i + 1] if i + 1 < len(BDLT_SEASONS) else -1
+
+
+def _save_bdlt_cursor(con, season: int, offset: int):
+    db.insert(con, "meta", {"key": BDLT_CURSOR_KEY, "value": f"{season}:{offset}",
+                            "updated_utc": util.utcnow_iso()}, replace=True)
+
+
+def _store_bdlt_boxscore(con, game_id: str, box: dict) -> int:
+    """Store one balldontlie box score. Team rows are SUMMED from the
+    per-player rows (a sum of observed values, labeled by source); OREB is
+    NULL because the source does not split rebounds — pace consumers must
+    treat such rows as pace-unavailable, not 0."""
+    day = box["game_date_et"]
+    n = 0
+    for p in box["players"]:
+        if p["team"] not in (box["home_team"], box["away_team"]):
+            continue
+        db.insert(con, "player_gamelogs", {
+            "season": box["season"], "game_id": game_id, "game_date_et": day,
+            "player_id": p["player_id"] or f"name:{p['name']}",
+            "player": p["name"], "team": p["team"], "status": "unknown",
+            "minutes": p["minutes"], "pts": p["pts"], "reb": p["reb"],
+            "ast": p["ast"], "stl": p["stl"], "blk": p["blk"], "tov": p["tov"],
+            "fg3m": p["fg3m"], "fgm": p["fgm"], "fga": p["fga"],
+            "ftm": p["ftm"], "fta": p["fta"], "plus_minus": p["plus_minus"],
+            "source": "balldontlie", "captured_utc": util.utcnow_iso()}, replace=True)
+        n += 1
+    for team in (box["home_team"], box["away_team"]):
+        rows = [p for p in box["players"] if p["team"] == team]
+        if not rows:
+            continue
+        s = lambda k: sum(p[k] or 0 for p in rows)  # noqa: E731 (sum of observed ints)
+        db.insert(con, "team_gamelogs", {
+            "season": box["season"], "game_id": game_id, "game_date_et": day,
+            "team": team,
+            "opp": box["away_team"] if team == box["home_team"] else box["home_team"],
+            "is_home": 1 if team == box["home_team"] else 0,
+            "pts": s("pts"), "opp_pts": None, "wl": None, "minutes": None,
+            "fgm": s("fgm"), "fga": s("fga"), "fg3m": s("fg3m"), "fg3a": s("fg3a"),
+            "ftm": s("ftm"), "fta": s("fta"), "oreb": None, "dreb": None,
+            "reb": s("reb"), "ast": s("ast"), "stl": s("stl"), "blk": s("blk"),
+            "tov": s("tov"), "pf": None, "plus_minus": None,
+            "source": "balldontlie", "captured_utc": util.utcnow_iso()}, replace=True)
+        n += 1
+    # fill opp_pts now that both sides exist
+    con.execute(
+        "UPDATE team_gamelogs SET opp_pts=(SELECT t2.pts FROM team_gamelogs t2 "
+        "WHERE t2.game_id=? AND t2.team!=?) WHERE game_id=? AND team=?",
+        (game_id, box["home_team"], game_id, box["home_team"]))
+    con.execute(
+        "UPDATE team_gamelogs SET opp_pts=(SELECT t2.pts FROM team_gamelogs t2 "
+        "WHERE t2.game_id=? AND t2.team!=?) WHERE game_id=? AND team=?",
+        (game_id, box["away_team"], game_id, box["away_team"]))
+    return n
+
+
+def bdlt_season_stats(con, season_start_year: int) -> dict:
+    """Per-season team + player aggregates (idempotent)."""
+    stats = {"teams": 0, "players": 0}
+    page = 1
+    while True:
+        r = bdlt.season_teams(season_start_year, page=page)
+        save_source_status(con, "balldontlie:teams", r,
+                           detail=f"seasons[]={season_start_year} p={page}")
+        if not r.ok:
+            db.log_collection(con, "bdlt-season-stats", "balldontlie", "fail",
+                               f"teams seasons[]={season_start_year}: {r.error}")
+            return stats
+        for t in bdlt.parse_team_season(r.json):
+            if engine.canon_team(t["team"]) != t["team"]:
+                t["team"] = engine.canon_team(t["team"])
+            if not engine.is_nba_team(t["team"]):
+                continue
+            db.insert(con, "team_season_stats", {
+                "season": t["season"], "team": t["team"], "measure": "Base",
+                "stats_json": t["stats_json"], "source": "balldontlie",
+                "captured_utc": util.utcnow_iso()}, replace=True)
+            stats["teams"] += 1
+        if page * 100 >= 60:  # 30 teams + re-signings rows; one page is plenty
+            break
+        page += 1
+    page = 1
+    while True:
+        r = bdlt.season_players(season_start_year, page=page)
+        save_source_status(con, "balldontlie:players", r,
+                           detail=f"seasons[]={season_start_year} p={page}")
+        if not r.ok:
+            db.log_collection(con, "bdlt-season-stats", "balldontlie", "fail",
+                               f"players seasons[]={season_start_year}: {r.error}")
+            return stats
+        rows = bdlt.parse_player_season(r.json)
+        for p in rows:
+            if engine.canon_team(p["team"]) != p["team"]:
+                p["team"] = engine.canon_team(p["team"])
+            if not engine.is_nba_team(p["team"]):
+                continue
+            raw = p.pop("raw")
+            db.insert(con, "player_season_stats", {
+                "season": p["season"], "player_id": p["player_id"],
+                "player": p["name"], "team": p["team"], "games": p["games"],
+                "minutes": p["minutes"], "pts": p["pts"], "reb": p["reb"],
+                "ast": p["ast"], "stl": p["stl"], "blk": p["blk"], "tov": p["tov"],
+                "fg_pct": p["fg_pct"], "fg3_pct": p["fg3_pct"], "ft_pct": p["ft_pct"],
+                "points_per_game": p["pts"], "rebounds_per_game": p["reb"],
+                "assists_per_game": p["ast"], "per_game_basis": p["per_game_basis"],
+                "stats_json": json.dumps(raw, default=str),
+                "source": "balldontlie", "captured_utc": util.utcnow_iso()},
+                replace=True)
+            stats["players"] += 1
+        meta = (r.json or {}).get("meta") or {}
+        total = meta.get("total_count")
+        if total is None or page * 250 >= int(total or 0):
+            break
+        page += 1
+        time.sleep(0.2)
+    db.insert(con, "meta", {"key": f"bdlt_season_stats:{season_start_year}",
+                            "value": json.dumps(stats, default=str),
+                            "updated_utc": util.utcnow_iso()}, replace=True)
+    db.log_collection(con, "bdlt-season-stats", "balldontlie", "ok",
+                      f"seasons[]={season_start_year} teams={stats['teams']} "
+                      f"players={stats['players']}", rows=stats["teams"] + stats["players"])
+    return stats
+
+
 # ------------------------------------------------------------------ CLI
 
 def main():
@@ -1172,7 +1577,28 @@ def main():
             # is also the only channel that will ever hold pre-game lines.
             run_task("espn-forward", espn_forward_window, con, 42)
             run_task("boxscores-backfill", boxscores_backfill_resumable, con,
-                     "20241001", now.strftime("%Y%m%d"), 40)
+                     "20241001", now.strftime("%Y%m%d"), 150)
+            # BallDon'tLie deep history: one season's game list + cross-check
+            # per run until every requested season is done, then the box-
+            # score walk (resumable, budgeted) and one season's aggregates.
+            for y in BDLT_SEASONS:
+                done = con.execute(
+                    "SELECT 1 FROM meta WHERE key=?",
+                    (f"bdlt_season_games:{y}",)).fetchone()
+                if not done:
+                    run_task("bdlt-season-games", bdlt_check_and_store_season_games, con, y)
+                    break
+            run_task("bdlt-boxscores", bdlt_boxscores_resumable, con, 150)
+            for y in BDLT_SEASONS:
+                done = con.execute(
+                    "SELECT 1 FROM meta WHERE key=?",
+                    (f"bdlt_season_stats:{y}",)).fetchone()
+                if not done:
+                    run_task("bdlt-season-stats", bdlt_season_stats, con, y)
+                    break
+            # year-round independent verification (bref-month skips the
+            # offseason, which left 0 verifications after the season ended)
+            run_task("bref-verify-recent", bref_verify_recent, con)
             run_task("injuries", collect_injuries, con)
             run_task("kalshi-snapshot", kalshi_snapshot, con)
             # candles for open markets: the ONLY Kalshi history source

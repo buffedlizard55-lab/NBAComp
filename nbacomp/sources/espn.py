@@ -13,6 +13,7 @@ data/diagnostics.txt and the research log):
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 from .. import http
@@ -108,10 +109,50 @@ def parse_scoreboard(js: dict) -> list[dict]:
             if odds:
                 g["_odds"] = _parse_odds(odds[0] if isinstance(odds, list) else odds,
                                          f"espn:{ev.get('id')}")
+            qs = parse_quarters(ev)
+            if qs:
+                g["_quarters"] = qs
             out.append(g)
         except Exception:
             continue
     return out
+
+
+def parse_quarters(ev: dict) -> list[tuple[int, int, int]]:
+    """Per-quarter cumulative team scores from an in-game scoreboard event.
+
+    Returns [(quarter, home_cum, away_cum), ...] ONLY from an observed
+    `scores` list on the competitors (e.g. {"value":"21","detail":"Q1"}).
+    When the shape is not recognized the function returns [] — quarter data
+    is never reconstructed from anything else (1H/quarter settlement
+    depends on this being real).
+    """
+    try:
+        comp = (ev.get("competitions") or [{}])[0]
+        qh: dict[int, int] = {}
+        qa: dict[int, int] = {}
+        for c in comp.get("competitors", []) or []:
+            scores = c.get("scores")
+            if not isinstance(scores, list):
+                return []
+            target = qh if c.get("homeAway") == "home" else qa
+            for s in scores:
+                detail = str(s.get("detail") or "")
+                m = re.match(r"([1-9])", detail)
+                if not m:
+                    return []
+                try:
+                    target[int(m.group(1))] = int(str(s.get("value")))
+                except (TypeError, ValueError):
+                    return []
+        if not qh or not qa:
+            return []
+        out = []
+        for q in sorted(set(qh) & set(qa)):
+            out.append((q, qh[q], qa[q]))
+        return out
+    except Exception:
+        return []
 
 
 def _season_label(season: dict | None) -> str:

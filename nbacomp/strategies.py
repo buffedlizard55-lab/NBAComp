@@ -19,7 +19,7 @@ from . import util
 class Signal:
     strategy_id: str
     game_id: str
-    market: str                 # kalshi:winner | ml | total | prop:*
+    market: str                 # kalshi:winner | ml | total | 1h | prop:*
     selection: str              # which team / over-under
     side: str                   # yes/no/over/under
     price: float                # cents (kalshi) or american odds
@@ -31,6 +31,11 @@ class Signal:
     game_label: str = ""
     tipoff_utc: str | None = None
     source_ts: str | None = None
+    # decision-state extras frozen into the bet row (2026-09-21, prop/1h
+    # settlement needs the market identity + strike at decision time):
+    strike: float | None = None
+    market_ticker: str | None = None
+    prop_player: str | None = None
 
     @property
     def edge(self) -> float:
@@ -104,22 +109,34 @@ register("NBA-003", version="1.0.0", name="Elo Oracle", username="EloOracle",
          data_limitations=["no lineup-level ratings yet"],
          lookahead_controls=["Elo updated only with games before decision"])
 
-register("NBA-004", version="1.0.0", name="Line Move Tracker", username="LineMoveTracker",
+register("NBA-004", version="1.1.0", name="Line Move Tracker", username="LineMoveTracker",
          category="Market Movement",
          thesis=("Sustained pre-game moves in the game-winner market contain information "
                  "not yet fully incorporated at the decision time (follow, not fade)."),
          description=("Compares the Kalshi winner price ~48h before tipoff with the price "
-                      "~2h before tipoff; follows moves of >= 8 cents in the moved direction."),
+                      "~2h before tipoff; follows moves of >= 8 cents in the moved direction. "
+                      "v1.1.0 (2026-09-21): the v1.0.0 sizing was a Kelly fraction computed "
+                      "with model_prob = market_prob, which is mathematically ZERO for every "
+                      "price — the strategy could never place a bet (found in adversarial "
+                      "review). It now trades a FIXED 1% of bankroll per signal: this is a "
+                      "directional-information bet with no probability edge claimed, so "
+                      "Kelly sizing (which requires an independent probability estimate) "
+                      "does not apply. The bet row stores model_prob = market probability "
+                      "at entry and edge = 0, labeled 'directional move-follow'."),
          market_types=["kalshi:winner"],
-         data_sources=["kalshi:candles"],
-         entry_rules=["|price(T-2h) - price(T-48h)| >= 8 cents", "both prices exist"],
+         data_sources=["kalshi:candles", "kalshi:orderbooks"],
+         entry_rules=["|price(T-2h) - price(T-48h)| >= 8 cents", "both prices exist",
+                      "fixed 1% stake (directional rule; no probability edge claimed)"],
          exit_rules=["settle at game conclusion"],
-         sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
+         sizing_rules="FIXED 1% of current bankroll (v1.1.0; Kelly with model_prob=market "
+                      "price is identically zero — the v1.0.0 rule could never trade)",
          historical_window="same as price history availability",
          expected_edge="no assumed edge; movement is treated as informative ONLY by test result",
-         failure_modes=["movement already complete", "noise at low liquidity", "one-sided flow"],
+         failure_modes=["movement already complete", "noise at low liquidity", "one-sided flow",
+                        "fixed stake overbets strong moves and underbets weak ones"],
          data_limitations=["candles are last-trade based; historical book depth unknown"],
-         lookahead_controls=["both price points strictly before decision"])
+         lookahead_controls=["both price points strictly before decision"],
+         lineage="NBA-004 v1.0.0 (sizing fix only; signal rule unchanged)")
 
 register("NBA-005", version="1.0.0", name="Injury IQ Ivan", username="InjuryIQIvan",
          category="Injuries",
@@ -271,23 +288,41 @@ register("NBA-012", version="1.0.0", name="Market Mirror Mia", username="MarketM
          data_limitations=["ESPN odds snapshots only exist from collection start forward"],
          lookahead_controls=["both prices timestamped at decision time"])
 
-register("NBA-013", version="1.0.0", name="Quarter Quest", username="QuarterQuest",
+register("NBA-013", version="1.1.0", name="Quarter Quest", username="QuarterQuest",
          category="Quarter / Half Markets",
-         thesis=("First-quarter scoring environments differ by matchup pace and starting-unit "
-                 "minutes; quarter markets may lag full-game signals."),
-         description=("STATUS: awaiting verified quarter/half market discovery in collected "
-                      "Kalshi data. Rules activate only when a Q1/1H series is confirmed; "
-                      "no signals are generated until then."),
-         market_types=["kalshi:q1", "kalshi:1h"],
-         data_sources=["kalshi:series-discovery"],
-         entry_rules=["pending market discovery"],
-         exit_rules=["pending"],
+         thesis=("The team likely to lead at halftime is predictable from the full-game "
+                 "rating differential; first-half winner contracts (KXNBA1H) may lag the "
+                 "full-game price because less attention is paid to them."),
+         description=("v1.1.0 (2026-09-21): the KXNBA1H series is confirmed to exist "
+                      "(runtime discovery) but had no live events yet, so no rule existed. "
+                      "Now: when a game's 1H market has a live orderbook ask, compute the "
+                      "model probability that HOME leads at halftime "
+                      "(P = normal_cdf(elo_margin / 8.0), 8.0 = prior SD of NBA half "
+                      "margins, documented) and buy the side (home YES / away NO) when "
+                      "model - market >= 4pp. Settlement: Kalshi's recorded result for "
+                      "the 1H market when captured; otherwise the captured in-game "
+                      "quarter scores (Q1+Q2 leader) from ESPN scoreboard snapshots; "
+                      "when neither exists the bet is marked void with the stake "
+                      "returned (no P&L) after 48h — a settlement-data gap is never "
+                      "resolved by guessing. No historical 1H prices exist (forward "
+                      "only)."),
+         market_types=["kalshi:1h"],
+         data_sources=["kalshi:series-discovery", "kalshi:orderbooks", "espn:scoreboard (in-game quarters)"],
+         entry_rules=["game has a mapped KXNBA1H market with a live ask",
+                      "|model_half_prob - market_prob| >= 0.04"],
+         exit_rules=["settle from Kalshi 1H result, or captured Q1+Q2 scores, else "
+                     "void (stake returned) 48h after the game is final"],
          sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
-         historical_window="pending",
-         expected_edge="unknown - pending data",
-         failure_modes=["no such series exists publicly", "illiquidity"],
-         data_limitations=["series existence auto-probed nightly"],
-         lookahead_controls=["n/a until active"])
+         historical_window="forward only (no free historical 1H prices; KXNBA1H candles "
+                           "accumulate from listing forward)",
+         expected_edge="no assumed edge; hypothesis under test",
+         failure_modes=["1H markets thin/illiquid", "half margin SD prior wrong",
+                        "settlement data gaps (quarter snapshots depend on 6h cadence)"],
+         data_limitations=["quarter scores only where in-game scoreboard snapshots "
+                           "were captured; 1H history starts at first listing"],
+         lookahead_controls=["model from strictly prior games; price = observed ask at "
+                             "decision; settlement only from observed half data"],
+         lineage="NBA-013 v1.0.0 (rule activation; the v1.0.0 placeholder had no executable rule)")
 
 register("NBA-014", version="1.0.0", name="Blowout Blair", username="BlowoutBlair",
          category="Game Script / Garbage Time",
@@ -411,6 +446,91 @@ register("NBA-019", version="1.0.0", name="LineupSpot Larry", username="LineupSp
          lookahead_controls=["only lineups published strictly before decision"])
 
 
+register("NBA-020", version="1.0.0", name="Blowout Bounce", username="BlowoutBounce",
+         category="Game Script / Motivation",
+         thesis=("Teams that lose by 18+ points slightly overperform in their next game "
+                 "(rotation shakeup, intensity reset) more than the market prices from "
+                 "ratings alone."),
+         description=("When one of today's teams lost its IMMEDIATELY PREVIOUS game by "
+                      ">= 18 points, bet that team's winner contract when the Elo model "
+                      "plus a +2pp bounce adjustment clears the market by >= 4pp. Uses "
+                      "only verified final scores from the previous game (strictly prior "
+                      "by construction). Signal-validation backtest: next-game win rate "
+                      "after blowout losses vs base rate, per season."),
+         market_types=["kalshi:winner", "ml"],
+         data_sources=["espn:scoreboard", "kalshi:markets", "kalshi:candles"],
+         entry_rules=["team lost previous game by >= 18",
+                      "(elo_prob + 0.02) - market_prob >= 0.04"],
+         exit_rules=["settle at game conclusion"],
+         sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
+         historical_window="all seasons with verified finals (signal validation); "
+                           "market P&L only where prices exist",
+         expected_edge="no assumed edge; the +2pp bounce is the hypothesis itself",
+         failure_modes=["market already adjusts for blowout losses", "one-off event "
+                        "(lockout, mass DNP)", "small sample"],
+         data_limitations=["'previous game' = chronological predecessor in the games "
+                           "table; no in-between-game events (trade deadline etc.)"],
+         lookahead_controls=["previous game must be final before the decision; "
+                             "price at or before decision"])
+
+register("NBA-021", version="1.0.0", name="Streak Skeptic", username="StreakSkeptic",
+         category="Streak Persistence / Market Overreaction",
+         thesis=("The market overweights recent streaks: it over-fades 4+ game losing "
+                 "streaks and over-pays for 4+ game winning streaks. Fading the market's "
+                 "streak premium is a value bet."),
+         description=("Two-sided rule on the game-winner market: if a team is on a 4+ game "
+                      "WINNING streak, bet AGAINST it (elo_prob - 0.03 adjustment, market "
+                      "assumed to overvalue the hot team); if on a 4+ game LOSING streak, "
+                      "bet ON it (elo_prob + 0.03, market assumed to overfade the cold "
+                      "team). Bets when adjusted model - market >= 4pp. Streaks are "
+                      "computed from the chronological final-score history only. "
+                      "Signal-validation backtest: next-game win rate after 4+ streaks, "
+                      "split by streak sign, per season."),
+         market_types=["kalshi:winner", "ml"],
+         data_sources=["espn:scoreboard", "kalshi:markets", "kalshi:candles"],
+         entry_rules=["|streak| >= 4 games", "sign-adjusted (elo_prob +/- 0.03) - "
+                      "market_prob >= 0.04"],
+         exit_rules=["settle at game conclusion"],
+         sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
+         historical_window="all seasons with verified finals (signal validation); "
+                           "market P&L only where prices exist",
+         expected_edge="no assumed edge; the +/-3pp overreaction is the hypothesis",
+         failure_modes=["streaks are (near-)random by construction — the edge, if any, "
+                        "lives in the market's reaction, not the team", "small sample",
+                        "streak definition disputes (does an OT loss count? yes, final "
+                        "score only)"],
+         data_limitations=["streak length limited to collected seasons"],
+         lookahead_controls=["streak from strictly prior finals; price at or before "
+                             "decision"])
+
+register("NBA-022", version="1.0.0", name="Rest Rigidity", username="RestRigidity",
+         category="Rest & Scheduling (Totals)",
+         thesis=("Mixing a fully rested team (3+ rest days) with a back-to-back team "
+                 "raises game totals: the tired team chases the lead with threes and "
+                 "plays faster. The market's total line is set from both teams' rolling "
+                 "pace and does not carry a rest-asymmetry adjustment."),
+         description=("Model-total adjustment: +4 points when (max(team rest days) >= 3 "
+                      "AND min(team rest days) <= 1). When an observed total line exists "
+                      "(ESPN snapshot or KXNBATOTAL strike) and (model_total + 4) - line "
+                      ">= 6, bet OVER at -110 (documented PRICED-ASSUMPTION where the "
+                      "line is not an observed market price). Rest days come from the "
+                      "strictly-prior schedule history. Signal validation: totals "
+                      "distribution in rest-asymmetric games vs symmetric games."),
+         market_types=["kalshi:total", "total"],
+         data_sources=["espn:scoreboard", "espn:scoreboard-odds", "kalshi:markets"],
+         entry_rules=["max rest >= 3 and min rest <= 1", "rest_asymmetry_total_model - "
+                      "line >= 6", "observed total line exists"],
+         exit_rules=["settle on final score vs the line stored at decision"],
+         sizing_rules="Fractional Kelly (25%), capped at 3% of bankroll, min $5",
+         historical_window="forward-first (lines exist only from collection start); "
+                           "signal validation on all seasons",
+         expected_edge="no assumed edge; the +4pt rest asymmetry is the hypothesis",
+         failure_modes=["charters erase the B2B cost", "coaches slow the game in "
+                        "blowouts (garbage time)", "small sample"],
+         data_limitations=["rest measured in calendar days, not minutes of travel"],
+         lookahead_controls=["rest from strictly prior games; line observed at or "
+                             "before decision; -110 fill labeled PRICED-ASSUMPTION"])
+
 COMPETITION_START = "2026-09-20"
 COMPETITION_END = "2027-09-19"
 STARTING_BANKROLL = 1000.0
@@ -418,6 +538,10 @@ STARTING_BANKROLL = 1000.0
 KELLY_FRACTION = 0.25
 MAX_STAKE_PCT = 0.03
 MIN_STAKE = 5.0
+# NBA-004 (line-move) is a directional rule: it has no independent probability
+# estimate, so Kelly is undefined for it (model_prob = market_prob -> f = 0).
+# It trades a fixed fraction of bankroll instead (documented on the strategy).
+LINE_MOVE_STAKE_PCT = 0.01
 
 
 def stake_for(bankroll: float, model_prob: float, decimal_odds: float) -> float:

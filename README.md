@@ -27,8 +27,11 @@ RESEARCH → DISCOVER → VERIFY → MODEL → BACKTEST → FORWARD TEST → PAP
 4. **Backtest** where verified price history exists (Kalshi candlesticks for NBA winner
    markets), with Kalshi fee schedule and 1-tick slippage. **Forward-test** where it
    doesn't (props, totals lines pre-2026-27) — labeled assumptions never passed off as
-   observed prices.
-5. **Paper-trade**: 19 strategies, $1,000 each, 25%-Kelly capped at 3% per bet, settled from
+   observed prices. Because **no free historical price series exists at all**, the
+   decision rules are additionally validated **outcome-only** against verified final
+   results (`signal_backtest.py`), and those results are published as *signal quality,
+   not P&L* — never mixed with backtest or forward records.
+5. **Paper-trade**: 22 strategies, $1,000 each, 25%-Kelly capped at 3% per bet, settled from
    verified results. Backtest / forward records are always kept separate.
 6. **Publish**: static site rebuilt each run — dashboard, leaderboard, per-strategy pages,
    upcoming bets, open positions, full trade history, source registry, research log,
@@ -37,22 +40,26 @@ RESEARCH → DISCOVER → VERIFY → MODEL → BACKTEST → FORWARD TEST → PAP
 
 ## Current state (verified 2026-09-21, after the fix run)
 
-Read this before reading any result on the site. The competition has **no results yet** —
-no strategy has a settled bet, so no P&L, ROI or edge is claimed anywhere.
+Read this before reading any result on the site. The competition has **no settled
+results yet** — 9 forward bets are open (all NBA-002, all `pending`, the 2026-27
+season has not tipped off), zero are settled, so no P&L, ROI or edge is claimed
+anywhere.
 
-What the database actually holds after Actions run `35553630400` (commit `f2133d9`,
-2026-09-21T02:18:37Z), read out of `data/db_report.txt` and `data/nbacomp.db`:
+What the database actually holds after the auto-run of commit `8be85b1`
+(2026-09-21T03:15:27Z) and the pipeline run of 2026-09-21T04:34Z that
+placed the competition's first bets, read out of `data/nbacomp.db`:
 
 | table | rows | note |
 |-------|------|------|
-| `games` | 2,886 | 2024-10-22 → 2026-10-21 (finals + the scheduled 2026-27 preseason/openers), one canonical row per game |
+| `games` | 2,961 | 2,788 finals (2024-10 → 2026-04) + 173 scheduled 2026-27 (incl. the 2026-10-20 openers), one canonical row per game; 0 cross-verified so far |
 | `kalshi_markets` | 59 | 6 `KXNBAGAME` (the 2026-10-20 openers) + 53 `KXNBAMVP`, all live/active |
-| `kalshi_candles` | 406 | hourly OHLCV for those 6 openers, 2026-09-18 → 2026-09-21 |
-| `kalshi_orderbooks` | 6 | real quotes, e.g. `KXNBAGAME-26OCT20OKCSAS-SAS` bid 53 / ask 54 |
-| `odds_snapshots` | 48 | all **forward**: ESPN keeps no odds for past dates, so these are the first lines ever captured |
+| `kalshi_candles` | 412 | hourly OHLCV for those 6 openers, accumulating since 2026-09-18 |
+| `kalshi_orderbooks` | 48 | real quotes, e.g. `KXNBAGAME-26OCT20OKCSAS-SAS` bid 53 / ask 54 |
+| `odds_snapshots` | 240 | all **forward**: ESPN keeps no odds for past dates, so these are the first lines ever captured |
 | `injuries` | 0 | ESPN injury board is empty in the offseason |
-| `team_gamelogs` / `player_gamelogs` | 46 / 664 | box-score walk in progress; the first 46 rows had `pts=NULL` and are re-collected |
-| `bets` | 0 | no game market has tipped off yet |
+| `team_gamelogs` / `player_gamelogs` | 182 / 3,158 | box-score walk in progress (~2,697 ESPN finals still lack team box scores — the new BallDon'tLie deep-history collectors target exactly this gap) |
+| `quarter_scores` | 0 | KXNBA1H settlement fallback; starts filling as in-game scores are captured |
+| `bets` | 9 | all **open** (NBA-002 UNDER on 2026-27 preseason/opening-week lines, `PRICED-ASSUMPTION` at −110); none settled — the season has not tipped off |
 | `verifications` | 0 | cross-verification runs once ESPN and BRef rows overlap |
 
 Three facts this establishes rather than assumes:
@@ -94,12 +101,12 @@ pinned by `tests/test_pipeline_fixes.py` (research-log entries 9 and 10):
 
 ## The competition
 
-- Window: **2026-09-20 → 2027-09-19** · 19 strategies · primary objective: **total return**
+- Window: **2026-09-20 → 2027-09-19** · 22 strategies · primary objective: **total return**
 - Risk stats (drawdown, win rate, volatility) tracked and shown, not used for ranking
 - Losing strategies are never hidden; every strategy page carries an auto-generated
   "why it worked / failed" analysis that is sample-size aware
 
-## Strategy families (all v1.0.0, 19 registered)
+## Strategy families (22 registered; most v1.0.0, three revised)
 
 IDs, usernames and categories below are generated from `nbacomp/strategies.py` — the same
 registry that populates the database and the site, so this table cannot drift from them.
@@ -109,7 +116,7 @@ registry that populates the database and the site, so this table cannot drift fr
 | NBA-001 | RestEdgeRaven | Rest & Scheduling | 1.0.0 |
 | NBA-002 | PacePulsePete | Pace & Totals | 1.0.0 |
 | NBA-003 | EloOracle | Team Ratings / Moneyline | 1.0.0 |
-| NBA-004 | LineMoveTracker | Market Movement | 1.0.0 |
+| NBA-004 | LineMoveTracker | Market Movement | 1.1.0 (labeled directional, fixed 1% stake) |
 | NBA-005 | InjuryIQIvan | Injuries | 1.0.0 |
 | NBA-006 | HomeCourtHana | Home/Away | 1.0.0 |
 | NBA-007 | RoadWarriorRex | Travel & Schedule Spots | 1.0.0 |
@@ -118,21 +125,25 @@ registry that populates the database and the site, so this table cannot drift fr
 | NBA-010 | RegimeRanger | Three-Point Regression | 1.0.0 |
 | NBA-011 | ProfileSage | Shot Profile / Offensive Rebounding | 1.0.0 |
 | NBA-012 | MarketMirrorMia | Cross-Market Divergence | 1.0.0 |
-| NBA-013 | QuarterQuest | Quarter / Half Markets | 1.0.0 |
+| NBA-013 | QuarterQuest | Quarter / Half Markets | 1.1.0 (live KXNBA1H vs Elo half-probability) |
 | NBA-014 | BlowoutBlair | Game Script / Garbage Time | 1.0.0 |
 | NBA-015 | DefRtgLena | Defensive Matchup | 1.0.0 |
 | NBA-016 | FoulToneFern | Foul Rate / Free Throws | 1.0.0 |
 | NBA-017 | PaceMatchQuincy | Pace Mismatch | 1.0.0 |
 | NBA-018 | OvertoneOlive | Overtone Watcher | 1.0.0 |
 | NBA-019 | LineupSpotLarry | Starting Lineup | 1.0.0 |
+| NBA-020 | BlowoutBounce | Bounce Back | 1.0.0 |
+| NBA-021 | StreakSkeptic | Streak Fade (counter-hypothesis) | 1.0.0 |
+| NBA-022 | RestRigidity | Rest & Scheduling (Totals) | 1.0.0 |
 
 Each carries a hypothesis, entry/exit rules, sizing rule, expected edge, failure modes, data
 limitations and look-ahead controls; the full text is on the site's strategy pages.
 
 ## Data policy (non-negotiables)
 
-- Core pipeline = **keyless, free, public** sources only (ESPN, NBA.com/stats, Kalshi
-  public market data). Registration-required or paid sources are excluded and documented.
+- Core pipeline = **keyless, free, public** sources only (ESPN, NBA.com/stats,
+  BallDon'tLie, Basketball-Reference, Kalshi public market data).
+  Registration-required or paid sources are excluded and documented.
 - Free trials / freemium tiers are **not** treated as free.
 - Nothing is invented: no odds, no stats, no fills, no liquidity, no results. If something
   can't be verified it is marked **unverified** and worked around.
@@ -155,7 +166,7 @@ The sandbox/dev image has no pytest and a PEP-668-managed system Python, so use 
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pytest
-.venv/bin/python -m pytest tests          # offline suite, no network needed (102 tests)
+.venv/bin/python -m pytest tests          # offline suite, no network needed (131 tests)
 .venv/bin/python -m nbacomp.collect daily  # needs open internet (runs automatically in CI)
 .venv/bin/python tools/run_pipeline.py     # strategies + engines + audit + site build
 .venv/bin/python tools/db_report.py        # row counts + collection health (CI gate)
@@ -169,6 +180,8 @@ Collection tasks (`python -m nbacomp.collect <task>`):
 | `espn-backfill` | walks the ESPN scoreboard **backwards** (schedule + results — ESPN keeps no odds for past dates), cursor in `meta`, floor `20231001` | 113 days/run |
 | `espn-forward` | upcoming schedule + tipoffs and the first pre-game lines | 42 days/run |
 | `boxscores-backfill` | box scores for FINAL games not yet logged, cursor in `meta` | 40 games/run |
+| `bdlt-season-games` (in `daily`) | BallDon'tLie season game lists: deep-history scores + independent final-score cross-check (`score-mismatch-balldontlie` on conflict), resumable per season | ~150 requests/run budget |
+| `bdlt-boxscores` (in `daily`) | BallDon'tLie per-game box scores for finals missing team rows (OREB=NULL rows make pace features unavailable, never 0), cursor in `meta` | ~150 requests/run budget |
 | `kalshi-discovery` | probes candidate NBA series tickers, records which exist | 1 page each |
 | `kalshi-snapshot` | OPEN markets + orderbooks (forward prices) | live series |
 | `kalshi-candles` | candlesticks for stored markets in a window | window |
