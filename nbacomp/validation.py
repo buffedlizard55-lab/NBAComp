@@ -99,11 +99,36 @@ def _latest_run(con) -> str | None:
     return row["run_id"] if row else None
 
 
+def _hist_run(con) -> str | None:
+    row = con.execute("SELECT run_id FROM hist_backtests ORDER BY generated_utc "
+                      "DESC LIMIT 1").fetchone()
+    return row["run_id"] if row else None
+
+
 def evidence_for(con, strategy_id: str) -> dict:
-    """Raw validation evidence for one strategy (ALL-season summary + backtest bets)."""
+    """Raw validation evidence for one strategy.
+
+    Three independent evidence streams, kept separate on purpose:
+      * `summary` — outcome-only signal backtest (no prices exist for that rule)
+      * `backtest_bets` — bets priced from observed market data
+      * `hist` — the price-based simulation over the SBR archive (real moneylines)
+    """
     run_id = _latest_run(con)
+    hist_run = _hist_run(con)
     ev: dict = {"run_id": run_id, "summary": None, "backtest_bets": 0,
-                "backtest_settled": 0}
+                "backtest_settled": 0, "hist_run": hist_run, "hist": None,
+                "hist_all": None}
+    if hist_run:
+        row = con.execute(
+            "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id=? "
+            "AND season='ALL'", (hist_run, strategy_id)).fetchone()
+        if row:
+            ev["hist"] = dict(row)
+        allrow = con.execute(
+            "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id='MARKET' "
+            "AND season='all'", (hist_run,)).fetchone()
+        if allrow:
+            ev["hist_all"] = dict(allrow)
     if run_id:
         row = con.execute(
             "SELECT * FROM signal_backtest_summary WHERE run_id=? AND strategy_id=? "
@@ -123,6 +148,25 @@ def classify(con, strategy_id: str, ev: dict | None = None) -> dict:
     ev = ev or evidence_for(con, strategy_id)
     summary = ev.get("summary") or {}
     out = {"strategy_id": strategy_id, "evidence": ev}
+
+    hist = ev.get("hist")
+    if hist and hist.get("bets", 0) >= 30:
+        roi, n = hist["roi"], hist["bets"]
+        base_roi = (ev.get("hist_all") or {}).get("roi")
+        tier, detail = "price_verified", (
+            f"simulated on {n} games at real archive moneylines: "
+            f"P&L ${hist['pnl']:.2f}, ROI {roi:+.1%}, win rate "
+            f"{(hist['win_rate'] or 0):.1%}"
+            + (f" (market baseline ROI {base_roi:+.1%})" if base_roi is not None else ""))
+        if roi is not None and roi < -0.05:
+            tier = "failed"
+            detail += (" — LOSS at real prices beyond the vig, so the rule is "
+                       "parked by its own price-verified result")
+        return {**out, "tier": tier, "policy": POLICY[tier],
+                "reason": ("price-based simulation over the historical odds "
+                           "archive" if tier == "price_verified"
+                           else REASON["failed"]),
+                "detail": detail}
 
     if ev.get("backtest_bets"):
         tier, detail = "price_verified", (

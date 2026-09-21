@@ -8,8 +8,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nbacomp import (audit, backtest, db, paper, signal_backtest, sitegen,  # noqa: E402
-                     strategies as S, util, validation)
+from nbacomp import (audit, backtest, db, hist_backtest, paper,  # noqa: E402
+                     signal_backtest, sitegen, strategies as S, util, validation)
 
 BACKTEST_SEASONS = ["2023-24", "2024-25", "2025-26"]
 
@@ -49,6 +49,25 @@ def main():
         # against verified results and is labeled as such on the site)
         sig = signal_backtest.run_signal_backtest(con, run_id="sigbt-2026-09-21")
         print(f"signal-backtest: {sig}")
+
+        # 1c) price-based historical simulation over the validated SBR archive
+        # (real moneylines; the ONLY price-verified historical result the
+        # project has, because no other free price history exists)
+        if con.execute("SELECT COUNT(*) c FROM hist_odds").fetchone()["c"]:
+            hres = hist_backtest.run(con)
+            n_rows = hist_backtest.persist(con, hres, "hist-sbr-2026-09-21")
+            with open("data/hist_backtest.json", "w") as f:
+                json.dump({"run_id": "hist-sbr-2026-09-21", "games": hres["games"],
+                           "seasons": hres["seasons"], "summary": hres["summary"],
+                           "method": {"flat_stake": hist_backtest.FLAT_STAKE,
+                                      "min_edge": hist_backtest.MIN_EDGE,
+                                      "shrink_to_market": hist_backtest.SHRINK,
+                                      "max_credible_edge": validation.MAX_CREDIBLE_EDGE,
+                                      "price_source": "SBR archive moneyline",
+                                      "state": "same-season, strictly-prior games"}},
+                          f, indent=1)
+            print(f"hist-backtest: {hres['games']} priced games, "
+                  f"{len(hres['bets'])} simulated bets, {n_rows} rows")
 
         # 2) forward paper engine
         n_new = paper.generate_forward_bets(con)

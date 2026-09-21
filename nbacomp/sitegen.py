@@ -1065,6 +1065,54 @@ totals backtests are not attempted. Forecast models run forward from collection 
     _write(out_dir, "sources.html", page("Data Sources", body, "sources.html"))
 
 
+def hist_backtest_html(con) -> str:
+    """Price-based historical simulation results (real archive moneylines)."""
+    run = con.execute("SELECT run_id FROM hist_backtests ORDER BY generated_utc "
+                      "DESC LIMIT 1").fetchone()
+    if not run:
+        return ""
+    rows = con.execute(
+        "SELECT * FROM hist_backtests WHERE run_id=? AND season<>'ALL' "
+        "ORDER BY strategy_id, season", (run["run_id"],)).fetchall()
+    if not rows:
+        return ""
+    totals = con.execute(
+        "SELECT * FROM hist_backtests WHERE run_id=? AND season='ALL' "
+        "ORDER BY strategy_id", (run["run_id"],)).fetchall()
+    baseline = con.execute(
+        "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id='MARKET'",
+        (run["run_id"],)).fetchone()
+    per_season = {}
+    for r in rows:
+        per_season.setdefault(r["strategy_id"], []).append(
+            (r["season"], r["bets"], r["roi"], r["pnl"]))
+    tbl = table(
+        ["Strategy", "Games with prices", "Bets", "Win %", "P&L", "ROI", "Max DD",
+         "Avg price (¢)", "Per-season ROI"],
+        [[f"<a href='strategies.html#{r['strategy_id']}'>{r['strategy_id']}</a>"
+          if r["strategy_id"] != "MARKET" else "<b>MARKET baseline</b> (back home every game)",
+          r["games_available"], r["bets"],
+          f"{(r['win_rate'] or 0) * 100:.1f}%", fmt_money(r["pnl"]),
+          fmt_pct(r["roi"]), fmt_money(r["max_dd"]),
+          f"{r['avg_price']:.0f}" if r["avg_price"] else "—",
+          " · ".join(f"{s}: {roi:+.1%}" for s, _n, roi, _p in per_season.get(r["strategy_id"], []))
+          or "—"] for r in totals])
+    return f"""
+<h2>Price-based historical simulation <span class="muted">(real moneylines, {rows[0]['games_available']:,} games)</span></h2>
+<p class="muted">The research pass found the only free archive of real historical NBA prices
+(<a href="sources.html">SBR season pages</a>): 4,043 validated games from 2013-14 to 2022-23 with opening and
+closing spreads/totals and moneylines. These results are simulated at the archive's own moneyline — no assumed
+price — with same-season, strictly-prior model state, flat 1% staking, the model probability shrunk 50% toward
+the price, and edges above 8% rejected as model error. <b>Every pre-registered moneyline rule loses money at
+real prices</b>, and the honest comparison is the market baseline: backing the home team every game at the same
+prices returns {fmt_pct(baseline['roi']) if baseline else '—'}. The outcome-only hit rates published above
+(e.g. 64.5% on 1,531 firings) do not survive contact with prices, which is exactly the difference between a
+real edge and a rule that merely correlates with good teams. Totals and spreads are excluded: the archive
+prints lines but no per-side prices, and a simulated -110 would be an assumption, not evidence.</p>
+{tbl}
+"""
+
+
 def research_scan_html() -> str:
     """Publish the measured research scan (data/research_scan.json).
 
@@ -1169,6 +1217,7 @@ def research_page(con, out_dir):
 <p class="muted">Every research question, what was searched, what was found, what was tested, and what was
 decided — so research is auditable and never silently duplicated.</p>
 {research_scan_html()}
+{hist_backtest_html(con)}
 {items or "<p class='empty'>No research entries.</p>"}
 <h2>Anomaly register (latest 50)</h2>
 <p class="muted">Automated checks run on every pipeline pass. Flags are shown, never silently fixed.</p>

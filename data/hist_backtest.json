@@ -772,13 +772,11 @@
   }
  },
  "method": {
-  "bankroll": 1000.0,
   "flat_stake": 10.0,
   "min_edge": 0.03,
   "shrink_to_market": 0.5,
   "max_credible_edge": 0.08,
-  "price_source": "SBR archive moneyline (single pre-game price)",
-  "state": "same-season, strictly-prior games only",
-  "excluded": "totals/spreads: the archive has lines but no per-side prices, and an assumed -110 would be an assumption"
+  "price_source": "SBR archive moneyline",
+  "state": "same-season, strictly-prior games"
  }
 }
