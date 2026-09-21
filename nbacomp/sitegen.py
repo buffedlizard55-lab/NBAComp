@@ -1114,8 +1114,8 @@ def hist_backtest_html(con) -> str:
     if not rows:
         return ""
     totals = con.execute(
-        "SELECT * FROM hist_backtests WHERE run_id=? AND season IN ('ALL','all') "
-        "ORDER BY strategy_id", (run["run_id"],)).fetchall()
+        "SELECT * FROM hist_backtests WHERE run_id=? AND UPPER(season)='ALL' "
+        "GROUP BY strategy_id ORDER BY strategy_id", (run["run_id"],)).fetchall()
     baseline = con.execute(
         "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id='MARKET'",
         (run["run_id"],)).fetchone()
@@ -1191,9 +1191,12 @@ def research_scan_html() -> str:
  {scan.get('n_finals_regular_season', 0):,} regular-season finals
  (avg total {base.get('avg_total')}, home win {base.get('home_win_pct')}).
  Regular-season windows are the published NBA calendars; preseason and playoff
- games are excluded from them. Nothing here is a P&amp;L claim: without free
- historical prices these measurements can only justify <i>what is worth
- forward-testing</i>.</p>
+ games are excluded from them. This scan carries <b>no odds at all</b>: it says
+ whether a basketball effect exists, never that betting it makes money. Where
+ real prices DO exist (the moneyline simulation below) the same rules are
+ simulated against them — which is how several of these "promising" hit rates
+ turn out to be unprofitable. Treat this section as the source of candidates
+ for the priced simulation, not as a result.</p>
 <ul>
 <li><b>H1 opening-week low scoring</b> — pooled difference
  {h1.get('difference_early_minus_rest')} pts, Welch t={h1.get('welch_t')}
