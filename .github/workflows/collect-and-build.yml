@@ -69,7 +69,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/diagnostics.txt || true
           git commit -m "[auto] deep probe $(date -u +%FT%TZ)" || true
-          git push origin HEAD || true
+          git pull --rebase origin "${GITHUB_REF_NAME}" || git rebase --abort || true
+          git push origin HEAD || (sleep 30 && git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin HEAD) || true
 
       - name: Full backfill part 1 — schedule/results (two seasons)
         if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
@@ -143,5 +144,10 @@ jobs:
             echo "nothing to commit"
           else
             git commit -m "[auto] collect + pipeline + site build $(date -u +%FT%TZ)" || true
-            git push origin HEAD || true
+            # concurrent runs race here (2026-09-21: a probe commit landed
+            # mid-run and the bare push died silently). Rebase-then-push so
+            # collection results survive; a final failure still exits 0 and
+            # the next scheduled run re-collects.
+            git pull --rebase origin "${GITHUB_REF_NAME}" || git rebase --abort || true
+            git push origin HEAD || (sleep 30 && git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin HEAD) || true
           fi
