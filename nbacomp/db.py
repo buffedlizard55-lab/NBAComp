@@ -374,6 +374,28 @@ CREATE TABLE IF NOT EXISTS hist_odds (
 );
 CREATE INDEX IF NOT EXISTS idx_hist_odds_season ON hist_odds(season, game_date_et);
 
+-- Price-based historical simulation results over the validated SBR archive.
+-- Separate from signal_backtests (outcome-only) and from bets (forward paper
+-- trading): these are the only results in the repository that carry real
+-- historical market prices.
+CREATE TABLE IF NOT EXISTS hist_backtests (
+  run_id TEXT NOT NULL,
+  strategy_id TEXT NOT NULL,             -- or MARKET for the home-team baseline
+  season TEXT NOT NULL,                  -- or ALL
+  bets INTEGER NOT NULL,
+  wins INTEGER NOT NULL,
+  win_rate REAL,
+  pnl REAL NOT NULL,
+  staked REAL NOT NULL,
+  roi REAL,
+  max_dd REAL,
+  avg_edge REAL,
+  avg_price REAL,
+  games_available INTEGER NOT NULL,
+  generated_utc TEXT NOT NULL,
+  PRIMARY KEY (run_id, strategy_id, season)
+);
+
 -- Bet quarantine flags. A bet placed by a version of the engine that is now
 -- known to be defective (stale model state, assumed price never observed,
 -- strategy parked by its own evidence) cannot be deleted or edited — the bets
