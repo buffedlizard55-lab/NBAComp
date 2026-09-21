@@ -365,6 +365,8 @@ CREATE TABLE IF NOT EXISTS hist_odds (
   source TEXT NOT NULL DEFAULT 'sbr',
   source_url TEXT NOT NULL,
   source_row_hash TEXT,                  -- detects later edits at the source
+  spread_printed_row TEXT,               -- which row (away|home) printed the spread
+  spread_sign_from_ml INTEGER,           -- 1 when the moneyline made home the favourite
   cross_checked INTEGER NOT NULL DEFAULT 0,
   cross_check_detail TEXT,
   captured_utc TEXT NOT NULL,

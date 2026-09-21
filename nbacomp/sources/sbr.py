@@ -229,17 +229,18 @@ def parse_season(html: str, season: str) -> tuple[list[dict], list[dict]]:
                                       f"{spreads[0][2]}/{spreads[1][2]}"})
             i += 2
             continue
-        # spread sign convention: the *home* row's value is positive when the
-        # home team is favoured, so the home spread in points is -value.
-        home_spread = {k: v_ for s, k, v_ in spreads if s == "home"}
-        if "open" not in home_spread or "close" not in home_spread:
-            # spread is printed on the away row: convert to a home spread
-            away_spread = {k: v_ for s, k, v_ in spreads if s == "away"}
-            if set(away_spread) != {"open", "close"}:
-                rejects.append({"row": label, "reason": "spread columns ambiguous"})
-                i += 2
-                continue
-            home_spread = {k: -v_ for k, v_ in away_spread.items()}
+        # Spread sign: the archive's printed sign is NOT reliable (it prints
+        # the same positive magnitude whether the favourite is the home or the
+        # away team, and the row that carries the spread changes per game).
+        # The magnitude is taken from the printed spread and the SIGN is taken
+        # from the moneyline — an independent field — so a mis-signed row can
+        # never produce a wrong handicap. Disagreements are counted below.
+        spread_row = spreads[0][0]
+        printed = {k: v_ for s, k, v_ in spreads if s == spread_row}
+        if set(printed) != {"open", "close"}:
+            rejects.append({"row": label, "reason": "spread columns ambiguous"})
+            i += 2
+            continue
         tot = {k: v_ for _s, k, v_ in totals}
         ml_a, ml_h = _num(v[11]), _num(h[11])
         if ml_a is None or ml_h is None or ml_a == 0 or ml_h == 0:
@@ -250,9 +251,14 @@ def parse_season(html: str, season: str) -> tuple[list[dict], list[dict]]:
             rejects.append({"row": label, "reason": f"moneylines both one-sided {ml_a}/{ml_h}"})
             i += 2
             continue
+        # equal moneylines (a true pick'em) are read as "no home credit":
+        # the handicap then lands on the home team and never hands it points.
+        home_favoured = ml_h <= ml_a
+        sign = -1.0 if home_favoured else 1.0
+        home_spread = {k: sign * abs(v_) for k, v_ in printed.items()}
         # cross-check: spread-implied win prob vs devigged moneyline prob.
-        # The home spread (negative = home favoured) implies a margin of
-        # -home_spread; convert with SD 11.5 and compare to the ML.
+        # The home spread (negative = home favoured) implies a home margin of
+        # -home_spread; convert with SD 11.5 and compare to the moneyline.
         p_ml_h, p_ml_a = util.devig_two_way(util.american_to_prob(ml_h),
                                            util.american_to_prob(ml_a))
         p_spread_h = util.spread_win_prob(-home_spread["close"], 0.0, 11.5)
@@ -266,8 +272,10 @@ def parse_season(html: str, season: str) -> tuple[list[dict], list[dict]]:
             "season": season, "game_date_et": gdate, "away": aw, "home": hm,
             "away_q": vq, "home_q": hq, "away_final": vf, "home_final": hf,
             "open_total": round(tot["open"], 1), "close_total": round(tot["close"], 1),
-            "open_home_spread": round(-home_spread["open"], 1),
-            "close_home_spread": round(-home_spread["close"], 1),
+            "open_home_spread": round(home_spread["open"], 1),
+            "close_home_spread": round(home_spread["close"], 1),
+            "spread_printed_row": spread_row,
+            "spread_sign_from_ml": 1 if home_favoured else 0,
             "ml_away": int(ml_a), "ml_home": int(ml_h),
             "source_url": season_url(season), "rot": _int(v[1]),
         })

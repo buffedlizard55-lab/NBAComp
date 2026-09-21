@@ -41,12 +41,18 @@ from nbacomp.sources import bref, espn, kalshi, sbr  # noqa: E402
 CAP = util.utcnow_iso()
 
 
-def save_source_status(con, source_id: str, r, detail: str = ""):
+def save_source_status(con, source_id: str, r, detail: str = "", html: bool = False):
+    """Record reachability. `html=True` for text endpoints: HttpResult.ok
+    requires parseable JSON, which HTML never is (this is why the BRef and SBR
+    human-readable pages showed ok=0 with status 200)."""
+    ok = getattr(r, "ok_body", r.ok) if html else r.ok
     db.insert(con, "source_status", {
         "source_id": source_id, "checked_utc": util.utcnow_iso(),
-        "ok": 1 if r.ok else 0, "http_status": r.status,
+        "ok": 1 if ok else 0, "http_status": r.status,
         "detail": (detail or r.error or "")[:500],
-        "sample_hash": util.stable_hash((r.json or {})) if r.ok else None,
+        "sample_hash": (util.stable_hash(r.json) if r.ok
+                        else util.stable_hash(r.body[:4096]) if (html and ok)
+                        else None),
     }, replace=True)
 
 
@@ -60,7 +66,7 @@ def collect_sbr_season(con, season: str) -> dict:
     as historical prices.
     """
     r = sbr.fetch_season(season)
-    save_source_status(con, "sbr:nba-odds", r, detail=f"season={season}")
+    save_source_status(con, "sbr:nba-odds", r, detail=f"season={season}", html=True)
     if not getattr(r, "ok_body", False):
         db.log_collection(con, f"sbr-{season}", "sbr", "fail",
                           f"{r.status} {r.error or ''}")
@@ -88,6 +94,8 @@ def collect_sbr_season(con, season: str) -> dict:
             "ml_away": g["ml_away"], "ml_home": g["ml_home"],
             "source": "sbr", "source_url": g["source_url"],
             "source_row_hash": util.stable_hash(g),
+            "spread_printed_row": g.get("spread_printed_row"),
+            "spread_sign_from_ml": g.get("spread_sign_from_ml"),
             "cross_checked": 0, "cross_check_detail": None,
             "captured_utc": now,
         }

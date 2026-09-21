@@ -7,7 +7,9 @@ make this source dangerous to parse naively:
 
   * which row of a game carries the TOTAL in Open/Close varies (rot 501/502
     puts the total on the visitor row; rot 533/534 puts it on the home row),
-  * a game can be a pick'em ("pk") or nearly so.
+  * a game can be a pick'em ("pk") or nearly so,
+  * the printed spread sign is unreliable, so the magnitude is taken from the
+    printed line and the sign from the moneyline (two independent fields).
 
 The tests assert that (a) real rows parse, (b) structurally impossible or
 internally inconsistent rows are REJECTED rather than stored, and (c) every
