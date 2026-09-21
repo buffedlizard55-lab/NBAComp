@@ -316,6 +316,14 @@ def kalshi_backfill(con, max_pages: int = 5, recent_days: int | None = None) -> 
     requests per series and never finished inside a workflow run. Pass an
     explicit max_pages (CLI --pages) for deliberate deep history walks.
 
+    HONEST LIMIT (verified 2026-09-21): settled Kalshi markets are NOT
+    retrievable via any public endpoint (/markets?event_ticker,
+    /events/{ticker}, series+status filters, and direct ticker GETs all
+    return empty/404 for settled rows), so this walk currently yields zero
+    markets. It is kept (bounded) because Kalshi could re-expose settled
+    rows at any time; forward candle accumulation is the real history
+    source. A zero yield is logged as such, never hidden.
+
     This is how historical Kalshi NBA data is obtained: the /markets endpoint
     with a series+status filter returns nothing for settled history; the
     events endpoint does return settled events, and each event's markets carry
@@ -384,6 +392,10 @@ def kalshi_backfill(con, max_pages: int = 5, recent_days: int | None = None) -> 
         db.log_collection(con, "kalshi-backfill", f"kalshi:{s}", "ok",
                           f"events={n_events} skipped_no_ticker={skipped} markets_total={total}",
                           rows=n_events)
+    if total == 0:
+        db.log_collection(con, "kalshi-backfill", "kalshi", "empty",
+                          "settled markets not exposed by public API (verified 2026-09-21); "
+                          "forward candle accumulation is the history source", rows=0)
     return total
 
 
@@ -398,6 +410,42 @@ def kalshi_candles_window(con, series_filter: str | None, start_iso: str, end_is
     start = int(util.parse_iso(start_iso).timestamp())
     end = int(util.parse_iso(end_iso).timestamp())
     got = kalshi.get_candlesticks(tickers, start * 1000, end * 1000, interval)
+    n = _store_candles(con, got, interval)
+    db.log_collection(con, "kalshi-candles", "kalshi", "ok" if n else "empty",
+                      f"tickers={len(tickers)} candles={n} window={start_iso}..{end_iso}", rows=n)
+    return n
+
+
+def kalshi_candles_forward(con, days: int = 3, interval: int = 60) -> int:
+    """Candles for currently OPEN game markets (forward history accumulation).
+
+    Settled markets are NOT exposed by the public API (verified 2026-09-21:
+    /markets?event_ticker, /events/{t}, series+status, and direct ticker GETs
+    all return empty/404 for settled rows), so this forward accumulation is
+    the ONLY Kalshi price-history source. Run every collection; idempotent
+    (PK ticker/interval/ts_utc, INSERT OR IGNORE).
+    """
+    now = util.utcnow_iso()
+    start_iso = util.to_iso(util.parse_iso(now) - timedelta(days=days))
+    rows = con.execute(
+        "SELECT ticker FROM kalshi_markets WHERE status IN ('active', 'open') "
+        "AND series_ticker IN ('KXNBAGAME','KXNBASPREAD','KXNBATOTAL','KXNBA1H','KXNBAQ1') "
+        "AND close_time IS NOT NULL AND close_time >= ?", (now,)).fetchall()
+    tickers = [r["ticker"] for r in rows]
+    if not tickers:
+        db.log_collection(con, "kalshi-candles-forward", "kalshi", "empty",
+                          "no open game markets stored yet", rows=0)
+        return 0
+    start = int(util.parse_iso(start_iso).timestamp())
+    end = int(util.parse_iso(now).timestamp())
+    got = kalshi.get_candlesticks(tickers, start * 1000, end * 1000, interval)
+    n = _store_candles(con, got, interval)
+    db.log_collection(con, "kalshi-candles-forward", "kalshi", "ok" if n else "empty",
+                      f"tickers={len(tickers)} candles={n} window={start_iso}..{now}", rows=n)
+    return n
+
+
+def _store_candles(con, got: list[dict], interval: int) -> int:
     n = 0
     C = util.utcnow_iso()
     for entry in got:
@@ -406,11 +454,17 @@ def kalshi_candles_window(con, series_filter: str | None, start_iso: str, end_is
             # Live shape 2026-09-20: {"end_period_ts": 1788..., "price":
             # {"open_dollars": "0.38", ...}, "volume_fp": "707.69"}. The old
             # keys (ts/open/high/...) never existed -> every row was NULLs.
-            ts = c.get("end_period_ts") or c.get("ts") or c.get("timestamp_ms")
+            raw_ts = c.get("end_period_ts")
+            ts = _ms_iso(raw_ts if raw_ts is not None
+                         else (c.get("ts") or c.get("timestamp_ms")))
+            if ts and raw_ts is not None and interval:
+                # end_period_ts is the candle CLOSE; the DB invariant (and
+                # PriceBook's look-ahead guard) is ts = candle OPEN.
+                ts = util.to_iso(util.parse_iso(ts) - timedelta(seconds=interval * 60))
             price = c.get("price") or {}
             db.insert(con, "kalshi_candles", {
                 "ticker": t, "interval": interval,
-                "ts_utc": _ms_iso(ts),
+                "ts_utc": ts,
                 "open": _dollars_to_cents(price.get("open_dollars"), price.get("open")),
                 "high": _dollars_to_cents(price.get("high_dollars"), price.get("high")),
                 "low": _dollars_to_cents(price.get("low_dollars"), price.get("low")),
@@ -419,8 +473,6 @@ def kalshi_candles_window(con, series_filter: str | None, start_iso: str, end_is
                 "captured_utc": C,
             })
             n += 1
-    db.log_collection(con, "kalshi-candles", "kalshi", "ok" if n else "empty",
-                      f"tickers={len(tickers)} candles={n} window={start_iso}..{end_iso}", rows=n)
     return n
 
 
@@ -510,6 +562,9 @@ def main():
                 d += timedelta(days=1)
             collect_injuries(con)
             kalshi_snapshot(con)
+            # candles for open markets: the ONLY Kalshi history source
+            # (settled markets are not API-exposed). Idempotent.
+            kalshi_candles_forward(con)
             # recent settled events (settlement ground truth for forward bets)
             kalshi_backfill(con, max_pages=2)
             # yesterday's boxscores (player logs + rolling features)

@@ -143,7 +143,29 @@ def test_candles_window_stores_real_row_shape(tmp_path, monkeypatch):
         r = con.execute("SELECT * FROM kalshi_candles").fetchone()
         assert (r["open"], r["high"], r["low"], r["close"]) == (38, 39, 33, 33)
         assert r["volume"] == 707
-        assert r["ts_utc"] == "2026-09-01T04:00:00Z"  # end_period_ts, seconds
+        # end_period_ts 04:00, interval 60 -> stored candle OPEN 03:00
+        assert r["ts_utc"] == "2026-09-01T03:00:00Z"
+
+
+def test_candles_forward_picks_open_markets(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        kalshi, "get_candlesticks",
+        lambda tickers, s, e, i=60: [{"market_ticker": t, "candlesticks": [PHI_CANDLE]}
+                                     for t in tickers])
+    with db.get_db(str(tmp_path / "f.db")) as con:
+        for t, status in (("OPEN-T", "active"), ("SHUT-T", "settled")):
+            db.insert(con, "kalshi_markets", {
+                "ticker": t, "series_ticker": "KXNBAGAME", "event_ticker": "E",
+                "title": "t", "subtitle": None, "market_type": "winner",
+                "strike_values": None, "status": status,
+                "close_time": "2026-10-21T04:30:00Z", "expected_expiration_time": None,
+                "yes_bid": None, "yes_ask": None, "last_price": None, "volume": None,
+                "open_interest": None, "result": None, "settled_time": None,
+                "captured_utc": util.utcnow_iso()}, replace=True)
+        n = collect.kalshi_candles_forward(con, days=3)
+        assert n == 1
+        tickers = [r["ticker"] for r in con.execute("SELECT DISTINCT ticker FROM kalshi_candles")]
+        assert tickers == ["OPEN-T"]
 
 
 def test_norm_side_dollar_strings_and_best_levels():

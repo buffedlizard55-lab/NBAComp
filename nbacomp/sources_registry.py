@@ -107,7 +107,7 @@ REGISTRY: list[dict] = [
         "url": "https://api.elections.kalshi.com/trade-api/v2",
         "data_type": "NBA contract markets: series/events/markets, quotes (bid/ask/last), volume, open interest, orderbooks, candlesticks, trades, official settlement results",
         "nba_relevance": "execution venue + price history for backtests + settlement ground truth",
-        "historical_depth": "settled events are enumerable via /events?status=settled cursor pagination; candlesticks per market (windowed); verified at runtime per series",
+        "historical_depth": "FORWARD-ONLY: settled events are enumerable (1448+ KXNBAGAME over 8 pages) but their MARKETS are not retrievable by any public endpoint (verified 2026-09-21) — no settled prices or results exist via API. Price history is built by forward candle accumulation on open markets (which carry candles from listing, e.g. 2026-10-20 openers since 2026-08-20).",
         "update_frequency": "live",
         "access_method": "public GET endpoints, keyless (market data); trading would require an account (not used)",
         "cost": "free (market data)", "registration_required": False, "paid_plan_required": False,

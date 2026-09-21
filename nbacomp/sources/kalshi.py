@@ -97,8 +97,12 @@ def get_events(series_ticker: str, status: str | None = None,
 
 
 def get_markets_by_event(event_ticker: str, max_pages: int = 10) -> list[dict]:
-    """All markets of one event (works for settled events, unlike the
-    series+status filter, which returned zero rows in runner probes)."""
+    """All markets of one event via /markets?event_ticker=.
+
+    NOTE (verified 2026-09-21): returns rows for OPEN events only; settled
+    events yield [] (as do /events/{t}, series+status filters, and direct
+    ticker GETs). The old claim that this worked for settled events was
+    wrong — corrected after the probe5 evidence (rows=0)."""
     out: list[dict] = []
     cursor = None
     for _ in range(max_pages):

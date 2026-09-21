@@ -48,10 +48,14 @@ jobs:
       - name: Skip auto-commits
         id: skip
         run: |
-          if git log -1 --grep='\[auto\]' --oneline | grep -q .; then
+          # Fixed-string match (-F): the old --grep='\[auto\]' regex collapsed
+          # into a character class and matched nearly EVERY commit, so all of
+          # 2026-09-21's runs silently took the probe-only path (daily
+          # collection + pipeline never executed). Verified by job-step audit.
+          if git log -1 --format=%s | grep -qF '[auto]'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-          if git log -1 --grep='\[probe\]' --oneline | grep -q .; then
+          if git log -1 --format=%s | grep -qF '[probe]'; then
             echo "probe=true" >> "$GITHUB_OUTPUT"
           fi
 
