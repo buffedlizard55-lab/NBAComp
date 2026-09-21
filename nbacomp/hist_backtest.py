@@ -280,8 +280,14 @@ def _agg(rows: list[dict]) -> dict:
 
 
 def persist(con, result: dict, run_id: str) -> int:
-    """Write per-rule and per-rule-season rows to hist_backtests (idempotent)."""
+    """Write per-rule and per-rule-season rows to hist_backtests (idempotent).
+
+    Derived results, not audit records: a row from an earlier run whose season
+    label differs only in case is removed, so the site cannot show the same
+    baseline twice.
+    """
     written = 0
+    con.execute("DELETE FROM hist_backtests WHERE season <> UPPER(season)")
     for key, agg in result["summary"].items():
         sid, _, season = key.partition("|")
         season = (season or "ALL").upper()
