@@ -507,13 +507,27 @@ def boxscores_backfill_resumable(con, start_day: str, end_day: str,
     where the previous run stopped. Dates with no FINAL games in `games` are
     walked through for free (no network).
     """
-    drop_incomplete_gamelogs(con)
+    dropped = drop_incomplete_gamelogs(con)
     row = con.execute("SELECT value FROM meta WHERE key='boxscore_backfill_next_day'").fetchone()
     cursor = row["value"] if row else start_day
     if cursor > end_day:
-        db.log_collection(con, "boxscores-backfill", "espn", "done",
-                          f"cursor={cursor} end={end_day}", rows=0)
-        return {"games": 0, "rows": 0, "cursor": cursor, "done": True}
+        # The walk finished previously. Only restart it if something was just
+        # deleted for re-collection AND there are finals again to fetch —
+        # otherwise every run would re-walk two seasons for nothing.
+        if not dropped:
+            db.log_collection(con, "boxscores-backfill", "espn", "done",
+                              f"cursor={cursor} end={end_day}", rows=0)
+            return {"games": 0, "rows": 0, "cursor": cursor, "done": True}
+        first = con.execute(
+            "SELECT MIN(game_date_et) d FROM games WHERE status='final' "
+            "AND game_id LIKE 'espn:%'").fetchone()
+        if not first or not first["d"]:
+            db.log_collection(con, "boxscores-backfill", "espn", "done",
+                              f"cursor={cursor} end={end_day} nothing to re-collect", rows=0)
+            return {"games": 0, "rows": 0, "cursor": cursor, "done": True}
+        cursor = first["d"].replace("-", "")
+        db.log_collection(con, "boxscores-backfill", "espn", "ok",
+                          f"restart after repair: dropped={dropped} cursor->{cursor}", rows=0)
     d = datetime.strptime(cursor, "%Y%m%d")
     end = datetime.strptime(end_day, "%Y%m%d")
     spent = rows = 0

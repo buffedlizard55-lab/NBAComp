@@ -378,6 +378,8 @@ section is plainly labeled.
 Repair verified by executing it against a copy of the committed 3,393-row database:
 **2,886 games, 0 duplicates, exactly the 30 NBA abbreviations, 0 non-NBA gamelog rows.**
 
+| Deleting the 46 `pts=NULL` rows left `team_gamelogs` at **0** — the backfill cursor had already passed those days, so nothing was re-collected | run `3572932`: `team_gamelogs=0` | the backfill restarts at the first final-game date whenever a repair drops rows, and otherwise stays finished |
+
 ### Still open
 
 - The `audit.run_checks` `injury-listing-late` query joins on team
@@ -444,7 +446,7 @@ Run in this pass, in a fresh venv (`python3 -m venv .venv && .venv/bin/pip
 install pytest`), on `arena/01a0c1af-nbacomp`:
 
 ```
-.venv/bin/python -m pytest tests   ->  102 passed
+.venv/bin/python -m pytest tests   ->  104 passed
 
 tests/test_collect_and_backtest.py   9 tests
 tests/test_core.py                  45 tests
