@@ -614,12 +614,14 @@ def test_paper_total_signal_placement_and_settlement(con, tmp_path):
     row = con.execute("SELECT * FROM bets WHERE market='total'").fetchone()
     assert row["verification"].startswith("PRICED-ASSUMPTION")
     assert row["side"] == "over"
-    # settle as WIN (final total 230)
-    assert paper._settle_one(con, dict(row), by_game={},
-                             g={"home_score": 115, "away_score": 115}) == "win"
+    # settle as WIN (final total 230); box score is the settlement source
+    assert paper._settle_one(con, dict(row), by_game={}, markets_by_ticker={},
+                             stale=False,
+                             g={"home_score": 115, "away_score": 115}) == ("win", "verified final score vs decision-time line")
     # settle as LOSS (final total 210)
-    assert paper._settle_one(con, dict(row), by_game={},
-                             g={"home_score": 105, "away_score": 105}) == "loss"
+    assert paper._settle_one(con, dict(row), by_game={}, markets_by_ticker={},
+                             stale=False,
+                             g={"home_score": 105, "away_score": 105}) == ("loss", "verified final score vs decision-time line")
 
 
 def test_paper_prop_signal_no_market_yet(con):

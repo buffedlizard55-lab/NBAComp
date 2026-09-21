@@ -204,11 +204,11 @@ def _leaderboard_rows(con, kind: str) -> list[dict]:
 
 def _status_of(perf: dict, kind: str) -> str:
     if kind == "forward":
-        if not perf.get("bets"):
-            return "awaiting-opportunity"
         if perf.get("pending"):
             return "active (open bets)"
-        return "active"
+        if perf.get("bets"):
+            return "active"
+        return "awaiting-opportunity"
     return "backtested" if perf.get("bets") else "no historical data"
 
 
@@ -216,7 +216,7 @@ def index(con, out_dir):
     fwd = _leaderboard_rows(con, "forward")
     bt = _leaderboard_rows(con, "backtest")
     total_fwd_pnl = sum(r.get("pnl") or 0 for r in fwd)
-    active = sum(1 for r in fwd if r.get("bets"))
+    active = sum(1 for r in fwd if r.get("bets") or r.get("pending"))
     upd = con.execute("SELECT value FROM meta WHERE key='last_pipeline_utc'").fetchone()
     games = con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"]
     verified = con.execute("SELECT COUNT(*) c FROM games WHERE verified=1").fetchone()["c"]
@@ -255,11 +255,26 @@ def index(con, out_dir):
                        "<div class='k'>Pipeline health</div>"
                        "<div class='v'>no critical anomalies</div></div>")
 
+    bt_rows = [[f"<a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a>",
+                r.get("bets", 0),
+                f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
+                fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")),
+                fmt_money(r.get("max_dd") or 0)]
+               for r in bt if r.get("bets")]
+    backtest_html = (
+        table(["Strategy", "Backtest bets", "Win %", "Backtest P&L", "ROI", "Max DD"],
+              bt_rows)
+        if bt_rows else
+        "<p class='empty'>No price-based backtest bets yet — no free historical price "
+        "series exists for any NBA market (verified, see Data Sources). No prices are "
+        "fabricated; decision-rule signal validation is shown below instead.</p>")
+
     lb = table(
         ["#", "Username", "Strategy", "Bankroll", "P&L", "ROI", "Bets", "Win %", "Status"],
         [[i + 1, r["username"], f"<a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a>",
           fmt_money(r["bankroll"]), fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")),
-          r.get("bets", 0),
+          (f"{r.get('bets', 0)} ({r['pending']} open)" if r.get("pending")
+           else r.get("bets", 0)),
           f"{r['win_rate'] * 100:.0f}%" if r.get("win_rate") is not None else "—",
           _status_of(r, "forward")] for i, r in enumerate(fwd[:10])])
 
@@ -294,11 +309,8 @@ real data is captured.</p>
        [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["market"]), _esc(r["selection"]),
          _esc(r["result"]), fmt_money(r["pnl_usd"])] for r in recent])}
 <h2>Backtest snapshot <span class="muted">(separate from forward results — never mixed)</span></h2>
-{table(["Strategy", "Backtest bets", "Win %", "Backtest P&L", "ROI", "Max DD"],
-       [[f"<a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a>", r.get("bets", 0),
-         f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
-         fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")), fmt_money(r.get("max_dd") or 0)]
-        for r in bt if r.get("bets")])}
+{backtest_html}
+{signal_snapshot_html(con)}
 <p class="muted">Last pipeline run: {_esc(upd["value"] if upd else "not yet run")}</p>
 """
     _write(out_dir, "index.html", page("Dashboard", body, "index.html"))
@@ -630,6 +642,7 @@ def strategies_page(con, out_dir):
 <details><summary>Failure modes</summary><ul>{fails}</ul></details>
 <details><summary>Data limitations</summary><ul>{lims}</ul></details>
 {perf_html(perf_b, 'Backtest (historical simulation)')}
+{signal_validation_html(con, sid)}
 {perf_html(perf_f, 'Forward (live paper competition)')}
 <details><summary>Forward breakdowns (market / team / month)</summary>{fwd_breakdowns or "<p class='empty'>No forward bets yet.</p>"}</details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary>{why}</details>
@@ -640,6 +653,91 @@ def strategies_page(con, out_dir):
             "Backtest and forward records are labeled separately and never mixed.</p>"
             + "".join(cards))
     _write(out_dir, "strategies.html", page("Strategies", body, "strategies.html"))
+
+
+def signal_snapshot_html(con) -> str:
+    """Dashboard section: pooled signal validation across all seasons."""
+    rows = con.execute(
+        "SELECT s.strategy_id, s.n_signals, s.n_hits, s.hit_rate, s.baseline_rate, "
+        "s.mae_total, st.username FROM signal_backtest_summary s "
+        "LEFT JOIN strategies st ON st.strategy_id=s.strategy_id "
+        "WHERE s.season='ALL' ORDER BY s.strategy_id").fetchall()
+    trs = []
+    for r in rows:
+        if r["hit_rate"] is not None:
+            base = (f"{r['baseline_rate'] * 100:.1f}%"
+                    if r["baseline_rate"] is not None else "—")
+            core = (f"hits {r['n_hits']}/{r['n_signals']} · "
+                    f"{r['hit_rate'] * 100:.1f}% vs {base}")
+        elif r["mae_total"] is not None:
+            core = f"n {r['n_signals']} · MAE {r['mae_total']:.2f} pts"
+        else:
+            continue
+        link = f"<a href='strategies.html#{r['strategy_id']}'>{_esc(r['username'])}</a>"
+        trs.append([link, core])
+    if not trs:
+        return ""
+    t = table(["Strategy", "Result"], trs)
+    return (
+        "<h2>Signal validation <span class=\"muted\">(pooled, all seasons — decision rule vs "
+        "verified outcomes; NO prices, NOT P&amp;L)</span></h2>"
+        + t
+        + "<p class=\"muted small\">No free historical price series exists for NBA markets "
+        "(verified by probe: settled Kalshi markets expose no candlesticks or trade tape; "
+        "ESPN keeps no past odds). This table shows whether each strategy's rule picks "
+        "winning sides more often than the league base rate, or beats the season-mean "
+        "total — evidence about the signal only. Per-season rows on each strategy page.</p>")
+
+
+def signal_validation_html(con, sid: str) -> str:
+    """Per-strategy signal-validation block (outcome-only, not P&L)."""
+    rows = con.execute(
+        "SELECT season, n_signals, n_hits, hit_rate, baseline_rate, brier, "
+        "mae_total, baseline_mae_total, avg_model_prob, max_streak_hits, "
+        "max_streak_misses FROM signal_backtest_summary "
+        "WHERE strategy_id=? ORDER BY CASE WHEN season='ALL' THEN 0 ELSE 1 END, season",
+        (sid,)).fetchall()
+    if not rows:
+        return ("<div class='perf'><b>Signal validation</b>: no signal-validation "
+                "rows yet (runs on every pipeline pass once box scores exist).</div>")
+    trs = []
+    for r in rows:
+        if r["hit_rate"] is not None:
+            delta = ((r["hit_rate"] - r["baseline_rate"])
+                     if r["baseline_rate"] is not None else None)
+            base_s = (f"{r['baseline_rate'] * 100:.1f}%"
+                      if r["baseline_rate"] is not None else "—")
+            delta_s = f" ({delta * 100:+.1f}pp)" if delta is not None else ""
+            core = (f"hits {r['n_hits']}/{r['n_signals']} · hit rate "
+                    f"{r['hit_rate'] * 100:.1f}% vs base rate {base_s}{delta_s}")
+            if r["brier"] is not None:
+                core += f" · Brier {r['brier']:.3f}"
+                if r["avg_model_prob"] is not None:
+                    core += f" · avg model prob {r['avg_model_prob'] * 100:.1f}%"
+            if r["max_streak_hits"] is not None:
+                core += (f" · streaks {r['max_streak_hits']} hit / "
+                         f"{r['max_streak_misses']} miss")
+        elif r["mae_total"] is not None:
+            base_s = (f"{r['baseline_mae_total']:.2f}"
+                      if r["baseline_mae_total"] is not None else "—")
+            core = (f"n {r['n_signals']} · MAE {r['mae_total']:.2f} pts "
+                    f"vs season-mean baseline {base_s}")
+        else:
+            core = "n/a"
+        trs.append(f"<tr><td>{_esc(r['season'])}</td><td>{core}</td></tr>")
+    return (
+        "<details open><summary><b>Signal validation</b> — decision rule vs verified "
+        "outcomes (NO market prices; not P&amp;L)</summary>"
+        "<p class='muted small'>No free historical NBA price series exists (verified: "
+        "settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a "
+        "price-taking backtest is impossible and would require fabricated prices. This "
+        "section instead validates the strategy's <i>decision rule</i> against verified "
+        "final results, chronologically (strictly prior data only). It is evidence "
+        "about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league "
+        "base rate of the picked side (winner rules) / in-sample season-mean total "
+        "(total rules).</p>"
+        "<table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody>"
+        + "".join(trs) + "</tbody></table></details>")
 
 
 def _profit_breakdown_html(by: dict, dim: str) -> str:

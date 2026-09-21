@@ -133,15 +133,29 @@ class RollingTeamState:
             vals = [r.get(key) if r.get(key) is not None else default for r in recent]
             return sum(float(v) for v in vals) / n
 
-        poss = [possessions(r) for r in recent]
-        avg_poss = sum(poss) / max(len(poss), 1)
-        ortg = m("pts") / avg_poss * 100.0 if avg_poss else None
-        # DRtg approximated from points allowed per possession
-        opp_pts = [float(r["opp_pts"]) if r.get("opp_pts") is not None else None for r in recent]
-        if all(v is not None for v in opp_pts) and avg_poss:
-            drtg = sum(opp_pts) / n / avg_poss * 100.0
-        else:
+        # 2026-09-21: sources that do not split rebounds (balldontlie team
+        # rows summed from per-player stats) have OREB=NULL. Treating missing
+        # OREB as 0 would silently overstate pace by ~12 possessions and
+        # corrupt every possession-based feature, so when OREB is missing in
+        # ANY window row, pace/efficiency are reported as None (unavailable)
+        # and pace-based strategies skip the game.
+        oreb_missing = any(r.get("oreb") is None for r in recent)
+        # points-allowed series is pace-independent (computed either way)
+        opp_pts = [float(r["opp_pts"]) if r.get("opp_pts") is not None else None
+                   for r in recent]
+        if oreb_missing:
+            avg_poss = None
+            ortg = None
             drtg = None
+        else:
+            poss = [possessions(r) for r in recent]
+            avg_poss = sum(poss) / max(len(poss), 1)
+            ortg = m("pts") / avg_poss * 100.0 if avg_poss else None
+            # DRtg approximated from points allowed per possession
+            if all(v is not None for v in opp_pts) and avg_poss:
+                drtg = sum(opp_pts) / n / avg_poss * 100.0
+            else:
+                drtg = None
         out = {
             "games": n,
             "pace": avg_poss,
@@ -153,8 +167,11 @@ class RollingTeamState:
             "fg3m": m("fg3m"),
             "fg3pct": (m("fg3m") / m("fg3a")) if m("fg3a") else None,
             "opp_fg3a": None, "opp_fg3m": None,  # opponent box not available in team logs
-            "oreb": m("oreb"), "dreb": m("dreb"), "reb": m("reb"),
+            "oreb": None if oreb_missing else m("oreb"),
+            "dreb": None,  # not provided by any current source (honest None)
+            "reb": m("reb"),
             "ast": m("ast"), "tov": m("tov"),
+            "pace_available": not oreb_missing,
         }
         return out
 

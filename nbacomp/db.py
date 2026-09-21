@@ -18,7 +18,36 @@ from . import util
 
 DB_PATH = os.environ.get("NBACOMP_DB", os.path.join("data", "nbacomp.db"))
 
-SCHEMA = """
+# Decision-state columns of `bets` that may NEVER change after insert. The
+# settlement columns (result, settlement_utc, settlement_source, pnl_usd, roi,
+# closing_price-via-settle-path) are the only permitted mutations.
+_BETS_CORE_IMMUTABLE = [
+    "bet_id", "run_id", "kind", "strategy_id", "strategy_version", "username",
+    "decision_utc", "game_id", "game_label", "tipoff_utc", "market", "selection",
+    "side", "price", "price_format", "source", "source_url", "source_ts",
+    "model_prob", "market_prob", "edge", "stake_usd", "to_win_usd", "ev_usd",
+    "execution_status", "fill_price", "fee_usd", "contracts", "closing_price",
+    "verification", "notes",
+]
+# Added 2026-09-21 for prop-bet settlement (strike + market identity + player
+# must be frozen at decision time; settlement needs them).
+_BETS_V2_IMMUTABLE = ["strike", "market_ticker", "prop_player"]
+
+
+def _bets_trigger_sql(extra_cols=()):
+    cols = _BETS_CORE_IMMUTABLE + list(extra_cols)
+    conds = "\n    OR ".join(f"NEW.{c} IS NOT OLD.{c}" for c in cols)
+    return (
+        "CREATE TRIGGER IF NOT EXISTS trg_bets_append_only BEFORE UPDATE ON bets\n"
+        "BEGIN\n"
+        f"  SELECT CASE WHEN\n    {conds}\n"
+        "  THEN RAISE(ABORT, 'bets are append-only: only result/settlement_utc/"
+        "settlement_source/pnl_usd/roi may change')\n"
+        "  END;\n"
+        "END;")
+
+
+SCHEMA = f"""
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -153,6 +182,90 @@ CREATE TABLE IF NOT EXISTS team_season_stats (
   PRIMARY KEY (season, team, measure)
 );
 
+CREATE TABLE IF NOT EXISTS player_season_stats (
+  season TEXT NOT NULL,
+  player_id TEXT NOT NULL,
+  player TEXT NOT NULL,
+  team TEXT NOT NULL,
+  games INTEGER,                        -- games played (source-reported)
+  minutes REAL, pts REAL, reb REAL, ast REAL, stl REAL, blk REAL, tov REAL,
+  fg_pct REAL, fg3_pct REAL, ft_pct REAL,
+  points_per_game REAL,                 -- explicit per-game fields where the
+  rebounds_per_game REAL,               -- source reports them directly
+  assists_per_game REAL,                -- (balldontlie /players = per game)
+  per_game_basis TEXT,                  -- 'per_game'|'season_totals' (honest label)
+  stats_json TEXT NOT NULL,             -- full row from source
+  source TEXT NOT NULL, captured_utc TEXT NOT NULL,
+  PRIMARY KEY (season, player_id, team)
+);
+
+-- Game identity aliases: when a duplicate game row is merged (ESPN id
+-- supersedes a BRef id, or a repair collapses duplicates), bets keep their
+-- ORIGINAL game_id — the bets table is append-only and its trigger aborts
+-- game_id rewrites. The alias table is the only bridge between the old id
+-- and the canonical row. (2026-09-21: the repair's `UPDATE bets SET game_id`
+-- would RAISE once any bets existed.)
+CREATE TABLE IF NOT EXISTS game_aliases (
+  old_game_id TEXT PRIMARY KEY,
+  new_game_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_utc TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_galias_new ON game_aliases(new_game_id);
+
+-- Per-quarter team scores captured from in-game scoreboard snapshots
+-- (enables 1H/quarter settlement and OT detection once in-game captures exist).
+CREATE TABLE IF NOT EXISTS quarter_scores (
+  game_id TEXT NOT NULL,
+  quarter INTEGER NOT NULL,             -- 1..5+
+  home_score INTEGER NOT NULL,
+  away_score INTEGER NOT NULL,
+  captured_utc TEXT NOT NULL,
+  source TEXT NOT NULL,
+  PRIMARY KEY (game_id, quarter)
+);
+
+-- Signal-validation backtests: outcome-only validation of each strategy's
+-- decision rule on verified historical results. NO market prices are used
+-- or implied — this is evidence about the predictive signal, not P&L.
+CREATE TABLE IF NOT EXISTS signal_backtests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  strategy_id TEXT NOT NULL,
+  strategy_version TEXT NOT NULL,
+  season TEXT NOT NULL,
+  game_id TEXT NOT NULL,
+  game_date_et TEXT NOT NULL,
+  decision_utc TEXT NOT NULL,
+  market TEXT NOT NULL,                 -- winner|total (rule market, not a price)
+  selection TEXT NOT NULL,              -- side the rule picked
+  model_prob REAL,                      -- rule's own probability where it has one
+  outcome INTEGER,                      -- 1 if the picked side won / hit
+  metric_value REAL,                    -- rule-specific (margin, total, ...)
+  trigger TEXT,
+  UNIQUE (run_id, strategy_id, game_id, market, selection)
+);
+CREATE INDEX IF NOT EXISTS idx_sigbt_strat ON signal_backtests(strategy_id, season);
+
+CREATE TABLE IF NOT EXISTS signal_backtest_summary (
+  run_id TEXT NOT NULL,
+  strategy_id TEXT NOT NULL,
+  strategy_version TEXT NOT NULL,
+  season TEXT NOT NULL,                 -- 'ALL' = pooled
+  n_signals INTEGER NOT NULL,
+  n_hits INTEGER,
+  hit_rate REAL,
+  baseline_rate REAL,                  -- league-base-rate the rule beats
+  brier REAL,                          -- winner rules only
+  mae_total REAL,                      -- total rules only
+  baseline_mae_total REAL,             -- 'always league-average total' MAE
+  avg_model_prob REAL,
+  max_streak_hits INTEGER,
+  max_streak_misses INTEGER,
+  generated_utc TEXT NOT NULL,
+  PRIMARY KEY (run_id, strategy_id, season)
+);
+
 CREATE TABLE IF NOT EXISTS strategies (
   strategy_id TEXT PRIMARY KEY,
   version TEXT NOT NULL,
@@ -222,43 +335,7 @@ CREATE INDEX IF NOT EXISTS idx_bets_game ON bets(game_id);
 -- Bet records are append-only. The ONLY permitted mutation is writing the
 -- settlement columns (never decision/price/state columns). Any other UPDATE
 -- aborts at the database level instead of relying on code discipline.
-CREATE TRIGGER IF NOT EXISTS trg_bets_append_only BEFORE UPDATE ON bets
-BEGIN
-  SELECT CASE WHEN
-    NEW.bet_id IS NOT OLD.bet_id
-    OR NEW.run_id IS NOT OLD.run_id
-    OR NEW.kind IS NOT OLD.kind
-    OR NEW.strategy_id IS NOT OLD.strategy_id
-    OR NEW.strategy_version IS NOT OLD.strategy_version
-    OR NEW.username IS NOT OLD.username
-    OR NEW.decision_utc IS NOT OLD.decision_utc
-    OR NEW.game_id IS NOT OLD.game_id
-    OR NEW.game_label IS NOT OLD.game_label
-    OR NEW.tipoff_utc IS NOT OLD.tipoff_utc
-    OR NEW.market IS NOT OLD.market
-    OR NEW.selection IS NOT OLD.selection
-    OR NEW.side IS NOT OLD.side
-    OR NEW.price IS NOT OLD.price
-    OR NEW.price_format IS NOT OLD.price_format
-    OR NEW.source IS NOT OLD.source
-    OR NEW.source_url IS NOT OLD.source_url
-    OR NEW.source_ts IS NOT OLD.source_ts
-    OR NEW.model_prob IS NOT OLD.model_prob
-    OR NEW.market_prob IS NOT OLD.market_prob
-    OR NEW.edge IS NOT OLD.edge
-    OR NEW.stake_usd IS NOT OLD.stake_usd
-    OR NEW.to_win_usd IS NOT OLD.to_win_usd
-    OR NEW.ev_usd IS NOT OLD.ev_usd
-    OR NEW.execution_status IS NOT OLD.execution_status
-    OR NEW.fill_price IS NOT OLD.fill_price
-    OR NEW.fee_usd IS NOT OLD.fee_usd
-    OR NEW.contracts IS NOT OLD.contracts
-    OR NEW.closing_price IS NOT OLD.closing_price
-    OR NEW.verification IS NOT OLD.verification
-    OR NEW.notes IS NOT OLD.notes
-    THEN RAISE(ABORT, 'bets are append-only: only result/settlement_utc/settlement_source/pnl_usd/roi may change')
-  END;
-END;
+{_bets_trigger_sql()}
 
 CREATE TABLE IF NOT EXISTS bankroll_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,7 +417,46 @@ def connect(db_path: str = None) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
     con.execute("PRAGMA foreign_keys=ON")
+    _migrate(con)
     return con
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Idempotent schema upgrades for databases created before a change.
+
+    The injuries natural-key index is created here (not in SCHEMA) because an
+    existing database may already hold duplicate listings: creating a UNIQUE
+    index on them aborts the whole schema script and would break every other
+    CREATE TABLE on a pre-existing database.
+    """
+    # bets v2: decision-state columns for prop settlement (2026-09-21)
+    # + closing_price (added to SCHEMA after production DBs existed, so it
+    # needs a migration too — settlement writes it and the site reads it)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(bets)")}
+    for col, decl in (("strike", "REAL"), ("market_ticker", "TEXT"),
+                      ("prop_player", "TEXT"), ("closing_price", "REAL")):
+        if col not in cols:
+            con.execute(f"ALTER TABLE bets ADD COLUMN {col} {decl}")
+    # recreate the append-only trigger so pre-v2 databases also protect the
+    # new decision-state columns (idempotent)
+    con.execute("DROP TRIGGER IF EXISTS trg_bets_append_only")
+    con.execute(_bets_trigger_sql(_BETS_V2_IMMUTABLE))
+    try:
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_inj_natural "
+            "ON injuries(player, team, status, COALESCE(published_utc, ''), "
+            "COALESCE(note, ''))")
+    except sqlite3.IntegrityError:
+        # Duplicate listings exist: keep the earliest capture per natural key.
+        con.execute(
+            "DELETE FROM injuries WHERE id NOT IN ("
+            "  SELECT MIN(id) FROM injuries GROUP BY player, team, status, "
+            "  COALESCE(published_utc, ''), COALESCE(note, ''))")
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_inj_natural "
+            "ON injuries(player, team, status, COALESCE(published_utc, ''), "
+            "COALESCE(note, ''))")
+    con.commit()
 
 
 @contextmanager

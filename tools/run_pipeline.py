@@ -8,9 +8,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nbacomp import audit, backtest, db, paper, sitegen, strategies as S, util  # noqa: E402
+from nbacomp import (audit, backtest, db, paper, signal_backtest, sitegen,  # noqa: E402
+                     strategies as S, util)
 
-BACKTEST_SEASONS = ["2024-25", "2025-26"]
+BACKTEST_SEASONS = ["2023-24", "2024-25", "2025-26"]
 
 
 def register_strategies(con):
@@ -38,9 +39,15 @@ def main():
     with db.get_db() as con:
         register_strategies(con)
 
-        # 1) backtest on whatever verified price history exists
+        # 1) price backtest on whatever verified price history exists
         bt = backtest.run_backtest(con, BACKTEST_SEASONS, run_id="bt-2026-09-20")
         print(f"backtest: {bt}")
+
+        # 1b) signal-validation backtest (outcome-only, no prices — no free
+        # historical price series exists; this validates the decision rules
+        # against verified results and is labeled as such on the site)
+        sig = signal_backtest.run_signal_backtest(con, run_id="sigbt-2026-09-21")
+        print(f"signal-backtest: {sig}")
 
         # 2) forward paper engine
         n_new = paper.generate_forward_bets(con)

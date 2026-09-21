@@ -213,30 +213,60 @@ def verify_month(con, season_end_year: int, month: str) -> int:
     last_day = calendar.monthrange(cal_year, _month_num(month))[1]
     d0 = f"{cal_year}-{_month_num(month):02d}-01"
     d1 = f"{cal_year}-{_month_num(month):02d}-{last_day:02d}"
-    n = 0
+    n = mismatches = unmatched = 0
     for row in rows:
         v = abbr_for(row["visitor_name"])
         h = abbr_for(row["home_name"])
         if not v or not h:
             continue
+        # 2026-09-21 fix: the old query required home_score/away_score to
+        # ALREADY equal the BRef values, so a genuine score conflict could
+        # never be seen or recorded — mismatches are the most important rows
+        # a verification source can produce.
         games = con.execute(
             "SELECT * FROM games WHERE home_team=? AND away_team=? AND status='final' "
-            "AND home_score=? AND away_score=? AND verified=0 AND game_date_et BETWEEN ? AND ?",
-            (h, v, row["home_pts"], row["visitor_pts"], d0, d1)).fetchall()
+            "AND game_date_et BETWEEN ? AND ?", (h, v, d0, d1)).fetchall()
+        if not games:
+            unmatched += 1
+            continue
         for g in games:
-            con.execute("UPDATE games SET verified=1, verified_against='basketball-reference' "
-                        "WHERE game_id=?", (g["game_id"],))
-            db.insert(con, "verifications", {
-                "checked_utc": util.utcnow_iso(),
-                "claim": f"final score {g['game_id']} {v}@{h} on {g['game_date_et']}",
-                "primary_source": "espn",
-                "primary_value": f"{row['visitor_pts']}-{row['home_pts']}",
-                "secondary_source": "basketball-reference",
-                "secondary_value": f"{row['visitor_pts']}-{row['home_pts']}",
-                "status": "match", "discrepancy": None})
-            n += 1
-    db.log_collection(con, "bref-verify", "basketball-reference", "ok",
-                      f"{season_end_year}-{month}: {len(rows)} rows, {n} games verified", rows=n)
+            agree = (g["home_score"] == row["home_pts"]
+                     and g["away_score"] == row["visitor_pts"])
+            claim = f"final score {g['game_id']} {v}@{h} on {g['game_date_et']}"
+            if agree:
+                if not g["verified"]:
+                    con.execute("UPDATE games SET verified=1, "
+                                "verified_against=COALESCE(verified_against,'') || "
+                                "'+basketball-reference' WHERE game_id=?", (g["game_id"],))
+                    db.insert(con, "verifications", {
+                        "checked_utc": util.utcnow_iso(), "claim": claim,
+                        "primary_source": "espn/bref",
+                        "primary_value": f"{row['visitor_pts']}-{row['home_pts']}",
+                        "secondary_source": "basketball-reference",
+                        "secondary_value": f"{row['visitor_pts']}-{row['home_pts']}",
+                        "status": "match", "discrepancy": None})
+                n += 1
+            else:
+                # record the conflict ONCE per game (the check is re-run
+                # every collection while the month stays recent)
+                already = con.execute(
+                    "SELECT 1 FROM verifications WHERE claim=? AND status='mismatch' "
+                    "LIMIT 1", (claim,)).fetchone()
+                if not already:
+                    db.insert(con, "verifications", {
+                        "checked_utc": util.utcnow_iso(), "claim": claim,
+                        "primary_source": "espn/bref",
+                        "primary_value": f"{g['away_score']}-{g['home_score']}",
+                        "secondary_source": "basketball-reference",
+                        "secondary_value": f"{row['visitor_pts']}-{row['home_pts']}",
+                        "status": "mismatch",
+                        "discrepancy": f"stored={g['game_id']} scores differ"})
+                    mismatches += 1
+    db.log_collection(con, "bref-verify", "basketball-reference",
+                      "ok" if mismatches == 0 else "partial",
+                      f"{season_end_year}-{month}: {len(rows)} rows, {n} verified, "
+                      f"{mismatches} NEW score conflicts, {unmatched} without local row",
+                      rows=n)
     return n
 
 

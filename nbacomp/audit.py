@@ -165,6 +165,39 @@ def run_checks(con) -> dict:
     if miss:
         record("info", "injury-missing-publish-ts", {"count": miss})
 
+    # --- injury TIMESTAMP errors (2026-09-21: replaces the old
+    # 'injury-listing-late' check, which joined on team abbrev against ANY
+    # game and could flag the wrong game)
+    fut_pub = con.execute(
+        "SELECT id, player, team, published_utc, captured_utc FROM injuries "
+        "WHERE published_utc IS NOT NULL AND published_utc > captured_utc "
+        "LIMIT 25").fetchall()
+    for r in fut_pub:
+        record("warn", "injury-published-after-capture", dict(r))
+    now_iso = util.utcnow_iso()
+    fut_cap = con.execute(
+        "SELECT id, player, team, captured_utc FROM injuries "
+        "WHERE captured_utc > ? LIMIT 25",
+        (util.to_iso(util.parse_iso(now_iso) + util.timedelta(hours=1)),)).fetchall()
+    for r in fut_cap:
+        record("warn", "injury-future-capture-ts", dict(r))
+    late_own = con.execute(
+        "SELECT i.id, i.player, i.team, i.published_utc, g.game_id, g.game_date_et, "
+        "g.tipoff_utc FROM injuries i JOIN games g "
+        "ON (g.home_team = i.team OR g.away_team = i.team) "
+        "AND g.status='final' AND g.tipoff_utc IS NOT NULL "
+        "AND g.tipoff_utc < i.published_utc "
+        "AND date(g.game_date_et) >= date(i.published_utc) "
+        "AND date(g.game_date_et) <= date(i.published_utc, '+7 days') "
+        "LIMIT 25").fetchall()
+    for r in late_own:
+        record("info", "injury-listed-after-own-game", dict(r))
+    dup_inj = con.execute(
+        "SELECT player, team, status, COUNT(*) c FROM injuries "
+        "GROUP BY 1,2,3 HAVING c > 1 LIMIT 25").fetchall()
+    for r in dup_inj:
+        record("warn", "duplicate-injury-listing", dict(r))
+
     # --- negative bankrolls
     neg_br = con.execute("SELECT strategy_id, current FROM bankroll_events WHERE current < 0").fetchall()
     for r in neg_br:
@@ -223,13 +256,48 @@ def run_checks(con) -> dict:
     for r in overdue:
         record("warn", "bet-still-pending-after-24h", dict(r))
 
-    # --- injury listing appearing AFTER game result (impossible)
-    futuristic_inj = con.execute(
-        "SELECT i.player, i.published_utc, g.game_date_et FROM injuries i "
-        "JOIN games g ON g.home_team = i.team OR g.away_team = i.team "
-        "WHERE i.published_utc IS NOT NULL AND date(i.published_utc) > "
-        "datetime(g.game_date_et, '+7 days') LIMIT 25").fetchall()
-    for r in futuristic_inj:
-        record("info", "injury-listing-late", dict(r))
+    # --- impossible / future-dated statistics (data-integrity flags required
+    # by the spec: "impossible statistics, timestamp errors, ... future
+    # information appearing in historical records")
+    today = util.utcnow_iso()[:10]
+    fut_pg = con.execute(
+        "SELECT COUNT(*) c FROM player_gamelogs WHERE game_date_et > ?",
+        (today,)).fetchone()["c"]
+    if fut_pg:
+        record("critical", "future-dated-gamelogs",
+               {"count": fut_pg, "detail": "gamelogs dated after today"})
+    bad_pg = con.execute(
+        "SELECT COUNT(*) c FROM player_gamelogs WHERE pts < 0 OR reb < 0 OR ast < 0 "
+        "OR COALESCE(minutes, 0) < 0 OR minutes > 60 OR pts > 100").fetchone()["c"]
+    if bad_pg:
+        record("warn", "impossible-player-stat", {"count": bad_pg})
+    bad_tg = con.execute(
+        "SELECT COUNT(*) c FROM team_gamelogs WHERE pts < 0 OR fgm < 0 OR fga < 0 "
+        "OR (fgm IS NOT NULL AND fga IS NOT NULL AND fgm > fga) "
+        "OR (fg3m IS NOT NULL AND fgm IS NOT NULL AND fg3m > fgm) "
+        "OR (ftm IS NOT NULL AND fta IS NOT NULL AND ftm > fta)").fetchone()["c"]
+    if bad_tg:
+        record("warn", "impossible-team-stat", {"count": bad_tg})
+    tg_unfinal = con.execute(
+        "SELECT COUNT(*) c FROM team_gamelogs t JOIN games g ON g.game_id=t.game_id "
+        "WHERE g.status != 'final'").fetchone()["c"]
+    if tg_unfinal:
+        record("warn", "gamelogs-for-unfinalized-game", {"count": tg_unfinal})
+    # quarter scores must be monotonically cumulative (a completed quarter's
+    # cumulative score can never decrease in a later snapshot)
+    bad_q = con.execute(
+        "SELECT a.game_id, a.quarter FROM quarter_scores a JOIN quarter_scores b "
+        "ON a.game_id=b.game_id AND a.quarter=b.quarter+1 "
+        "WHERE a.home_score < b.home_score OR a.away_score < b.away_score "
+        "LIMIT 25").fetchall()
+    for r in bad_q:
+        record("warn", "non-monotonic-quarter-scores", dict(r))
+    # alias table integrity: an alias must point at an existing games row
+    bad_alias = con.execute(
+        "SELECT ga.old_game_id, ga.new_game_id FROM game_aliases ga "
+        "WHERE NOT EXISTS (SELECT 1 FROM games g WHERE g.game_id=ga.new_game_id) "
+        "LIMIT 25").fetchall()
+    for r in bad_alias:
+        record("warn", "alias-target-missing", dict(r))
 
     return summary
