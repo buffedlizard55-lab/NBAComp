@@ -38,7 +38,9 @@ RULE_LABEL = {
     "NBA-020": "team lost previous game by >= 18 -> bet that team (+2pp)",
     "NBA-021": "fade market overreaction to 4+ streaks (+/-3pp)",
     "NBA-002": "rolling pace/efficiency model total",
-    "NBA-022": "model total + 4 when rest asymmetric (3+ vs <=1 days)",
+    "NBA-022": "model total + measured rest-asymmetry effect (3+ vs <=1 days)",
+    "NBA-023": "postseason total shift (measured 9.4 pt drop) -> under",
+    "NBA-024": "back a team on a 4+ win streak / fade a 4+ loss streak",
 }
 
 
@@ -63,7 +65,7 @@ def _winner_signals(ctx: dict) -> list[dict]:
     p_away = 1.0 - p_home
 
     # NBA-001 rest edge
-    if a.get("b2b") and h.get("rest_days", 0) >= 2:
+    if a.get("b2b") and h.get("rest_days") is not None and h["rest_days"] >= 2:
         out.append(("NBA-001", "home", p_home,
                     f"away B2B (rest {a.get('rest_days')}d), home rest {h.get('rest_days')}d"))
     # NBA-003 elo
@@ -92,6 +94,18 @@ def _winner_signals(ctx: dict) -> list[dict]:
             out.append(("NBA-020", side, p_side,
                         f"{team} lost previous game by {abs(margin):.0f}"))
             break
+    # NBA-024 momentum (back the streak) — the measured opposite of NBA-021
+    for side, streak in (("home", ctx.get("h_streak") or 0),
+                         ("away", ctx.get("a_streak") or 0)):
+        opp = "away" if side == "home" else "home"
+        if streak >= 4:
+            p_side = p_home if side == "home" else p_away
+            out.append(("NBA-024", side, p_side,
+                        f"{ctx[side]} on a {streak}-game win streak"))
+        elif streak <= -4:
+            p_opp = p_home if opp == "home" else p_away
+            out.append(("NBA-024", opp, p_opp,
+                        f"opponent of {ctx[side]} ({abs(streak)}-game losing streak)"))
     # NBA-021 streak skeptic
     for side, streak in (("home", ctx.get("h_streak") or 0),
                          ("away", ctx.get("a_streak") or 0)):
@@ -118,10 +132,14 @@ def _total_signals(ctx: dict) -> list[dict]:
         return out
     out.append(("NBA-002", exp, f"model total {exp:.1f}"))
     hr, ar = ctx["h_rest"], ctx["a_rest"]
-    rests = (float(hr.get("rest_days", 3.0)), float(ar.get("rest_days", 3.0)))
+    if hr.get("rest_days") is None or ar.get("rest_days") is None:
+        return out
+    rests = (float(hr["rest_days"]), float(ar["rest_days"]))
     if max(rests) >= 3.0 and min(rests) <= 1.0:
-        out.append(("NBA-022", exp + 4.0,
-                    f"model {exp:.1f}+4 (rest {rests[0]:.0f}/{rests[1]:.0f})"))
+        out.append(("NBA-022", exp + 1.82,
+                    f"model {exp:.1f}+1.82 (rest {rests[0]:.0f}/{rests[1]:.0f})"))
+    if ctx.get("postseason"):
+        out.append(("NBA-023", exp - 9.4, f"postseason shift: model {exp:.1f}-9.4"))
     return out
 
 
@@ -141,11 +159,14 @@ def run_signal_backtest(con, run_id: str = "sigbt-2026-09-21") -> dict:
         log_by_team.setdefault(r["team"], []).append(dict(r))
     log_pos = {t: 0 for t in log_by_team}
 
-    def advance(team: str, before_date: str):
+    def advance(team: str, before_date: str, season: str | None = None):
+        """Same-season, strictly-prior box scores only (see backtest.advance)."""
         rows = log_by_team.get(team) or []
         i = log_pos.get(team, 0)
         while i < len(rows) and rows[i]["game_date_et"] < before_date:
-            rolling.add_game(rows[i])
+            r = rows[i]
+            if season is None or r.get("season") == season:
+                rolling.add_game(r)
             i += 1
         log_pos[team] = i
 
@@ -166,8 +187,8 @@ def run_signal_backtest(con, run_id: str = "sigbt-2026-09-21") -> dict:
             elo.new_season()
             elo.season = season
 
-        advance(g["home_team"], gdate)
-        advance(g["away_team"], gdate)
+        advance(g["home_team"], gdate, g["season"])
+        advance(g["away_team"], gdate, g["season"])
         h_hist_all = [r for r in sched.history.get(g["home_team"], [])
                       if r.get("game_date_et") and r["game_date_et"] < gdate]
         a_hist_all = [r for r in sched.history.get(g["away_team"], [])
@@ -176,8 +197,11 @@ def run_signal_backtest(con, run_id: str = "sigbt-2026-09-21") -> dict:
                   if r.get("game_date_et") and r["game_date_et"] < gdate]
         a_hist = [r for r in rolling.history.get(g["away_team"], [])
                   if r.get("game_date_et") and r["game_date_et"] < gdate]
-        h_roll = rolling.team_rolling(g["home_team"])
-        a_roll = rolling.team_rolling(g["away_team"])
+        # stale state is treated as unavailable, exactly as in the price
+        # backtest and the forward engine (2026-09-21 fix)
+        from .backtest import _roll_state
+        _st = _roll_state(rolling, g["home_team"], g["away_team"], gdate)
+        h_roll, a_roll = _st["h_roll"], _st["a_roll"]
         exp_total = None
         if h_roll and a_roll and h_roll.get("pace_available") and a_roll.get("pace_available"):
             exp_total = expected_total(h_roll, a_roll)
@@ -185,10 +209,12 @@ def run_signal_backtest(con, run_id: str = "sigbt-2026-09-21") -> dict:
             "game": g, "decision": decision, "home": g["home_team"],
             "away": g["away_team"], "season": season,
             "margin": elo.margin(g["home_team"], g["away_team"]),
-            "h_rest": sched.rest_and_travel(g["home_team"], gdate, True),
-            "a_rest": sched.rest_and_travel(g["away_team"], gdate, False),
+            "h_rest": sched.rest_and_travel(g["home_team"], gdate, True, g["season"]),
+            "a_rest": sched.rest_and_travel(g["away_team"], gdate, False, g["season"]),
             "h_prev": h_hist_all[-1] if h_hist_all else None,
             "a_prev": a_hist_all[-1] if a_hist_all else None,
+            "postseason": (g["season_type"] == "postseason"
+                           if "season_type" in g.keys() else False),
             "h_streak": team_streak(h_hist_all),
             "a_streak": team_streak(a_hist_all),
             "hist_h": h_hist, "hist_a": a_hist,
@@ -232,8 +258,8 @@ def run_signal_backtest(con, run_id: str = "sigbt-2026-09-21") -> dict:
         sched.add_game({"team": g["away_team"], "game_date_et": gdate, "is_home": 0,
                         "venue_team": g["home_team"], "pts": g["away_score"],
                         "opp_pts": g["home_score"], "wl": "L" if hw else "W"})
-        advance(g["home_team"], _next_day(gdate))
-        advance(g["away_team"], _next_day(gdate))
+        advance(g["home_team"], _next_day(gdate), g["season"])
+        advance(g["away_team"], _next_day(gdate), g["season"])
 
     _write_summaries(con, run_id, season_totals)
     db.log_collection(con, "signal-backtest", "engine", "ok",

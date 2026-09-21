@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from . import util
+from . import engine, util
 
 
 def run_checks(con) -> dict:
@@ -154,9 +154,113 @@ def run_checks(con) -> dict:
         record("warn", "implausible-kalshi-price", dict(r))
 
     # --- verification mismatches
-    mism = con.execute("SELECT COUNT(*) c FROM verifications WHERE status='mismatch'").fetchone()["c"]
-    if mism:
-        record("critical", "score-verification-mismatch", {"count": mism})
+    # 2026-09-21: only UNRESOLVED mismatches are critical. A mismatch whose
+    # secondary value was produced by the old month-wide join is re-checked
+    # against the exact date here; if the stored score now AGREES with the
+    # source-of-record it is reported as resolved (info), not as a live
+    # conflict. (Five "critical" mismatches on 2026-09-21T04:42Z came from
+    # comparing the wrong game of a playoff series — see sources/bref.py.)
+    mism_rows = con.execute(
+        "SELECT v.id, v.claim, v.primary_value, v.secondary_value, v.checked_utc "
+        "FROM verifications v WHERE v.status='mismatch'").fetchall()
+    unresolved = []
+    for r in mism_rows:
+        claim = r["claim"] or ""
+        # claim format: "final score {game_id} {away}@{home} on {date}"
+        try:
+            gid = claim.split()[2]
+            on_date = claim.split(" on ")[-1]
+        except IndexError:
+            unresolved.append(dict(r))
+            continue
+        g = con.execute("SELECT * FROM games WHERE game_id=?", (gid,)).fetchone()
+        if not g or g["home_score"] is None:
+            unresolved.append(dict(r))
+            continue
+        actual = f"{g['away_score']}-{g['home_score']}"
+        if r["primary_value"] == actual and g["game_date_et"] == on_date:
+            continue  # stale false positive from the old join: resolved
+        unresolved.append(dict(r))
+    if unresolved:
+        record("critical", "score-verification-mismatch",
+               {"count": len(unresolved), "rows": unresolved[:10],
+                "detail": "stored final scores disagree with the verification source"})
+
+    # --- stale model state behind a bet (the defect that produced 10 phantom
+    # edges of 12-31 points on 2026-09-21)
+    stale_bets = []
+    for b in con.execute(
+            "SELECT bet_id, strategy_id, game_id, decision_utc, edge "
+            "FROM bets WHERE kind='forward' AND result='pending' "
+            "AND bet_id NOT IN (SELECT bet_id FROM bet_flags "
+            "                   WHERE flag='stale-state-at-decision')").fetchall():
+        g = con.execute("SELECT home_team, away_team, game_date_et FROM games "
+                        "WHERE game_id=?", (b["game_id"],)).fetchone()
+        if not g:
+            continue
+        for team in (g["home_team"], g["away_team"]):
+            last = con.execute(
+                "SELECT MAX(game_date_et) d FROM team_gamelogs WHERE team=? "
+                "AND game_date_et < ?", (team, g["game_date_et"])).fetchone()
+            if last and last["d"]:
+                from datetime import date as _date
+                age = (_date.fromisoformat(g["game_date_et"])
+                       - _date.fromisoformat(last["d"])).days
+                if age > 14:
+                    stale_bets.append({"bet_id": b["bet_id"],
+                                       "strategy": b["strategy_id"], "team": team,
+                                       "state_age_days": age,
+                                       "game": g["game_date_et"], "claimed_edge": b["edge"]})
+    if stale_bets:
+        record("critical", "stale-model-state-at-decision",
+               {"count": len(stale_bets), "examples": stale_bets[:5],
+                "detail": "the bet's decision used team state older than "
+                          "MAX_STATE_AGE_DAYS=14; the claimed edge is an artifact"})
+
+    # --- bets placed by strategies whose verified evidence contradicts them
+    from . import validation
+    for info in validation.all_tiers(con).values():
+        if info["policy"]["allow_bets"]:
+            continue
+        n = con.execute(
+            "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind='forward' "
+            "AND result='pending' AND bet_id NOT IN "
+            "(SELECT bet_id FROM bet_flags WHERE severity='critical')",
+            (info["strategy_id"],)).fetchone()["c"]
+        if n:
+            record("warn", "unvalidated-strategy-holds-bets",
+                   {"strategy": info["strategy_id"], "open_bets": n,
+                    "tier": info["tier"], "evidence": info["detail"],
+                    "detail": "strategy is parked by its own validation evidence "
+                              "yet holds open paper bets placed under an earlier "
+                              "version; kept visible, never rewritten"})
+
+    # --- quarantined bets: a defect flag on a saved bet is disclosed here in
+    # aggregate (the per-flag anomaly rows are written by paper.quarantine_bets)
+    q = con.execute(
+        "SELECT f.flag, f.severity, COUNT(*) c, "
+        "SUM(CASE WHEN b.result='pending' THEN 1 ELSE 0 END) open_n "
+        "FROM bet_flags f JOIN bets b ON b.bet_id=f.bet_id "
+        "GROUP BY f.flag, f.severity").fetchall()
+    for r in q:
+        record("info" if r["severity"] != "critical" else "warn",
+               "quarantined-bets", {"flag": r["flag"], "severity": r["severity"],
+                                    "bets_flagged": r["c"], "open_bets": r["open_n"],
+                                    "detail": "bets placed under a defective "
+                                              "input (or at an assumed price) are "
+                                              "flagged, excluded from exposure "
+                                              "and ranking P&L, and still listed"})
+
+    # --- season-type coverage (a NULL label means rolling features cannot
+    # tell preseason from regular-season games)
+    unlabeled = con.execute(
+        "SELECT COUNT(*) c FROM games WHERE status='final' AND season_type IS NULL"
+    ).fetchone()["c"]
+    if unlabeled:
+        record("info", "unlabeled-season-type",
+               {"count": unlabeled,
+                "detail": "ESPN did not report season.type for these rows; they "
+                          "are never guessed from dates"})
 
     # --- injuries missing timestamps
     miss = con.execute(
@@ -203,6 +307,46 @@ def run_checks(con) -> dict:
     for r in neg_br:
         record("critical", "negative-bankroll", dict(r))
 
+    # --- stored timestamps without an explicit zone marker. Everything we
+    # write is UTC with a trailing Z; a value without one means some collector
+    # passed a local/naive time through, which silently shifts the "as of"
+    # point of a decision (the direction of the shift decides whether that
+    # leaks future information, so it is never acceptable).
+    naive = []
+    stamp_cols = [
+        ("bets", "decision_utc"), ("bets", "source_ts"),
+        ("games", "captured_utc"), ("odds_snapshots", "captured_utc"),
+        ("kalshi_candles", "ts_utc"), ("injuries", "captured_utc"),
+        ("team_gamelogs", "captured_utc"), ("bets", "tipoff_utc"),
+    ]
+    for table, col in stamp_cols:
+        try:
+            rows = con.execute(
+                f"SELECT COUNT(*) c FROM {table} WHERE {col} IS NOT NULL AND {col}<>'' "
+                f"AND {col} NOT LIKE '%Z' AND {col} NOT LIKE '%+%'").fetchone()
+        except Exception:
+            continue  # table/column absent in this checkout
+        if rows and rows["c"]:
+            naive.append({"table": table, "column": col, "rows": rows["c"]})
+    if naive:
+        record("warn", "naive-timestamp-stored",
+               {"columns": naive,
+                "detail": "timestamps are stored without a timezone marker; every "
+                          "written timestamp must be UTC with a trailing Z"})
+
+    # --- impossible bet shapes (a row no settlement rule can interpret)
+    bad_shape = []
+    for b in con.execute("SELECT * FROM bets").fetchall():
+        ok, why = engine.bet_shape(dict(b))
+        if not ok:
+            bad_shape.append({"bet_id": b["bet_id"], "strategy": b["strategy_id"],
+                              "market": b["market"], "side": b["side"], "reason": why})
+    if bad_shape:
+        record("critical", "impossible-bet-shape",
+               {"count": len(bad_shape), "rows": bad_shape[:10],
+                "detail": "these rows cannot be settled by any rule; they are "
+                          "flagged rather than interpreted"})
+
     # --- probability / odds math
     outofrange = con.execute(
         "SELECT bet_id, model_prob, market_prob, edge FROM bets WHERE model_prob IS NOT NULL "
@@ -217,6 +361,7 @@ def run_checks(con) -> dict:
         "JOIN (SELECT strategy_id, current FROM bankroll_events "
         "       GROUP BY strategy_id HAVING as_of_utc=MAX(as_of_utc)) br "
         "ON br.strategy_id=b.strategy_id WHERE b.kind='forward' AND b.result='pending' "
+        "AND b.bet_id NOT IN (SELECT bet_id FROM bet_flags WHERE severity='critical') "
         "GROUP BY b.strategy_id").fetchall()
     for r in exp_rows:
         if r["current"] and r["s"] > 0.25 * r["current"] + 0.01:

@@ -49,6 +49,13 @@ def great_circle_miles(a: tuple[float, float], b: tuple[float, float]) -> float:
 # and labeled as an assumption everywhere it is used.
 SD_TOTAL = 23.0
 
+#: A team's rolling performance state may not be older than this many days to
+#: be used as a decision input. Within a season the longest normal gap is the
+#: All-Star break (~6-8 days). 2026-09-21 defect: the forward engine fed
+#: rolling state from team logs that ended in January 2025 while pricing games
+#: in October 2026, producing "edges" of 12-31 points on liquid markets.
+MAX_STATE_AGE_DAYS = 14
+
 
 # ---------------------------------------------------------------- Elo
 
@@ -87,18 +94,39 @@ class EloModel:
     def update(self, home: str, away: str, home_pts: int, away_pts: int, neutral: bool = False):
         exp = self.expect(home, away, neutral)
         actual = 1.0 if home_pts > away_pts else 0.0
-        mov_mult = _mov_multiplier(home_pts - away_pts, self.get(home) + (0 if neutral else self.HOME_ELO), self.get(away))
+        ha = 0.0 if neutral else self.HOME_ELO
+        # ratings as seen BEFORE the game, with the home side's advantage applied
+        r_home = self.get(home) + ha
+        r_away = self.get(away)
+        mov_mult = _mov_multiplier(home_pts - away_pts, r_home, r_away)
         delta = self.K * mov_mult * (actual - exp)
         self.ratings[home] = self.get(home) + delta
         self.ratings[away] = self.get(away) - delta
 
 
-def _mov_multiplier(margin: float, ra: float, rb: float) -> float:
-    """FiveThirtyEight-style margin-of-victory multiplier."""
+def _mov_multiplier(margin: float, rating_winner: float, rating_loser: float) -> float:
+    """FiveThirtyEight-style margin-of-victory multiplier.
+
+    ``(margin + 3)^0.8 / (7.5 + 0.006 * elo_diff)`` where ``elo_diff`` is the
+    pre-game rating gap (winner minus loser, home advantage included). The
+    denominator damps MOV for heavy favourites: a 20-point win by a 300-point
+    favourite is less informative than the same win by an underdog.
+
+    Note (2026-09-21): the previous implementation dropped the denominator and
+    contained dead code (`lo = min(...)` never used), which made every blowout
+    worth far more rating movement than the published formula intends. Fixed
+    here; Elo-derived probabilities are therefore versioned (see
+    strategies.py v1.1.0 notes for NBA-003/005/006/007/019/020/021).
+    """
     import math
-    lo = min(ra + margin / 28.0 * 28.0, rb)  # winner-adjusted simplified
-    _ = lo
-    return (abs(margin) + 3.0) ** 0.8 / 14.0 ** 0.8 if margin != 0 else 1.0
+    margin = abs(float(margin))
+    denom = 7.5 + 0.006 * (rating_winner - rating_loser)
+    if denom <= 0.5:  # guard: never let a rating gap blow the multiplier up
+        denom = 0.5
+    base = (margin + 3.0) ** 0.8 / denom
+    # a game that finishes level (impossible in the NBA, possible in bad data)
+    # carries the neutral multiplier rather than a large one
+    return base if margin > 0 else math.log(1.0) + 1.0
 
 
 # --------------------------------------------------------- rolling team form
@@ -110,6 +138,20 @@ def possessions(pts_rows: dict) -> float:
     tov = pts_rows.get("tov") or 0
     fta = pts_rows.get("fta") or 0
     return fga - oreb + tov + 0.44 * fta
+
+
+def state_age_days(rows: list[dict], game_date_et: str) -> int | None:
+    """Days since the most recent observation strictly before ``game_date_et``.
+
+    None means no prior observation at all (state unavailable). Used by the
+    engines to refuse stale model state instead of trading on it.
+    """
+    prior = [r["game_date_et"] for r in rows
+             if r.get("game_date_et") and r["game_date_et"] < game_date_et]
+    if not prior:
+        return None
+    d0 = datetime.strptime(game_date_et, "%Y-%m-%d")
+    return (d0 - datetime.strptime(max(prior), "%Y-%m-%d")).days
 
 
 class RollingTeamState:
@@ -175,23 +217,43 @@ class RollingTeamState:
         }
         return out
 
-    def rest_and_travel(self, team: str, game_date_et: str, is_home: bool) -> dict:
-        """Schedule features from STRICTLY PRIOR games (B2B, 3in4, 4in6, road trips)."""
+    def rest_and_travel(self, team: str, game_date_et: str, is_home: bool,
+                        season: str | None = None) -> dict:
+        """Schedule features from STRICTLY PRIOR games (B2B, 3in4, 4in6, road trips).
+
+        2026-09-21 fix: the previous version returned ``rest_days=3.0`` when a
+        team had no prior game in the history — which is exactly the season
+        opener (or a team's first game after a long gap), where true rest is
+        *unknown*, not 3 days. That default let rest-based rules fire on
+        opening night from nothing. Rest is now ``None`` when there is no
+        prior game in the same season, and every rest rule must handle it.
+
+        ``state_age_days`` is the gap since the team's last game in any season
+        (None if unknown) so callers can detect a stale model state.
+        """
         rows = self.history.get(team) or []
         d0 = datetime.strptime(game_date_et, "%Y-%m-%d")
-        prev = [r for r in rows if r.get("game_date_et") and r["game_date_et"] < game_date_et]
-        if not prev:
-            return {"rest_days": 3.0, "b2b": 0, "three_in_four": 0, "four_in_six": 0,
-                    "road_trip_len": 0, "tz_shift": 0, "travel_miles": 0.0}
+        prior = [r for r in rows if r.get("game_date_et") and r["game_date_et"] < game_date_et]
+        same_season = [r for r in prior
+                       if season is None or r.get("season") in (None, season)]
+        state_age = ((d0 - datetime.strptime(prior[-1]["game_date_et"], "%Y-%m-%d")).days
+                     if prior else None)
+        if not same_season:
+            return {"rest_days": None, "b2b": 0, "three_in_four": 0, "four_in_six": 0,
+                    "road_trip_len": 0, "tz_shift": 0, "travel_miles": 0.0,
+                    "state_age_days": state_age}
+        prev = same_season
         last = prev[-1]
         rest = (d0 - datetime.strptime(last["game_date_et"], "%Y-%m-%d")).days - 1
         b2b = 1 if rest <= 0 else 0
 
         def played_in(days: int) -> int:
+            # counts games in the SAME season only (a game 5 days before the
+            # opener belongs to last season and is not part of this schedule)
             cnt = 0
             for k in range(days):
                 dd = (d0 - timedelta(days=k + 1)).strftime("%Y-%m-%d")
-                cnt += 1 if any(r["game_date_et"] == dd for r in rows) else 0
+                cnt += 1 if any(r["game_date_et"] == dd for r in prev) else 0
             return cnt
 
         t4 = played_in(4)
@@ -217,7 +279,8 @@ class RollingTeamState:
             tz = abs(TEAM_CITY_TZ.get(last["venue_team"], 0) - TEAM_CITY_TZ.get(team, 0))
         return {"rest_days": float(rest), "b2b": b2b, "three_in_four": 1 if t4 >= 3 else 0,
                 "four_in_six": 1 if t6 >= 4 else 0, "road_trip_len": rtl,
-                "tz_shift": tz, "travel_miles": round(travel, 0)}
+                "tz_shift": tz, "travel_miles": round(travel, 0),
+                "state_age_days": state_age}
 
 
 # ---------------------------------------------------------- totals model

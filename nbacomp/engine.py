@@ -401,17 +401,97 @@ def espn_odds_at(con, game_id: str, decision_iso: str, market: str) -> dict | No
     return dict(row) if row else None
 
 
+#: Which side vocabulary is legal per market. Settlement must never be able to
+#: interpret a row whose shape is impossible (2026-09-21 adversarial pass:
+#: a winner bet carrying side="under" was settled as a LOSS instead of being
+#: refused, because settle_score_based() trusted the selection string).
+MARKET_SIDES: dict[str, tuple[str, ...]] = {
+    "ml": ("home", "away"),
+    "kalshi:winner": ("home", "away"),
+    "spread": ("home", "away"),
+    "kalshi:spread": ("home", "away"),
+    "total": ("over", "under"),
+    "kalshi:total": ("over", "under"),
+    "1h": ("home", "away", "yes", "no"),
+    "kalshi:1h": ("yes", "no", "home", "away"),
+    "kalshi:1h_winner": ("yes", "no"),
+}
+
+
+def side_vocabulary(market: str) -> tuple[str, ...] | None:
+    """Legal `side` values for a market, or None for prop/free-form markets."""
+    if market in MARKET_SIDES:
+        return MARKET_SIDES[market]
+    if "prop" in (market or ""):
+        # prop bets are placed as over/under on the strike (paper._prop_signals)
+        return ("over", "under", "yes", "no")
+    return None
+
+
+def _shape_field(bet, key, default=None):
+    """Read a column from either a dict or an sqlite3.Row (no KeyError)."""
+    try:
+        val = bet[key]
+    except (KeyError, IndexError):
+        return default
+    return default if val is None else val
+
+
+def bet_shape(bet) -> tuple[bool, str]:
+    """Is this stored bet row internally consistent and settleable?
+
+    Returns (ok, reason). A False answer means the row can never be settled
+    honestly, so the caller must flag it instead of interpreting it.
+    """
+    market = (_shape_field(bet, "market", "") or "")
+    side = (_shape_field(bet, "side", "") or "")
+    sel = (_shape_field(bet, "selection", "") or "")
+    vocab = side_vocabulary(market)
+    if vocab is None:
+        return False, f"unknown market vocabulary: {market!r}"
+    if side.lower() not in vocab:
+        return False, f"market {market!r} cannot carry side {side!r} (legal: {list(vocab)})"
+    if not sel:
+        return False, "empty selection"
+    if market in ("total", "kalshi:total"):
+        num = sel.split()[-1] if sel.split() else ""
+        try:
+            float(num)
+        except ValueError:
+            return False, f"total selection has no numeric strike: {sel!r}"
+    if _shape_field(bet, "price") in (None, 0):
+        return False, "no price recorded"
+    mp = _shape_field(bet, "model_prob")
+    if mp is not None and not 0.0 < float(mp) < 1.0:
+        return False, f"impossible model probability {mp!r}"
+    stake = _shape_field(bet, "stake_usd")
+    if stake is not None and float(stake) <= 0:
+        return False, f"non-positive stake {stake!r}"
+    return True, ""
+
+
 def settle_score_based(result_type: str, home_score: int, away_score: int,
                        selection: str, line: float | None) -> str:
-    """win|loss|push from final score (final scores include OT)."""
+    """win|loss|push from final score (final scores include OT).
+
+    Uninterpretable input returns 'void' (no P&L) rather than a guessed result:
+    a settlement that cannot be justified is not recorded as a win or a loss.
+    """
     margin = home_score - away_score
     if result_type == "winner":
         team = selection
+        if team not in ("home", "away"):
+            return "void"
         return "win" if (margin > 0 and team == "home") or (margin < 0 and team == "away") else "loss"
     if result_type == "spread":
         # selection: 'home -4.5' style; bet on that side covering
         parts = selection.split()
-        side, num = parts[0], float(parts[1])
+        if len(parts) < 2 or parts[0] not in ("home", "away"):
+            return "void"
+        try:
+            side, num = parts[0], float(parts[1])
+        except ValueError:
+            return "void"
         covered = margin + num if side == "home" else (-margin) + num
         if covered > 0:
             return "win"
@@ -420,7 +500,8 @@ def settle_score_based(result_type: str, home_score: int, away_score: int,
         return "loss"
     if result_type == "total":
         total = home_score + away_score
-        if line is None:
+        if line is None or not (selection.startswith("over")
+                                or selection.startswith("under")):
             return "void"
         if total > line:
             return "win" if selection.startswith("over") else "loss"

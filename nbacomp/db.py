@@ -47,6 +47,21 @@ def _bets_trigger_sql(extra_cols=()):
         "END;")
 
 
+def _bets_delete_trigger_sql():
+    """A placed bet is evidence: rows can never be deleted, only flagged.
+
+    2026-09-21 adversarial pass: the UPDATE guard alone left `DELETE FROM bets`
+    legal, so a losing bet could have been erased without a trace. Deletion now
+    aborts at the database level; defects are recorded in `bet_flags` instead.
+    """
+    return (
+        "CREATE TRIGGER IF NOT EXISTS trg_bets_no_delete BEFORE DELETE ON bets\n"
+        "BEGIN\n"
+        "  SELECT RAISE(ABORT, 'bets are append-only: rows cannot be deleted, "
+        "use bet_flags to record a defect');\n"
+        "END;")
+
+
 SCHEMA = f"""
 PRAGMA journal_mode=WAL;
 
@@ -64,6 +79,7 @@ CREATE TABLE IF NOT EXISTS games (
   home_score INTEGER,
   away_score INTEGER,
   status TEXT NOT NULL,                 -- scheduled|in|final|postponed|canceled
+  season_type TEXT,                     -- preseason|regular|postseason|unknown (NULL = unrecorded)
   neutral_site INTEGER DEFAULT 0,
   source_updated_utc TEXT,
   captured_utc TEXT NOT NULL,
@@ -330,12 +346,94 @@ CREATE TABLE IF NOT EXISTS bets (
   superseded_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_bets_strat ON bets(strategy_id, kind, run_id);
+
+-- Historical sportsbook odds archive (SBR season pages). Only rows that passed
+-- the parser's structural + numeric cross-checks are stored; `reject_reason` is
+-- never set on stored rows, and rejected games are counted in
+-- collection_log/anomalies instead of being silently dropped.
+CREATE TABLE IF NOT EXISTS hist_odds (
+  season TEXT NOT NULL,
+  game_date_et TEXT NOT NULL,
+  away TEXT NOT NULL,
+  home TEXT NOT NULL,
+  away_q TEXT, home_q TEXT,              -- JSON quarter scores
+  away_final INTEGER NOT NULL,
+  home_final INTEGER NOT NULL,
+  open_total REAL, close_total REAL,
+  open_home_spread REAL, close_home_spread REAL,
+  ml_away INTEGER, ml_home INTEGER,
+  source TEXT NOT NULL DEFAULT 'sbr',
+  source_url TEXT NOT NULL,
+  source_row_hash TEXT,                  -- detects later edits at the source
+  spread_printed_row TEXT,               -- which row (away|home) printed the spread
+  spread_sign_from_ml INTEGER,           -- 1 when the moneyline made home the favourite
+  cross_checked INTEGER NOT NULL DEFAULT 0,
+  cross_check_detail TEXT,
+  captured_utc TEXT NOT NULL,
+  PRIMARY KEY (season, game_date_et, away, home)
+);
+CREATE INDEX IF NOT EXISTS idx_hist_odds_season ON hist_odds(season, game_date_et);
+
+-- Price-based historical simulation results over the validated SBR archive.
+-- Separate from signal_backtests (outcome-only) and from bets (forward paper
+-- trading): these are the only results in the repository that carry real
+-- historical market prices.
+CREATE TABLE IF NOT EXISTS hist_backtests (
+  run_id TEXT NOT NULL,
+  strategy_id TEXT NOT NULL,             -- or MARKET for the home-team baseline
+  season TEXT NOT NULL,                  -- or ALL
+  bets INTEGER NOT NULL,
+  wins INTEGER NOT NULL,
+  win_rate REAL,
+  pnl REAL NOT NULL,
+  staked REAL NOT NULL,
+  roi REAL,
+  max_dd REAL,
+  avg_edge REAL,
+  avg_price REAL,
+  games_available INTEGER NOT NULL,
+  generated_utc TEXT NOT NULL,
+  PRIMARY KEY (run_id, strategy_id, season)
+);
+
+-- Bet quarantine flags. A bet placed by a version of the engine that is now
+-- known to be defective (stale model state, assumed price never observed,
+-- strategy parked by its own evidence) cannot be deleted or edited — the bets
+-- table is append-only — so the defect is recorded here instead. Flagged bets
+-- stay visible in every ledger, are excluded from live exposure and from the
+-- competition's ranking P&L, and their own settlement P&L is published
+-- separately as a quarantined figure.
+CREATE TABLE IF NOT EXISTS bet_flags (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bet_id TEXT NOT NULL,
+  strategy_id TEXT NOT NULL,
+  flag TEXT NOT NULL,                   -- stale-state-at-decision|price-not-observed|strategy-parked|...
+  severity TEXT NOT NULL,               -- critical|warn|info
+  detail_json TEXT NOT NULL,
+  flagged_utc TEXT NOT NULL,
+  run_id TEXT,
+  UNIQUE(bet_id, flag)
+);
+CREATE INDEX IF NOT EXISTS idx_bet_flags_bet ON bet_flags(bet_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_bet_flags_no_update BEFORE UPDATE ON bet_flags
+BEGIN
+  SELECT RAISE(ABORT, 'bet_flags is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_bet_flags_no_delete BEFORE DELETE ON bet_flags
+BEGIN
+  SELECT RAISE(ABORT, 'bet_flags is append-only');
+END;
 CREATE INDEX IF NOT EXISTS idx_bets_game ON bets(game_id);
 
 -- Bet records are append-only. The ONLY permitted mutation is writing the
 -- settlement columns (never decision/price/state columns). Any other UPDATE
 -- aborts at the database level instead of relying on code discipline.
 {_bets_trigger_sql()}
+
+-- A placed bet is evidence; it can be flagged but never deleted.
+{_bets_delete_trigger_sql()}
 
 CREATE TABLE IF NOT EXISTS bankroll_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -432,6 +530,27 @@ def _migrate(con: sqlite3.Connection) -> None:
     # bets v2: decision-state columns for prop settlement (2026-09-21)
     # + closing_price (added to SCHEMA after production DBs existed, so it
     # needs a migration too — settlement writes it and the site reads it)
+    gcols = {r[1] for r in con.execute("PRAGMA table_info(games)")}
+    if "season_type" not in gcols:
+        # 2026-09-21: ESPN's scoreboard reports season type (1 preseason,
+        # 2 regular, 3 postseason). Without it, preseason exhibitions and
+        # playoff games are indistinguishable from regular-season games in
+        # every rolling feature. Existing rows keep NULL = unrecorded (never
+        # guessed retroactively).
+        con.execute("ALTER TABLE games ADD COLUMN season_type TEXT")
+    hcols = {r[1] for r in con.execute("PRAGMA table_info(hist_odds)")}
+    for col, ddl in (("spread_printed_row", "TEXT"),
+                     ("spread_sign_from_ml", "INTEGER")):
+        if col not in hcols:
+            # 2026-09-21: recorded when the archive's spread sign could not be
+            # trusted and the sign was taken from the moneyline instead.
+            con.execute(f"ALTER TABLE hist_odds ADD COLUMN {col} {ddl}")
+    scols = {r[1] for r in con.execute("PRAGMA table_info(strategies)")}
+    if "version_history" not in scols:
+        # 2026-09-21: version history is part of the audit trail — a strategy
+        # that changes what it trades gets a new version and the previous
+        # version's rule text is preserved here, never rewritten.
+        con.execute("ALTER TABLE strategies ADD COLUMN version_history TEXT")
     cols = {r[1] for r in con.execute("PRAGMA table_info(bets)")}
     for col, decl in (("strike", "REAL"), ("market_ticker", "TEXT"),
                       ("prop_player", "TEXT"), ("closing_price", "REAL")):
@@ -441,6 +560,7 @@ def _migrate(con: sqlite3.Connection) -> None:
     # new decision-state columns (idempotent)
     con.execute("DROP TRIGGER IF EXISTS trg_bets_append_only")
     con.execute(_bets_trigger_sql(_BETS_V2_IMMUTABLE))
+    con.execute(_bets_delete_trigger_sql())
     try:
         con.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_inj_natural "

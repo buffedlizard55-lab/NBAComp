@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import strategies as S
+from . import strategies as S, validation
 from .sources_registry import REGISTRY
 
 NAV = [
@@ -72,14 +72,26 @@ def fmt_pct(x) -> str:
 
 
 def strategy_performance(con, strategy_id: str, kind: str) -> dict:
+    """Settled-bet performance for one strategy, excluding quarantined bets.
+
+    Quarantined bets (critical defect flag: invalid decision state or an
+    implausible claimed edge) are reported separately by `quarantine_stats` and
+    shown in their own ledger, because a bet priced off a broken input is not a
+    measurement of the strategy. Nothing is deleted or hidden.
+    """
+    valid = ("AND bet_id NOT IN (SELECT bet_id FROM bet_flags "
+             "WHERE severity='critical')")
     rows = con.execute(
-        "SELECT * FROM bets WHERE strategy_id=? AND kind=? AND result IN ('win','loss','push','void')",
+        f"SELECT * FROM bets WHERE strategy_id=? AND kind=? "
+        f"AND result IN ('win','loss','push','void') {valid}",
         (strategy_id, kind)).fetchall()
+    q = quarantine_stats(con, strategy_id, kind)
     if not rows:
         pending = con.execute(
-            "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
+            f"SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? "
+            f"AND result='pending' {valid}",
             (strategy_id, kind)).fetchone()["c"]
-        return {"bets": 0, "pending": pending}
+        return {"bets": 0, "pending": pending, **q}
     pnl = sum(r["pnl_usd"] or 0 for r in rows)
     wins = sum(1 for r in rows if r["result"] == "win")
     losses = sum(1 for r in rows if r["result"] == "loss")
@@ -120,9 +132,10 @@ def strategy_performance(con, strategy_id: str, kind: str) -> dict:
     largest_loss = min(decided_pnls) if decided_pnls else None
     odds = [abs(float(r["price"])) for r in rows if r["price"] is not None]
     pending = con.execute(
-        "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending'",
+        f"SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind=? AND result='pending' {valid}",
         (strategy_id, kind)).fetchone()["c"]
     return {
+        **q,
         "bets": len(rows), "wins": wins, "losses": losses, "pushes": pushes,
         "voids": voids, "win_rate": wins / decided if decided else None,
         "loss_rate": losses / decided if decided else None,
@@ -135,6 +148,73 @@ def strategy_performance(con, strategy_id: str, kind: str) -> dict:
         "avg_price": round(sum(odds) / len(odds), 1) if odds else None,
         "pending": pending,
     }
+
+
+def quarantine_stats(con, strategy_id: str, kind: str) -> dict:
+    """Counts + settled P&L of quarantined bets (critical defect flags)."""
+    q = con.execute(
+        "SELECT * FROM bets b WHERE b.strategy_id=? AND b.kind=? AND b.bet_id IN "
+        "(SELECT bet_id FROM bet_flags WHERE severity='critical')",
+        (strategy_id, kind)).fetchall()
+    if not q:
+        return {"quarantined": 0, "quarantine_pnl": 0.0, "quarantine_open": 0}
+    settled = [r for r in q if r["result"] in ("win", "loss", "push", "void")]
+    return {
+        "quarantined": len(q),
+        "quarantine_pnl": round(sum(r["pnl_usd"] or 0 for r in settled), 2),
+        "quarantine_open": sum(1 for r in q if r["result"] == "pending"),
+    }
+
+
+def flagged_bet_ids(con) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for r in con.execute("SELECT bet_id, flag, severity FROM bet_flags"):
+        out.setdefault(r["bet_id"], []).append(f"{r['flag']}({r['severity']})")
+    return out
+
+
+def quarantine_section_html(con, limit: int = 50) -> str:
+    """Ledger of quarantined bets — published, never hidden."""
+    rows = con.execute(
+        "SELECT b.*, f.flag, f.severity, f.detail_json, f.flagged_utc FROM bets b "
+        "JOIN bet_flags f ON f.bet_id=b.bet_id ORDER BY "
+        "CASE f.severity WHEN 'critical' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, "
+        "b.decision_utc DESC LIMIT ?", (limit,)).fetchall()
+    if not rows:
+        return ""
+    flagged_ids = {r["bet_id"] for r in rows}
+    ph = ",".join("?" for _ in flagged_ids)
+    pnl = con.execute(
+        f"SELECT COALESCE(SUM(pnl_usd),0) s, COUNT(*) c FROM bets WHERE bet_id IN ({ph}) "
+        f"AND result IN ('win','loss','push','void')", tuple(flagged_ids)).fetchone()
+    open_n = con.execute(
+        f"SELECT COUNT(*) c, COALESCE(SUM(stake_usd),0) s FROM bets WHERE bet_id IN ({ph}) "
+        f"AND result='pending'", tuple(flagged_ids)).fetchone()
+    tbl = table(
+        ["Bet", "Strategy", "When flagged", "Flag", "Severity", "Game", "Pick", "Price",
+         "Model p", "Stake", "Result", "P&L", "Evidence"],
+        [[f"<span class='mono small'>{_esc(r['bet_id'])}</span>",
+          _esc(r["strategy_id"]), _esc(r["flagged_utc"]),
+          f"<code>{_esc(r['flag'])}</code>",
+          f"<span class='{'bad' if r['severity'] == 'critical' else 'muted'}'>{_esc(r['severity'])}</span>",
+          _esc(r["game_label"]), _esc(f"{r['market']} {r['selection']}"),
+          f"{r['price']} {_esc(r['price_format'])}",
+          f"{r['model_prob']:.3f}" if r["model_prob"] is not None else "—",
+          fmt_money(r["stake_usd"]), _esc(r["result"]), fmt_money(r["pnl_usd"]),
+          f"<code class='small'>{_esc(r['detail_json'][:220])}</code>"] for r in rows])
+    return f"""
+<h2>Quarantined bets <span class="muted">(kept, flagged, excluded from ranking)</span></h2>
+<p class="muted">A bet is quarantined when it was placed on a decision state that is
+provably invalid — team state older than the 14-day freshness limit, or a claimed edge above
+{int(0.20 * 100)}% that indicates a broken input rather than an edge. Quarantined bets are never deleted and their
+settlement is still recorded here. They are excluded from the competition's exposure, P&amp;L and ranking,
+because a bet priced off a broken input is not a measurement of the strategy. Their own figures:
+settled <b>{pnl['c']}</b> bets / P&amp;L <b>{fmt_money(pnl['s'])}</b>, open
+<b>{open_n['c']}</b> (${open_n['s']:,.2f} stake).
+This is the honest treatment of the 2026-09-21 stale-state defect: the losing record of the affected bets
+stays on this page, it just does not masquerade as a strategy result.</p>
+{tbl}
+"""
 
 
 def strategy_profit_by(con, strategy_id: str, kind: str, group_by: str) -> dict[str, dict]:
@@ -255,6 +335,15 @@ def index(con, out_dir):
                        "<div class='k'>Pipeline health</div>"
                        "<div class='v'>no critical anomalies</div></div>")
 
+    qrows = con.execute(
+        "SELECT f.flag, MIN(f.severity) sev, COUNT(*) c FROM bet_flags f GROUP BY f.flag").fetchall()
+    qtot = sum(r["c"] for r in qrows)
+    qflag = f"{len(qrows)} distinct flag(s)" if qrows else "none"
+    tiers = validation.all_tiers(con)
+    tier_counts: dict[str, int] = {}
+    for t in tiers.values():
+        tier_counts[t["tier"]] = tier_counts.get(t["tier"], 0) + 1
+    tier_summary = " · ".join(f"{k}: {v}" for k, v in sorted(tier_counts.items()))
     bt_rows = [[f"<a href='strategies.html#{r['id']}'>{_esc(r['username'])}</a>",
                 r.get("bets", 0),
                 f"{r['win_rate'] * 100:.1f}%" if r.get("win_rate") is not None else "—",
@@ -291,9 +380,14 @@ def index(con, out_dir):
   <div class="card"><div class="k">Strategies with live bets</div><div class="v">{active}/{len(S.STRATEGIES)}</div></div>
   <div class="card"><div class="k">Games in database</div><div class="v">{games:,} <span class="muted">({verified:,} cross-verified)</span></div></div>
   <div class="card"><div class="k">Injury listings collected</div><div class="v">{inj:,}</div></div>
+  <div class="card"><div class="k">Quarantined bets <span class="muted">(flagged, excluded from ranking)</span></div><div class="v">{qtot} <span class="muted">({qflag})</span></div></div>
   <div class="card"><div class="k">Kalshi NBA markets stored</div><div class="v">{kmarkets:,} <span class="muted">({kseries} series · {candles:,} candles · {books:,} books)</span></div></div>
 </div>
 {health_html}
+<p class="muted">Strategy validation tiers (evidence-based, recomputed every run): {tier_summary}.
+Tiers gate trading: a strategy whose own measured evidence fails is parked and places no further bets,
+but stays published with its full record. See
+<a href="strategies.html">strategies</a> and <a href="positions.html#quarantined">quarantined bets</a>.</p>
 <h2>Competition leaderboard <span class="muted">(forward paper trades)</span></h2>
 {lb}
 <p class="muted">Strategies with zero bets are shown as <i>awaiting-opportunity</i> — the 2026-27 season tips off in
@@ -614,6 +708,15 @@ def strategies_page(con, out_dir):
                          _profit_breakdown_html(fwd_by_team, "team") + \
                          _profit_breakdown_html(fwd_by_month, "month")
 
+        def qline(p):
+            if not p.get("quarantined"):
+                return ""
+            return (f"<div class='perf'><b>Quarantined</b>: {p['quarantined']} bet(s) "
+                    f"({p['quarantine_open']} open) excluded from the figures above because "
+                    f"their decision state was flagged defective; settled P&L "
+                    f"{fmt_money(p['quarantine_pnl'])} is listed on "
+                    f"<a href='positions.html#quarantined'>positions.html</a>.</div>")
+
         def perf_html(p, label):
             if not p.get("bets"):
                 return (f"<div class='perf'><b>{label}</b>: no {label.split(' ')[0].lower()} bets yet"
@@ -627,6 +730,26 @@ def strategies_page(con, out_dir):
             base += "</div>"
             return base
 
+        tier = validation.classify(con, sid)
+        pol = tier["policy"]
+        tier_html = (
+            f"<p><b>Verification status.</b> <span class='pill tier-{tier['tier']}'>"
+            f"{_esc(tier['tier'].replace('_', ' '))}</span> "
+            f"{_esc(tier['detail'])}. <span class='muted'>{_esc(tier['reason'])}</span></p>"
+            f"<p class='muted small'>Policy from this tier: "
+            f"{'bets allowed' if pol['allow_bets'] else 'NO bets (parked)'} · "
+            f"probability shrunk {pol['shrink']:.0%} toward the market · "
+            f"max credible edge {pol['max_edge']:.0%} · stake scale {pol['stake_scale']:.2f}x</p>")
+        hist = m.get("history") or []
+        if hist:
+            hist_html = "<details><summary>Version history ({n})</summary><ul>{items}</ul></details>".format(
+                n=len(hist),
+                items="".join(
+                    f"<li><b>v{_esc(h.get('version'))}</b> → v{_esc(h.get('superseded_by'))} "
+                    f"({_esc(h.get('changed_utc'))}): {_esc(h.get('note'))}</li>" for h in hist))
+        else:
+            hist_html = "<p class='muted small'>No prior versions.</p>"
+
         cards.append(f"""
 <div class="strategy-card" id="{sid}">
 <h2>{_esc(m['name'])} <span class="mono">{sid} v{m['version']}</span>
@@ -638,12 +761,15 @@ def strategies_page(con, out_dir):
 <ul class="rules">{rules}</ul>
 <p><b>Markets.</b> {markets} <br><b>Data sources.</b> {srcs}</p>
 <p><b>Sizing.</b> {_esc(m['sizing_rules'])} · <b>Expected edge.</b> {_esc(m['expected_edge'])}</p>
+{tier_html}
+{hist_html}
 <p><b>Look-ahead controls.</b> {la}</p>
 <details><summary>Failure modes</summary><ul>{fails}</ul></details>
 <details><summary>Data limitations</summary><ul>{lims}</ul></details>
 {perf_html(perf_b, 'Backtest (historical simulation)')}
 {signal_validation_html(con, sid)}
 {perf_html(perf_f, 'Forward (live paper competition)')}
+{qline(perf_f)}
 <details><summary>Forward breakdowns (market / team / month)</summary>{fwd_breakdowns or "<p class='empty'>No forward bets yet.</p>"}</details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary>{why}</details>
 <details open><summary>Recent bets (all kinds)</summary>{bt_rows}</details>
@@ -798,19 +924,27 @@ that is a result, not an outage.</p>
     _write(out_dir, "upcoming.html", page("Upcoming Bets", body, "upcoming.html"))
 
 
-def positions(con, out_dir):
+def positions(con, out_dir):  # noqa: C901
     rows = con.execute(
         "SELECT * FROM bets WHERE kind='forward' AND result='pending' "
         "AND execution_status='simulated_fill' ORDER BY tipoff_utc").fetchall()
+    flags = flagged_bet_ids(con)
+    qsec = quarantine_section_html(con)
     body = f"""
 <h1>Open positions</h1>
 <p class="muted">Executed (simulated fill) bets awaiting settlement. Entry price and exposure are immutable
-records; current marks come from the latest collected orderbook snapshots.</p>
+records; current marks come from the latest collected orderbook snapshots. Rows carrying a
+<span class="bad">quarantine flag</span> are shown with that flag: they are not counted in exposure or
+ranking P&amp;L.</p>
 {table(["Strategy", "Game", "Tipoff (UTC)", "Market", "Pick", "Entry ¢", "Contracts",
-        "Stake", "To win", "Fees", "Entry ts"],
+        "Stake", "To win", "Fees", "Entry ts", "Flags"],
        [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["tipoff_utc"]), _esc(r["market"]),
          _esc(r["selection"]), r["fill_price"], r["contracts"], fmt_money(r["stake_usd"]),
-         fmt_money(r["to_win_usd"]), fmt_money(r["fee_usd"]), _esc(r["source_ts"])] for r in rows])}
+         fmt_money(r["to_win_usd"]), fmt_money(r["fee_usd"]), _esc(r["source_ts"]),
+         ("<span class='bad mono small'>" + _esc(", ".join(flags[r["bet_id"]])) + "</span>")
+         if r["bet_id"] in flags else "<span class='muted'>—</span>"] for r in rows])}
+<a id="quarantined"></a>
+{qsec or "<p class='empty'>No quarantined bets.</p>"}
 """
     _write(out_dir, "positions.html", page("Open Positions", body, "positions.html"))
 
@@ -931,6 +1065,133 @@ totals backtests are not attempted. Forecast models run forward from collection 
     _write(out_dir, "sources.html", page("Data Sources", body, "sources.html"))
 
 
+def hist_backtest_html(con) -> str:
+    """Price-based historical simulation results (real archive moneylines)."""
+    run = con.execute("SELECT run_id FROM hist_backtests ORDER BY generated_utc "
+                      "DESC LIMIT 1").fetchone()
+    if not run:
+        return ""
+    rows = con.execute(
+        "SELECT * FROM hist_backtests WHERE run_id=? AND season<>'ALL' "
+        "ORDER BY strategy_id, season", (run["run_id"],)).fetchall()
+    if not rows:
+        return ""
+    totals = con.execute(
+        "SELECT * FROM hist_backtests WHERE run_id=? AND season='ALL' "
+        "ORDER BY strategy_id", (run["run_id"],)).fetchall()
+    baseline = con.execute(
+        "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id='MARKET'",
+        (run["run_id"],)).fetchone()
+    per_season = {}
+    for r in rows:
+        per_season.setdefault(r["strategy_id"], []).append(
+            (r["season"], r["bets"], r["roi"], r["pnl"]))
+    tbl = table(
+        ["Strategy", "Games with prices", "Bets", "Win %", "P&L", "ROI", "Max DD",
+         "Avg price (¢)", "Per-season ROI"],
+        [[f"<a href='strategies.html#{r['strategy_id']}'>{r['strategy_id']}</a>"
+          if r["strategy_id"] != "MARKET" else "<b>MARKET baseline</b> (back home every game)",
+          r["games_available"], r["bets"],
+          f"{(r['win_rate'] or 0) * 100:.1f}%", fmt_money(r["pnl"]),
+          fmt_pct(r["roi"]), fmt_money(r["max_dd"]),
+          f"{r['avg_price']:.0f}" if r["avg_price"] else "—",
+          " · ".join(f"{s}: {roi:+.1%}" for s, _n, roi, _p in per_season.get(r["strategy_id"], []))
+          or "—"] for r in totals])
+    return f"""
+<h2>Price-based historical simulation <span class="muted">(real moneylines, {rows[0]['games_available']:,} games)</span></h2>
+<p class="muted">The research pass found the only free archive of real historical NBA prices
+(<a href="sources.html">SBR season pages</a>): 4,043 validated games from 2013-14 to 2022-23 with opening and
+closing spreads/totals and moneylines. These results are simulated at the archive's own moneyline — no assumed
+price — with same-season, strictly-prior model state, flat 1% staking, the model probability shrunk 50% toward
+the price, and edges above 8% rejected as model error. <b>Every pre-registered moneyline rule loses money at
+real prices</b>, and the honest comparison is the market baseline: backing the home team every game at the same
+prices returns {fmt_pct(baseline['roi']) if baseline else '—'}. The outcome-only hit rates published above
+(e.g. 64.5% on 1,531 firings) do not survive contact with prices, which is exactly the difference between a
+real edge and a rule that merely correlates with good teams. Totals and spreads are excluded: the archive
+prints lines but no per-side prices, and a simulated -110 would be an assumption, not evidence.</p>
+{tbl}
+"""
+
+
+def research_scan_html() -> str:
+    """Publish the measured research scan (data/research_scan.json).
+
+    These are outcome-only measurements on verified results: they say whether a
+    basketball effect EXISTS, never that a bet is profitable (no free
+    historical prices exist). Null results are shown with the same prominence
+    as the hits.
+    """
+    path = os.path.join("data", "research_scan.json")
+    if not os.path.exists(path):
+        return ("<p class='empty'>No research scan has been run in this "
+                "checkout yet.</p>")
+    with open(path) as f:
+        scan = json.load(f)
+    h1 = scan.get("H1_opening_week_low_scoring", {})
+    h2 = scan.get("H2_back_to_back", {})
+    h3 = scan.get("H3_rest_asymmetry_totals", {})
+    h5 = scan.get("H5_home_dog_record_proxy", {})
+    h6 = scan.get("H6_long_vs_short_rest_net", {})
+    h7 = scan.get("H7_playoff_vs_regular_scoring", {})
+    sweep = scan.get("factor_sweep", {})
+    sweep_rows = table(
+        ["Candidate rule", "n", "Hit rate", "Base rate", "z vs base", "Verdict"],
+        [[f"<code>{_esc(k)}</code>", v["n"],
+          f"{v['hit_rate'] * 100:.1f}%",
+          f"{v['baseline_rate'] * 100:.1f}%" if v.get("baseline_rate") is not None else "—",
+          f"{v['z_vs_baseline']:+.2f}" if v.get("z_vs_baseline") is not None else "—",
+          ("promising (price test pending)" if v.get("z_vs_baseline") is not None
+           and v["z_vs_baseline"] >= 2 and v["n"] >= 60 else
+           "contradicted by data" if v.get("z_vs_baseline") is not None
+           and v["z_vs_baseline"] <= -2 else
+           "inconclusive (n<60)" if v["n"] < 60 else "inconclusive")]
+         for k, v in sorted(sweep.items(), key=lambda kv: -kv[1]["n"])])
+    base = scan.get("regular_season_baseline", {})
+    ex = h2.get("_x", {})
+    return f"""
+<h2>Measured research scan <span class="muted">(verified results only, no odds)</span></h2>
+<p class="muted">Generated {_esc(str(scan.get('generated_utc')))} from
+ {scan.get('n_finals_regular_season', 0):,} regular-season finals
+ (avg total {base.get('avg_total')}, home win {base.get('home_win_pct')}).
+ Regular-season windows are the published NBA calendars; preseason and playoff
+ games are excluded from them. Nothing here is a P&amp;L claim: without free
+ historical prices these measurements can only justify <i>what is worth
+ forward-testing</i>.</p>
+<ul>
+<li><b>H1 opening-week low scoring</b> — pooled difference
+ {h1.get('difference_early_minus_rest')} pts, Welch t={h1.get('welch_t')}
+ (n={h1.get('pooled_early', {}).get('n')} vs {h1.get('pooled_rest', {}).get('n')});
+ per season {json.dumps(h1.get('per_season', {}))}. <b>Not supported</b> — no
+ opening-week under bias exists in this data, so no strategy was built on it.</li>
+<li><b>H2 back-to-back cost</b> — B2B team-games score {h2.get('b2b', {}).get('avg_net')}
+ net vs {h2.get('non_b2b', {}).get('avg_net')} for rested teams:
+ <b>{h2.get('net_point_cost_of_b2b')} points</b> (t={h2.get('welch_t_net')},
+ n={h2.get('b2b', {}).get('n')} vs {h2.get('non_b2b', {}).get('n')}).
+ Supported; NBA-001 uses it and its expected-edge note was restated from this
+ measurement.</li>
+<li><b>H3 rest asymmetry &rarr; totals</b> — {h3.get('asymmetric', {}).get('avg_total')}
+ vs {h3.get('symmetric', {}).get('avg_total')}
+ (difference {h3.get('difference')}, t={h3.get('welch_t')}). Suggestive, not
+ significant; NBA-022's adjustment was changed from an assumed +4.0 to the
+ measured {h3.get('difference')}.</li>
+<li><b>H5/H6 schedule-duration effects</b> — long (3+) vs short (0-1) rest:
+ t={h6.get('welch_t')} (not supported);
+ home teams with the weaker prior record win by
+ {h5.get('home_dog_avg_margin')} vs {h5.get('home_fav_avg_margin')} for the
+ stronger (a quality proxy, not a spread).</li>
+<li><b>H7 season phase</b> — games outside the regular-season window average
+ {h7.get('avg_total_outside_regular_window')} vs
+ {h7.get('avg_total_regular')} inside ({h7.get('difference')} pts, n={h7.get('postseason_or_preseason_n')});
+ the basis for NBA-023, which fires only on rows the schedule labels postseason.</li>
+</ul>
+<p class="muted">Sweep of candidate WINNER rules evaluated chronologically under
+the same no-look-ahead discipline as the engines (fresh, same-season state
+only). "Contradicted by data" verdicts are why NBA-020 and NBA-021 are parked:
+their own rules lose on 1,043 and 777 firings respectively.</p>
+{sweep_rows}
+"""
+
+
 def research_page(con, out_dir):
     rows = con.execute("SELECT * FROM research_log ORDER BY id").fetchall()
     items = "".join(
@@ -955,6 +1216,8 @@ def research_page(con, out_dir):
 <h1>Research log</h1>
 <p class="muted">Every research question, what was searched, what was found, what was tested, and what was
 decided — so research is auditable and never silently duplicated.</p>
+{research_scan_html()}
+{hist_backtest_html(con)}
 {items or "<p class='empty'>No research entries.</p>"}
 <h2>Anomaly register (latest 50)</h2>
 <p class="muted">Automated checks run on every pipeline pass. Flags are shown, never silently fixed.</p>

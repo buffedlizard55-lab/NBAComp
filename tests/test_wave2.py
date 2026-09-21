@@ -108,8 +108,22 @@ def test_bets_v2_immutable_columns(con):
         con.execute("UPDATE bets SET prop_player='Y' WHERE bet_id='b-imm'")
 
 
+def _promote_to_price_verified(con, strategy_id="NBA-002"):
+    """See tests/test_core.py: makes a strategy tier `price_verified`."""
+    _game(con, "espn:tier", status="final", hs=110, as_=105)
+    db.insert(con, "bets", {
+        "bet_id": f"bt-tier-{strategy_id}", "run_id": "bt-tier", "kind": "backtest",
+        "strategy_id": strategy_id, "strategy_version": "1.0.0", "username": "x",
+        "decision_utc": "2025-12-31T20:00:00Z", "game_id": "espn:tier",
+        "game_label": "t", "tipoff_utc": "2026-01-01T00:00:00Z", "market": "ml",
+        "selection": "over 220.5", "side": "over", "price": -110,
+        "price_format": "american", "source": "t", "stake_usd": 10.0,
+        "execution_status": "simulated_fill", "result": "win", "verification": "t"})
+
+
 def test_total_bet_append_only_dedup(con):
     g = _game(con, "espn:d", status="scheduled", hs=None, as_=None)
+    _promote_to_price_verified(con)
     db.insert(con, "odds_snapshots", {
         "game_id": "espn:d", "captured_utc": "2026-01-04T20:00:00Z",
         "source": "espn:consensus", "market": "total", "selection": "line 220.5",
@@ -214,9 +228,13 @@ def test_half_hour_signal_requires_live_ask(con):
     assert row["market_ticker"] == "KXNBA1H261105101"
     assert row["selection"] == "BOS leads at half"
     assert row["side"] == "yes"
-    # P(BOS leads at half) = norm_cdf(margin/8) with a positive margin after
-    # one 20-pt win: clearly above the 0.76 edge threshold, below 1
-    assert 0.76 < row["model_prob"] < 1.0
+    # The traded probability is the CALIBRATED one (model blended toward the
+    # market by the tier's shrink weight, 2026-09-21). NBA-013 is forward-only
+    # -> shrink 0.60, so 0.4 * model + 0.6 * 0.72 sits below the raw model
+    # probability but still clearly above the market ask.
+    assert 0.72 < row["model_prob"] < 0.80
+    assert row["model_prob"] < 0.78  # strictly below the raw model prob
+    assert "policy: raw p=" in row["notes"]  # calibration is on the record
     assert row["strike"] is None  # 1H market has no numeric strike
 
 

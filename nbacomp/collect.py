@@ -20,6 +20,8 @@ Commands:
   kalshi-backfill      settled events -> markets (recent history walk)
   kalshi-snapshot      open markets + orderbooks (forward prices)
   kalshi-candles       candlesticks for winner markets in a window
+  sbr-odds             SBR season pages -> hist_odds (free historical prices;
+                       validated row by row, rejects counted, never guessed)
 """
 from __future__ import annotations
 
@@ -34,18 +36,107 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nbacomp import db, engine, util  # noqa: E402
 from nbacomp.sources import balldontlie as bdlt  # noqa: E402
-from nbacomp.sources import bref, espn, kalshi  # noqa: E402
+from nbacomp.sources import bref, espn, kalshi, sbr  # noqa: E402
 
 CAP = util.utcnow_iso()
 
 
-def save_source_status(con, source_id: str, r, detail: str = ""):
+def save_source_status(con, source_id: str, r, detail: str = "", html: bool = False):
+    """Record reachability. `html=True` for text endpoints: HttpResult.ok
+    requires parseable JSON, which HTML never is (this is why the BRef and SBR
+    human-readable pages showed ok=0 with status 200)."""
+    ok = getattr(r, "ok_body", r.ok) if html else r.ok
     db.insert(con, "source_status", {
         "source_id": source_id, "checked_utc": util.utcnow_iso(),
-        "ok": 1 if r.ok else 0, "http_status": r.status,
+        "ok": 1 if ok else 0, "http_status": r.status,
         "detail": (detail or r.error or "")[:500],
-        "sample_hash": util.stable_hash((r.json or {})) if r.ok else None,
+        "sample_hash": (util.stable_hash(r.json) if r.ok
+                        else util.stable_hash(r.body[:4096]) if (html and ok)
+                        else None),
     }, replace=True)
+
+
+# ------------------------------------------------------------------- SBR
+
+def collect_sbr_season(con, season: str) -> dict:
+    """Fetch + validate one SBR season page into hist_odds.
+
+    Nothing is written for a row that fails a cross-check; the rejection count
+    and the first few reasons are recorded so a bad parse can never masquerade
+    as historical prices.
+    """
+    r = sbr.fetch_season(season)
+    save_source_status(con, "sbr:nba-odds", r, detail=f"season={season}", html=True)
+    if not getattr(r, "ok_body", False):
+        db.log_collection(con, f"sbr-{season}", "sbr", "fail",
+                          f"{r.status} {r.error or ''}")
+        return {"season": season, "stored": 0, "rejected": 0, "status": r.status}
+    html = r.body.decode("utf-8", "replace")
+    try:
+        games, rejects = sbr.parse_season(html, season)
+    except Exception as e:
+        # fetch worked but our parser broke: a code defect, so it is recorded
+        # as a crash (the run-failing status) instead of a data condition.
+        db.log_collection(con, f"sbr-{season}", "sbr", "crash",
+                          f"parser raised: {e!r} (page len={len(html)})")
+        raise
+    now = util.utcnow_iso()
+    stored = 0
+    for g in games:
+        row = {
+            "season": g["season"], "game_date_et": g["game_date_et"],
+            "away": g["away"], "home": g["home"],
+            "away_q": json.dumps(g["away_q"]), "home_q": json.dumps(g["home_q"]),
+            "away_final": g["away_final"], "home_final": g["home_final"],
+            "open_total": g["open_total"], "close_total": g["close_total"],
+            "open_home_spread": g["open_home_spread"],
+            "close_home_spread": g["close_home_spread"],
+            "ml_away": g["ml_away"], "ml_home": g["ml_home"],
+            "source": "sbr", "source_url": g["source_url"],
+            "source_row_hash": util.stable_hash(g),
+            "spread_printed_row": g.get("spread_printed_row"),
+            "spread_sign_from_ml": g.get("spread_sign_from_ml"),
+            "cross_checked": 0, "cross_check_detail": None,
+            "captured_utc": now,
+        }
+        prev = con.execute(
+            "SELECT source_row_hash FROM hist_odds WHERE season=? AND game_date_et=? "
+            "AND away=? AND home=?", (row["season"], row["game_date_et"],
+                                      row["away"], row["home"])).fetchone()
+        if prev and prev["source_row_hash"] != row["source_row_hash"]:
+            db.log_anomaly(con, "warn", "sbr-row-changed",
+                           {"season": season, "game": f"{row['away']}@{row['home']} "
+                            f"{row['game_date_et']}",
+                            "detail": "the archive's values differ from the row we "
+                                      "already stored; the new row replaces it and the "
+                                      "change is recorded here"})
+        db.insert(con, "hist_odds", row, replace=True)
+        stored += 1
+    db.log_collection(con, f"sbr-{season}", "sbr",
+                      "ok" if stored else "empty",
+                      f"parsed={len(games)} rejected={len(rejects)}", rows=stored)
+    db.insert(con, "meta", {"key": "sbr_parser_version",
+                            "value": sbr.SBR_PARSER_VERSION,
+                            "updated_utc": util.utcnow_iso()}, replace=True)
+    if rejects:
+        db.log_anomaly(con, "warn", "sbr-rows-rejected",
+                       {"season": season, "n_rejected": len(rejects),
+                        "examples": rejects[:5],
+                        "detail": "archive rows that failed the parser's "
+                                  "cross-checks are counted here and never stored"})
+    return {"season": season, "stored": stored, "rejected": len(rejects),
+            "status": r.status}
+
+
+def collect_sbr_odds(con, seasons: list[str]) -> dict:
+    out = {}
+    for season in seasons:
+        try:
+            out[season] = collect_sbr_season(con, season)
+        except Exception as e:  # a source defect must not kill the pipeline
+            db.log_collection(con, f"sbr-{season}", "sbr", "crash", f"{e!r}")
+            out[season] = {"season": season, "stored": 0, "error": repr(e)}
+    return out
 
 
 # ------------------------------------------------------------------ ESPN
@@ -72,12 +163,15 @@ def collect_espn_day(con, day: str, verify: bool = False) -> int:
         # cross-check (2026-09-21: INSERT OR REPLACE with verified=0
         # silently downgraded verified rows on every daily run).
         prev = con.execute(
-            "SELECT verified, verified_against FROM games WHERE game_id=?",
+            "SELECT verified, verified_against, season_type FROM games WHERE game_id=?",
             (g["game_id"],)).fetchone()
         verified = prev["verified"] if prev else 0
         verified_against = prev["verified_against"] if prev else None
+        # never downgrade a recorded season type to NULL on a re-fetch
+        season_type = g.get("season_type") or (prev["season_type"] if prev else None)
         row = {
             "game_id": g["game_id"], "source": g["source"], "season": g["season"],
+            "season_type": season_type,
             "game_date_et": g["game_date_et"] or "", "tipoff_utc": g["tipoff_utc"],
             "home_team": g["home_team"], "away_team": g["away_team"],
             "home_score": g["home_score"], "away_score": g["away_score"],
@@ -117,6 +211,12 @@ def _store_espn_odds(con, odds: dict):
         items.append(("total", f"line {odds['total']:g}", odds["total"], None))
     if odds.get("spread_home") is not None:
         items.append(("spread", f"home {odds['spread_home']:+g}", odds["spread_home"], None))
+    # observed over/under prices for the total (usually both sides) — these
+    # turn the total from a line into a PRICE, which is what a P&L needs
+    if odds.get("total") is not None and odds.get("over_odds") is not None:
+        items.append(("total", f"over {odds['total']:g}", odds["total"], odds["over_odds"]))
+    if odds.get("total") is not None and odds.get("under_odds") is not None:
+        items.append(("total", f"under {odds['total']:g}", odds["total"], odds["under_odds"]))
     if odds.get("ml_home") is not None:
         items.append(("ml", "home", None, odds["ml_home"]))
     if odds.get("ml_away") is not None:
@@ -1537,7 +1637,7 @@ def main():
                                         "kalshi-snapshot", "kalshi-candles", "espn-backfill",
                                         "espn-forward",
                                         "boxscores-backfill", "kalshi-settled-history",
-                                        "bref-month", "repair"])
+                                        "bref-month", "repair", "sbr-odds"])
     ap.add_argument("--days", type=int, default=113,
                     help="espn-backfill: day budget per run (default 113 = ~1 season)")
     ap.add_argument("--max-games", type=int, default=40,
@@ -1546,6 +1646,8 @@ def main():
     ap.add_argument("--end", help="inclusive")
     ap.add_argument("--months", help="e.g. 2026:october,2026:november (season-end-year:month)")
     ap.add_argument("--series", default=None)
+    ap.add_argument("--seasons", default=None,
+                    help="sbr-odds: comma-separated season labels, e.g. 2013-14,2014-15")
     ap.add_argument("--pages", type=int, default=None,
                     help="kalshi-backfill event pages per series (default 5)")
     args = ap.parse_args()
@@ -1664,6 +1766,9 @@ def main():
             print(json.dumps(boxscores_backfill_resumable(
                 con, args.start or "20241001", args.end or datetime.now(timezone.utc).strftime("%Y%m%d"),
                 args.max_games), indent=2))
+        elif args.command == "sbr-odds":
+            seasons = [x.strip() for x in (args.seasons or ",".join(sbr.DEFAULT_SEASONS)).split(",") if x.strip()]
+            print(json.dumps(collect_sbr_odds(con, seasons), indent=2))
         elif args.command == "kalshi-settled-history":
             print(json.dumps(kalshi_settled_history(con, args.series or "KXNBAGAME"), indent=2))
         elif args.command == "bref-month":

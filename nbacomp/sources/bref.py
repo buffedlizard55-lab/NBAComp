@@ -205,7 +205,10 @@ def verify_month(con, season_end_year: int, month: str) -> int:
         db.log_collection(con, "bref-verify", "basketball-reference", "fail",
                           f"{season_end_year}-{month}: {r.error}")
         return 0
-    rows = parse_monthly_games(r.body.decode("utf-8", "replace"))
+    # parse_schedule_page resolves each row's date (boxscore URL first, then
+    # the row header) — the older parse_monthly_games carried no dates at all,
+    # which is what forced the month-wide, cross-game comparison fixed above.
+    rows = parse_schedule_page(r.body.decode("utf-8", "replace"))
     # Season-end year != calendar year for Oct-Dec (e.g. 2026 season's
     # October games are 2025-10). Old code queried YYYY=season_end for all
     # months, so fall verification windows matched nothing.
@@ -213,25 +216,40 @@ def verify_month(con, season_end_year: int, month: str) -> int:
     last_day = calendar.monthrange(cal_year, _month_num(month))[1]
     d0 = f"{cal_year}-{_month_num(month):02d}-01"
     d1 = f"{cal_year}-{_month_num(month):02d}-{last_day:02d}"
-    n = mismatches = unmatched = 0
+    n = mismatches = unmatched = ambiguous = 0
     for row in rows:
-        v = abbr_for(row["visitor_name"])
-        h = abbr_for(row["home_name"])
-        if not v or not h:
+        v, h = row.get("away_team"), row.get("home_team")
+        if not v or not h or row.get("status") != "final":
             continue
-        # 2026-09-21 fix: the old query required home_score/away_score to
-        # ALREADY equal the BRef values, so a genuine score conflict could
-        # never be seen or recorded — mismatches are the most important rows
-        # a verification source can produce.
+        # 2026-09-21 fix (#2): verification matched EVERY game of that matchup
+        # anywhere in the month against a single BRef row. In a playoff month
+        # the same matchup is played several times (SAS/NYK on Jun 3, 5, 8,
+        # 10, 13), so four of those five games were compared against the wrong
+        # box score and reported as "critical score-verification-mismatch" —
+        # 5 of the 10 verification rows written on 2026-09-21T04:42Z were born
+        # that way. Verification now requires an EXACT date match
+        # (game_date_et, resolved by the parser from each row's boxscore URL
+        # or its row header), which makes cross-game comparison impossible.
+        # The earlier fix (never pre-filtering on equal scores, so a real
+        # conflict can still be surfaced) is preserved.
+        row_date = row.get("game_date_et")
+        if not row_date or not (d0 <= row_date <= d1):
+            ambiguous += 1
+            continue
         games = con.execute(
             "SELECT * FROM games WHERE home_team=? AND away_team=? AND status='final' "
-            "AND game_date_et BETWEEN ? AND ?", (h, v, d0, d1)).fetchall()
+            "AND game_date_et=?", (h, v, row_date)).fetchall()
         if not games:
             unmatched += 1
             continue
+        if len(games) > 1:
+            ambiguous += 1  # two rows for one date+matchup: flag, never guess
+            continue
         for g in games:
-            agree = (g["home_score"] == row["home_pts"]
-                     and g["away_score"] == row["visitor_pts"])
+            # parse_schedule_page keys: home_score/away_score (it has already
+            # resolved team abbreviations and points itself)
+            agree = (g["home_score"] == row["home_score"]
+                     and g["away_score"] == row["away_score"])
             claim = f"final score {g['game_id']} {v}@{h} on {g['game_date_et']}"
             if agree:
                 if not g["verified"]:
@@ -241,9 +259,9 @@ def verify_month(con, season_end_year: int, month: str) -> int:
                     db.insert(con, "verifications", {
                         "checked_utc": util.utcnow_iso(), "claim": claim,
                         "primary_source": "espn/bref",
-                        "primary_value": f"{row['visitor_pts']}-{row['home_pts']}",
+                        "primary_value": f"{g['away_score']}-{g['home_score']}",
                         "secondary_source": "basketball-reference",
-                        "secondary_value": f"{row['visitor_pts']}-{row['home_pts']}",
+                        "secondary_value": f"{row['away_score']}-{row['home_score']}",
                         "status": "match", "discrepancy": None})
                 n += 1
             else:
@@ -258,14 +276,15 @@ def verify_month(con, season_end_year: int, month: str) -> int:
                         "primary_source": "espn/bref",
                         "primary_value": f"{g['away_score']}-{g['home_score']}",
                         "secondary_source": "basketball-reference",
-                        "secondary_value": f"{row['visitor_pts']}-{row['home_pts']}",
+                        "secondary_value": f"{row['away_score']}-{row['home_score']}",
                         "status": "mismatch",
                         "discrepancy": f"stored={g['game_id']} scores differ"})
                     mismatches += 1
     db.log_collection(con, "bref-verify", "basketball-reference",
                       "ok" if mismatches == 0 else "partial",
                       f"{season_end_year}-{month}: {len(rows)} rows, {n} verified, "
-                      f"{mismatches} NEW score conflicts, {unmatched} without local row",
+                      f"{mismatches} NEW score conflicts, {unmatched} without local row, "
+                      f"{ambiguous} skipped (no date / ambiguous)",
                       rows=n)
     return n
 
