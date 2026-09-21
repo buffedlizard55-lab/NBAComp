@@ -284,7 +284,7 @@ def persist(con, result: dict, run_id: str) -> int:
     written = 0
     for key, agg in result["summary"].items():
         sid, _, season = key.partition("|")
-        season = season or "ALL"
+        season = (season or "ALL").upper()
         con.execute(
             "INSERT OR REPLACE INTO hist_backtests (run_id, strategy_id, season, "
             "bets, wins, win_rate, pnl, staked, roi, max_dd, avg_edge, avg_price, "

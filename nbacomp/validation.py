@@ -121,12 +121,12 @@ def evidence_for(con, strategy_id: str) -> dict:
     if hist_run:
         row = con.execute(
             "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id=? "
-            "AND season='ALL'", (hist_run, strategy_id)).fetchone()
+            "AND UPPER(season)='ALL'", (hist_run, strategy_id)).fetchone()
         if row:
             ev["hist"] = dict(row)
         allrow = con.execute(
             "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id='MARKET' "
-            "AND season='all'", (hist_run,)).fetchone()
+            "AND UPPER(season)='ALL'", (hist_run,)).fetchone()
         if allrow:
             ev["hist_all"] = dict(allrow)
     if run_id:
