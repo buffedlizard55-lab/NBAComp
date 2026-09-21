@@ -15,6 +15,50 @@ def run_checks(con) -> dict:
         from . import db
         db.log_anomaly(con, sev, name, detail)
 
+    # --- pipeline coverage: an empty database is a FAILURE, not a clean run.
+    # (2026-09-21 defect: every collector task was silently producing zero
+    # rows — snapshot crashed, history backfill never ran, BRef 404'd — while
+    # the pipeline still exited 0 and published a green-looking site.)
+    counts = {t: con.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
+              for t in ("games", "odds_snapshots", "kalshi_markets", "kalshi_candles",
+                        "kalshi_orderbooks", "injuries", "team_gamelogs",
+                        "player_gamelogs", "bets")}
+    if counts["games"] == 0:
+        record("critical", "empty-games-table",
+               {"detail": "no games collected — backtests and forward betting are impossible",
+                "counts": counts})
+    if counts["kalshi_markets"] == 0:
+        record("critical", "empty-kalshi-markets-table",
+               {"detail": "no Kalshi markets stored — no verifiable prices exist",
+                "counts": counts})
+    if counts["games"] and counts["kalshi_markets"] and counts["bets"] == 0:
+        record("warn", "no-bets-despite-data",
+               {"detail": "games and prices exist but no bets were generated",
+                "counts": counts})
+
+    # --- collection health: crashes and repeated failures must surface.
+    # Windowed to the last 24h: the collection_log is append-only, so an
+    # all-time scan would keep a defect fixed yesterday on the dashboard
+    # forever (and hide the fact that today's run was clean).
+    window_start = util.to_iso(util.parse_iso(util.utcnow_iso()) - util.timedelta(hours=24))
+    recent = con.execute(
+        "SELECT task, source, status, detail, ts_utc FROM collection_log "
+        "WHERE status IN ('crash','fail') AND ts_utc >= ? ORDER BY id DESC LIMIT 40",
+        (window_start,)).fetchall()
+    crash_tasks = sorted({r["task"] for r in recent if r["status"] == "crash"})
+    if crash_tasks:
+        record("critical", "collector-crash",
+               {"tasks": crash_tasks,
+                "latest": [{k: r[k] for k in ("task", "source", "ts_utc", "detail")}
+                           for r in recent if r["status"] == "crash"][:3]})
+    fail_counts: dict[str, int] = {}
+    for r in recent:
+        if r["status"] == "fail":
+            fail_counts[f"{r['task']}:{r['source']}"] = fail_counts.get(f"{r['task']}:{r['source']}", 0) + 1
+    persistent = {k: v for k, v in fail_counts.items() if v >= 5}
+    if persistent:
+        record("warn", "persistent-source-failure", {"failures": persistent})
+
     # --- look-ahead guards on every bet
     bad = con.execute(
         "SELECT bet_id, decision_utc, tipoff_utc FROM bets WHERE tipoff_utc IS NOT NULL "
@@ -64,6 +108,24 @@ def run_checks(con) -> dict:
                            {"bet_id": b["bet_id"], "recorded": b["result"], "score_implied": expect})
 
     # --- games quality
+    from . import engine as _engine
+    bad_abbr = [r["v"] for r in con.execute(
+        "SELECT DISTINCT home_team AS v FROM games UNION SELECT DISTINCT away_team FROM games")
+        if not _engine.is_nba_team(r["v"])]
+    if bad_abbr:
+        n = con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"]
+        record("warn", "non-nba-team-in-games",
+               {"abbreviations": sorted(bad_abbr), "games": n,
+                "detail": "ESPN's NBA scoreboard also lists preseason exhibitions "
+                          "against non-NBA clubs; these rows corrupt league-wide features"})
+    alias = [r["v"] for r in con.execute(
+        "SELECT DISTINCT home_team AS v FROM games UNION SELECT DISTINCT away_team FROM games")
+        if _engine.canon_team(r["v"]) != r["v"]]
+    if alias:
+        record("warn", "non-canonical-team-abbreviation",
+               {"abbreviations": sorted(alias),
+                "detail": "same game can be stored twice under ESPN and BRef spellings, "
+                          "and Kalshi event tickers will not join"})
     dup_games = con.execute(
         "SELECT game_date_et, home_team, away_team, COUNT(*) c FROM games "
         "GROUP BY 1,2,3 HAVING c>1").fetchall()

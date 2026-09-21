@@ -575,11 +575,18 @@ def test_audit_bet_still_pending_after_24h(con):
 
 
 def test_audit_run_checks_handles_empty_db(con):
-    """Audit must complete cleanly on an empty DB (no spurious flags)."""
+    """Audit must complete on an empty DB and flag it as what it is: broken.
+
+    Contract change 2026-09-21: an empty database used to audit clean, which is
+    exactly how a day of silently-failing collectors went unnoticed. Empty
+    `games` / `kalshi_markets` are now CRITICAL coverage findings, so the only
+    criticals allowed here are those two — no spurious look-ahead or
+    settlement flags may come from an empty ledger.
+    """
     summary = audit.run_checks(con)
     assert {"critical", "warn", "info"}.issubset(summary.keys())
-    # No critical look-ahead violations from an empty DB
-    assert summary["critical"] == 0
+    names = {c["check"] for c in summary["checks"] if c["severity"] == "critical"}
+    assert names == {"empty-games-table", "empty-kalshi-markets-table"}
 
 
 # ---------------------------------------------------------------- forward engine extensions

@@ -16,6 +16,38 @@ from . import strategies as S
 from . import util
 
 # Factual public team reference (used ONLY to match Kalshi titles to games).
+# ESPN's site API abbreviates six franchises differently from Basketball-
+# Reference and from Kalshi's event tickers (verified 2026-09-21 by diffing the
+# abbreviations each source actually returned: ESPN GS/NO/NY/SA/UTAH/WSH vs
+# BRef GSW/NOP/NYK/SAS/UTA/WAS). Without one canonical form the same game was
+# stored twice under different ids (17 `duplicate-game` anomalies in run
+# 35554765928) and Kalshi markets could not be joined to games at all,
+# because KXNBAGAME tickers use the BRef/NBA.com set.
+ESPN_ABBR_TO_CANON = {
+    "GS": "GSW", "NO": "NOP", "NY": "NYK", "SA": "SAS", "UTAH": "UTA",
+    "WSH": "WAS", "PNX": "PHX",
+}
+
+
+def canon_team(abbrev: str | None) -> str | None:
+    """Canonical (NBA.com / BRef / Kalshi) abbreviation for a team, or None."""
+    if not abbrev:
+        return None
+    a = str(abbrev).strip().upper()
+    return ESPN_ABBR_TO_CANON.get(a, a)
+
+
+def is_nba_team(abbrev: str | None) -> bool:
+    """True only for the 30 NBA franchises.
+
+    ESPN's NBA scoreboard also lists preseason exhibitions against non-NBA
+    clubs; run 35554765928 stored rows for GUANGZHOU, HAPOEL, LON, MEL, STARS,
+    STRIPES and WORLD as if they were NBA games, which would have corrupted
+    every league-wide feature and the standings.
+    """
+    return canon_team(abbrev) in TEAM_NAMES
+
+
 TEAM_NAMES = {
     "ATL": ("Hawks", "Atlanta"), "BOS": ("Celtics", "Boston"), "BKN": ("Nets", "Brooklyn"),
     "CHA": ("Hornets", "Charlotte"), "CHI": ("Bulls", "Chicago"), "CLE": ("Cavaliers", "Cleveland"),

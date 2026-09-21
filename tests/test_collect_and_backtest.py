@@ -157,6 +157,9 @@ def test_parse_team_boxscore_real_shape():
     assert t["ftm"] == 18 and t["fta"] == 21
     assert t["oreb"] == 7 and t["tov"] == 16
     assert t["is_home"] == 0 and t["score"] == 105
+    # pts is what collect_boxscores stores and the rolling features read;
+    # run 35553997534 wrote 46 team_gamelogs rows with pts=NULL.
+    assert t["pts"] == 105
 
 
 def test_parse_injuries_shape_agnostic():

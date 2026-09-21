@@ -6,3 +6,63 @@ events settled page1: http=200 rows=200 cursor=yes
   walked 8 pages, seen=1448 oldest=None close=None
 markets of KXNBAGAME-26JUN13NYKSAS: rows=0
 probe5 done
+
+probe7 2026-09-21T02:29:20Z
+  espn 20260115: http=200 events=9 state=post events_with_odds=0
+  espn 20260613: http=200 events=1 state=post events_with_odds=0
+  espn 20250115: http=200 events=11 state=post events_with_odds=0
+  espn 20241022: http=200 events=2 state=post events_with_odds=0
+  bref october-2024 page: http=200 bytes=253706
+  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
+  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
+  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
+  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
+probe7 done
+
+probe7 2026-09-21T02:37:08Z
+  espn 20260115: http=200 events=9 state=post events_with_odds=0
+  espn 20260613: http=200 events=1 state=post events_with_odds=0
+  espn 20250115: http=200 events=11 state=post events_with_odds=0
+  espn 20241022: http=200 events=2 state=post events_with_odds=0
+  bref october-2024 page: http=200 bytes=253706
+  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
+  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
+  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
+  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
+probe7 done
+
+probe7 2026-09-21T02:44:26Z
+  espn 20260115: http=200 events=9 state=post events_with_odds=0
+  espn 20260613: http=200 events=1 state=post events_with_odds=0
+  espn 20250115: http=200 events=11 state=post events_with_odds=0
+  espn 20241022: http=200 events=2 state=post events_with_odds=0
+  bref october-2024 page: http=200 bytes=253706
+  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
+  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
+  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
+  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
+probe7 done
+
+probe7 2026-09-21T02:48:47Z
+  espn 20260115: http=200 events=9 state=post events_with_odds=0
+  espn 20260613: http=200 events=1 state=post events_with_odds=0
+  espn 20250115: http=200 events=11 state=post events_with_odds=0
+  espn 20241022: http=200 events=2 state=post events_with_odds=0
+  bref october-2024 page: http=200 bytes=253706
+  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
+  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
+  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
+  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
+probe7 done
+
+probe7 2026-09-21T02:52:52Z
+  espn 20260115: http=200 events=9 state=post events_with_odds=0
+  espn 20260613: http=200 events=1 state=post events_with_odds=0
+  espn 20250115: http=200 events=11 state=post events_with_odds=0
+  espn 20241022: http=200 events=2 state=post events_with_odds=0
+  bref october-2024 page: http=200 bytes=253706
+  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
+  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
+  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
+  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
+probe7 done
