@@ -69,6 +69,7 @@ jobs:
           python tools/probe_deep.py || true
           python tools/probe_kalshi_events.py || true
           python tools/probe_settled_history.py || true
+          python tools/probe_historical_shape.py || true
 
       - name: Commit probe results
         if: steps.skip.outputs.probe == 'true'
@@ -148,6 +149,15 @@ jobs:
             python -m nbacomp.collect verify-bref-months --months "2026:october,2026:november,2026:december,2026:january,2026:february,2026:march,2026:april,2026:may,2026:june" || true
           fi
           echo "games after bootstrap: $(python tools/db_game_count.py)"
+
+      - name: Source-shape probes (answers committed to data/diagnostics.txt)
+        if: steps.skip.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          # Cheap and bounded: these decide whether historical prices, BRef
+          # start times and ESPN boxscore IDs can be used at all. Their output
+          # is committed evidence, not a claim in a report.
+          python tools/probe_historical_shape.py || true
 
       - name: Daily collection (schedule+odds, injuries, Kalshi, boxscores, verification)
         if: steps.skip.outputs.skip != 'true'

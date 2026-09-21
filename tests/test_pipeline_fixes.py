@@ -345,23 +345,23 @@ def _http(status, payload):
                            error=None if 200 <= status < 300 else f"HTTP {status}")
 
 
-def espn_scoreboard_ok(day):
+def espn_scoreboard_ok(day, home="BOS", away="LAL", hs="112", as_="105", gid=None):
     from nbacomp import http
     y, m, d = day[:4], day[4:6], day[6:]
     payload = {"events": [{
-        "id": f"4017{day}",
+        "id": gid or f"4017{day}",
         "date": f"{y}-{m}-{d}T00:30Z",
         "season": {"year": int(y) + (1 if int(m) >= 10 else 0), "type": 2},
         "status": {"type": {"state": "post"}},
         "competitions": [{
             "neutral": False,
             "competitors": [
-                {"homeAway": "home", "id": "2", "team": {"abbreviation": "BOS",
-                                                         "displayName": "Boston Celtics"},
-                 "score": "112", "winner": True},
-                {"homeAway": "away", "id": "13", "team": {"abbreviation": "LAL",
-                                                          "displayName": "Los Angeles Lakers"},
-                 "score": "105", "winner": False},
+                {"homeAway": "home", "id": "2", "team": {"abbreviation": home,
+                                                         "displayName": "Home Team"},
+                 "score": hs, "winner": True},
+                {"homeAway": "away", "id": "13", "team": {"abbreviation": away,
+                                                          "displayName": "Away Team"},
+                 "score": as_, "winner": False},
             ],
             "odds": [{"provider": {"name": "ESPN BET"}, "details": "BOS -6.5",
                       "overUnder": 221.5, "spread": -6.5,
@@ -392,4 +392,45 @@ def test_boxscore_backfill_skips_games_without_an_espn_id(con, monkeypatch):
     assert touched == []            # no ESPN id -> no request
     assert st["games"] == 0 and st["done"] is True
     assert con.execute("SELECT COUNT(*) c FROM collection_log WHERE status='fail'"
+                       ).fetchone()["c"] == 0
+
+
+def test_espn_backfill_adopts_existing_bref_row_instead_of_duplicating(con, monkeypatch):
+    """Run 35553997534 raised 5 `duplicate-game` warnings: the BRef bootstrap
+    row and the ESPN row for the same game both existed under different ids,
+    and the BRef one could never be joined to box scores or odds."""
+    db.insert(con, "games", {
+        # 2025-01-14T00:30Z is the 13th in ET, which is the ET date ESPN reports
+        "game_id": "bref:2025-01-13-LAL-BOS", "source": "basketball-reference",
+        "season": "2024-25", "game_date_et": "2025-01-13", "tipoff_utc": "2025-01-14T00:30:00Z",
+        "home_team": "BOS", "away_team": "LAL", "home_score": 112, "away_score": 105,
+        "status": "final", "captured_utc": "x", "verified": 1})
+    monkeypatch.setattr(collect.espn, "scoreboard",
+                        lambda day: espn_scoreboard_ok(day, gid="401799999"))
+    db.insert(con, "meta", {"key": collect.BACKFILL_CURSOR_KEY, "value": "20250115",
+                            "updated_utc": "x"})
+    collect.espn_backfill_resumable(con, days_per_run=1)
+
+    rows = list(con.execute("SELECT * FROM games"))
+    assert len(rows) == 1                                  # one game, not two
+    assert rows[0]["game_id"] == "espn:401799999"          # ESPN identity wins
+    assert rows[0]["source"] == "espn"
+    assert rows[0]["verified"] == 1                        # verification preserved
+    assert con.execute("SELECT COUNT(*) c FROM audit_log WHERE action='game-merge'"
+                       ).fetchone()["c"] == 1
+    summary = audit.run_checks(con)
+    assert "duplicate-game" not in {c["check"] for c in summary["checks"]}
+
+
+def test_espn_backfill_is_idempotent_for_its_own_rows(con, monkeypatch):
+    monkeypatch.setattr(collect.espn, "scoreboard",
+                        lambda day: espn_scoreboard_ok(day, gid="401799999"))
+    db.insert(con, "meta", {"key": collect.BACKFILL_CURSOR_KEY, "value": "20250115",
+                            "updated_utc": "x"})
+    collect.espn_backfill_resumable(con, days_per_run=1)
+    db.insert(con, "meta", {"key": collect.BACKFILL_CURSOR_KEY, "value": "20250115",
+                            "updated_utc": "x"}, replace=True)
+    collect.espn_backfill_resumable(con, days_per_run=1)
+    assert con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"] == 1
+    assert con.execute("SELECT COUNT(*) c FROM audit_log WHERE action='game-merge'"
                        ).fetchone()["c"] == 0

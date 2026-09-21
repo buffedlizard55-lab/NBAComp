@@ -127,6 +127,54 @@ ESPN_BACKFILL_FLOOR = "20231001"
 BACKFILL_CURSOR_KEY = "espn_backfill_next_day"
 
 
+def _merge_espn_game_row(con, row: dict) -> str:
+    """Insert one ESPN game row, adopting an existing row for the same game.
+
+    The BRef bootstrap loads a whole season as `bref:{date}-{away}-{home}`;
+    the ESPN walk later reaches the same games as `espn:{id}`. Inserting both
+    created duplicate rows for one real game (run 35553997534: 5
+    `duplicate-game` warnings), and the BRef-only rows could never be joined
+    to box scores or odds because their id is not an ESPN event id.
+
+    When a row already exists for the same (date, away, home), the ESPN
+    identity wins: the row is re-keyed in place, `bets` are re-pointed, and
+    the earlier verification flag is preserved. Returns the action taken.
+    """
+    existing = con.execute(
+        "SELECT game_id, source, verified FROM games WHERE game_date_et=? "
+        "AND away_team=? AND home_team=?",
+        (row["game_date_et"], row["away_team"], row["home_team"])).fetchall()
+    same = [e for e in existing if e["game_id"] == row["game_id"]]
+    if same:
+        db.insert(con, "games", row, replace=True)
+        return "updated"
+    others = [e for e in existing if not (e["source"] or "").startswith("espn")]
+    if not others:
+        db.insert(con, "games", row, replace=True)
+        return "inserted"
+    old = others[0]["game_id"]
+    if con.execute("SELECT 1 FROM games WHERE game_id=?", (row["game_id"],)).fetchone():
+        # an ESPN row already exists separately: drop the stale BRef row
+        con.execute("DELETE FROM games WHERE game_id=?", (old,))
+        db.insert(con, "games", row, replace=True)
+        db.log_audit(con, "collect", "game-dedup", row["game_id"],
+                     {"removed": old, "reason": "espn identity supersedes bref row"})
+        return "deduped"
+    row["verified"] = max([e["verified"] or 0 for e in others] + [0])
+    con.execute("UPDATE games SET game_id=?, source=?, season=?, tipoff_utc=?, "
+                "home_score=?, away_score=?, status=?, neutral_site=?, "
+                "source_updated_utc=?, captured_utc=?, verified=? WHERE game_id=?",
+                (row["game_id"], row["source"], row["season"], row["tipoff_utc"],
+                 row["home_score"], row["away_score"], row["status"], row["neutral_site"],
+                 row["source_updated_utc"], row["captured_utc"], row["verified"], old))
+    con.execute("UPDATE bets SET game_id=? WHERE game_id=?", (row["game_id"], old))
+    con.execute("UPDATE team_gamelogs SET game_id=? WHERE game_id=?", (row["game_id"], old))
+    con.execute("UPDATE player_gamelogs SET game_id=? WHERE game_id=?", (row["game_id"], old))
+    db.log_audit(con, "collect", "game-merge", row["game_id"],
+                 {"previous_id": old, "reason": "espn event id replaces bref identity"})
+    return "merged"
+
+
 def espn_backfill_resumable(con, days_per_run: int = 113,
                             floor: str = ESPN_BACKFILL_FLOOR) -> dict:
     """Walk ESPN's scoreboard BACKWARDS one day at a time, resuming across runs.
@@ -163,7 +211,7 @@ def espn_backfill_resumable(con, days_per_run: int = 113,
         games = espn.parse_scoreboard(r.json)
         for g in games:
             odds = g.pop("_odds", None)
-            db.insert(con, "games", {
+            _merge_espn_game_row(con, {
                 "game_id": g["game_id"], "source": g["source"], "season": g["season"],
                 "game_date_et": g["game_date_et"] or "", "tipoff_utc": g["tipoff_utc"],
                 "home_team": g["home_team"], "away_team": g["away_team"],
@@ -171,7 +219,7 @@ def espn_backfill_resumable(con, days_per_run: int = 113,
                 "status": g["status"], "neutral_site": g["neutral_site"],
                 "source_updated_utc": None, "captured_utc": util.utcnow_iso(),
                 "verified": 0,
-            }, replace=True)
+            })
             if odds:
                 _store_espn_odds(con, odds)
         stats["days_fetched"] += 1

@@ -379,6 +379,12 @@ def parse_team_boxscore(js: dict) -> list[dict]:
             row["score"] = int(float(m.get("score"))) if m.get("score") is not None else None
         except (TypeError, ValueError):
             pass
+        # `pts` is what every consumer reads (collect_boxscores writes it into
+        # team_gamelogs, RollingTeamState computes pace/efficiency from it).
+        # It was left None while the identical value sat in `score`, so run
+        # 35553997534 stored 46 team_gamelogs rows with pts=NULL.
+        if row["pts"] is None:
+            row["pts"] = row["score"]
         if row["game_id"]:
             out.append(row)
     return out
