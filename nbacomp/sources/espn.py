@@ -25,11 +25,25 @@ LEAGUE_ID = "00"
 
 
 def _get(path: str, params: dict | None = None):
+    # Primary: plain urllib against both mirror hosts. As of 2026-09-20 both
+    # 403 from GitHub runner IPs (629 consecutive collection_log fails), so a
+    # Node-fetch fallback follows (runner-verified 200 for the same URLs).
+    # r.transport records which path actually delivered the bytes.
     r = http.get(f"{BASE_WEB}{path}", params, min_interval=0.8)
-    if not r.ok and r.status in (0, 403, 404):
+    if r.ok:
+        return r
+    if r.status in (0, 403, 404):
         r2 = http.get(f"{BASE_ALT}{path}", params, min_interval=0.8)
         if r2.ok:
             return r2
+    if r.status in (0, 403):
+        r3 = http.node_fetch(f"{BASE_ALT}{path}", params)
+        if r3.ok:
+            return r3
+        # last resort: node against the primary host too
+        r4 = http.node_fetch(f"{BASE_WEB}{path}", params)
+        if r4.ok:
+            return r4
     return r
 
 

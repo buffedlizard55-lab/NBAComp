@@ -112,7 +112,9 @@ def generate_forward_bets(con) -> int:
     book = engine.PriceBook(con)
     by_game: dict[str, dict[str, engine.KalshiMarketInfo]] = {}
     for info in mapping.values():
-        by_game.setdefault(info.game_id, {})[info.market_type] = info
+        # store_winner files the HOME team's market as "winner" (live shape
+        # is one market per team) and keeps the other side as "winner_away".
+        engine.store_winner(by_game.setdefault(info.game_id, {}), info)
     # also keep all prop markets mapped to their game + player
     props_by_game: dict[str, list[engine.KalshiMarketInfo]] = {}
     for info in mapping.values():
@@ -125,6 +127,16 @@ def generate_forward_bets(con) -> int:
 
     elo = _build_elo(con)
     rolling = RollingTeamState(window=15)
+    # Schedule-only state for rest/B2B/road-trip/travel (all finals are
+    # strictly before any upcoming game, so a single upfront feed is safe).
+    sched = RollingTeamState(window=15)
+    for gf in con.execute(
+            "SELECT home_team, away_team, game_date_et FROM games WHERE status='final' "
+            "ORDER BY game_date_et"):
+        sched.add_game({"team": gf["home_team"], "game_date_et": gf["game_date_et"],
+                        "is_home": 1, "venue_team": None})
+        sched.add_game({"team": gf["away_team"], "game_date_et": gf["game_date_et"],
+                        "is_home": 0, "venue_team": gf["home_team"]})
     log_by_team: dict[str, list] = {}
     for r in con.execute("SELECT * FROM team_gamelogs ORDER BY game_date_et"):
         log_by_team.setdefault(r["team"], []).append(dict(r))
@@ -155,8 +167,8 @@ def generate_forward_bets(con) -> int:
             "home": g["home_team"], "away": g["away_team"],
             "h_roll": rolling.team_rolling(g["home_team"]),
             "a_roll": rolling.team_rolling(g["away_team"]),
-            "h_rest": rolling.rest_and_travel(g["home_team"], gdate, True),
-            "a_rest": rolling.rest_and_travel(g["away_team"], gdate, False),
+            "h_rest": sched.rest_and_travel(g["home_team"], gdate, True),
+            "a_rest": sched.rest_and_travel(g["away_team"], gdate, False),
             "winner": winner, "total": by_game.get(g["game_id"], {}).get("total"),
             "spread": by_game.get(g["game_id"], {}).get("spread"),
             "book": book, "rolling_history": rolling.history,
@@ -171,6 +183,12 @@ def generate_forward_bets(con) -> int:
         live = book.kalshi_live_ask(winner.ticker)
         if not live:
             continue
+        # Shared evaluators price from ctx["live_price"] in forward (candles
+        # don't exist forward); the line-move baseline comes from our own
+        # timestamped orderbook history (None until snapshots accumulate).
+        ctx["live_price"] = live
+        ctx["live_baseline"] = book.kalshi_ask_at(
+            winner.ticker, util.to_iso(tip - timedelta(hours=48)))
 
         # ---- winner-market signals (NBA-001/003/004/005/006/007/012) ----
         winner_signals = _winner_signals(con, ctx, live)
@@ -619,7 +637,10 @@ def settle_finished(con) -> int:
     by_game: dict[str, engine.KalshiMarketInfo] = {}
     for info in mapping.values():
         if info.market_type == "winner":
-            by_game[info.game_id] = info
+            cur = by_game.get(info.game_id)
+            if cur is None or (info.team and info.home and info.team == info.home
+                               and cur.team != cur.home):
+                by_game[info.game_id] = info
     pending = con.execute(
         "SELECT * FROM bets WHERE kind='forward' AND result='pending'").fetchall()
     book = engine.PriceBook(con)

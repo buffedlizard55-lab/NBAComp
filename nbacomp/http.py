@@ -28,13 +28,15 @@ _last_call: dict[str, float] = {}
 
 
 class HttpResult:
-    __slots__ = ("status", "body", "json", "url", "error")
+    __slots__ = ("status", "body", "json", "url", "error", "transport")
 
-    def __init__(self, status: int, body: bytes | None, url: str, error: str | None = None):
+    def __init__(self, status: int, body: bytes | None, url: str, error: str | None = None,
+                 transport: str = "urllib"):
         self.status = status
         self.body = body
         self.url = url
         self.error = error
+        self.transport = transport
         self.json = None
         if body and not error:
             try:
@@ -45,6 +47,17 @@ class HttpResult:
     @property
     def ok(self) -> bool:
         return 200 <= self.status < 300 and self.json is not None
+
+    @property
+    def ok_body(self) -> bool:
+        """2xx with a non-empty body, regardless of content type.
+
+        For HTML/text endpoints (Basketball-Reference): .ok requires
+        parseable JSON, which HTML never is — using .ok there silently
+        fails every fetch (found 2026-09-21: BRef backfill AND verify
+        could never succeed). JSON callers must keep using .ok.
+        """
+        return 200 <= self.status < 300 and bool(self.body)
 
 
 def get(url: str, params: dict | None = None, headers: dict | None = None,
@@ -88,3 +101,46 @@ def get(url: str, params: dict | None = None, headers: dict | None = None,
                 continue
             return HttpResult(0, None, url, error=f"{type(e).__name__}: {e}")
     return HttpResult(0, None, url, error="unreachable")
+
+
+def build_url(url: str, params: dict | None = None) -> str:
+    if params:
+        url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
+    return url
+
+
+def node_fetch(url: str, params: dict | None = None, timeout: float = 40.0) -> HttpResult:
+    """GET via Node.js fetch() (different TLS stack than urllib).
+
+    Runner-verified 2026-09-20: Akamai 403s urllib/curl fingerprints on ESPN
+    hosts while Node fetch gets 200 for the same public URL. Same data, same
+    source — only the transport differs, and the transport is recorded on the
+    result so collection logs stay honest about how each byte arrived.
+    """
+    import subprocess
+
+    full = build_url(url, params)
+    script = (
+        "fetch(" + json.dumps(full) + ",{headers:{'User-Agent':" + json.dumps(USER_AGENT) +
+        ",'Accept':'application/json, text/plain, */*'}})"
+        ".then(async r=>{const t=await r.text();"
+        "console.log(JSON.stringify({status:r.status,body:t.slice(0,4000000)}))})"
+        ".catch(e=>{console.log(JSON.stringify({status:0,error:String(e).slice(0,300)}))})"
+    )
+    try:
+        p = subprocess.run(["node", "-e", script], capture_output=True, text=True,
+                           timeout=timeout)
+    except FileNotFoundError:
+        return HttpResult(0, None, full, error="node not available", transport="node")
+    except subprocess.TimeoutExpired:
+        return HttpResult(0, None, full, error="node fetch timeout", transport="node")
+    try:
+        out = (p.stdout or "").strip().splitlines()
+        js = json.loads(out[-1]) if out else {}
+    except Exception as e:
+        return HttpResult(0, None, full, error=f"node output parse: {e}", transport="node")
+    if js.get("status") == 200 and js.get("body") is not None:
+        return HttpResult(200, js["body"].encode("utf-8", "replace"), full, transport="node")
+    return HttpResult(int(js.get("status") or 0), None, full,
+                      error=str(js.get("error") or f"HTTP {js.get('status')}"),
+                      transport="node")
