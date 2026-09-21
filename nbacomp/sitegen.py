@@ -283,6 +283,8 @@ def _leaderboard_rows(con, kind: str) -> list[dict]:
 
 
 def _status_of(perf: dict, kind: str) -> str:
+    if perf.get("quarantined"):
+        return f"quarantined ({perf['quarantined']} bet(s) flagged)"
     if kind == "forward":
         if perf.get("pending"):
             return "active (open bets)"
@@ -350,13 +352,35 @@ def index(con, out_dir):
                 fmt_money(r.get("pnl") or 0), fmt_pct(r.get("roi")),
                 fmt_money(r.get("max_dd") or 0)]
                for r in bt if r.get("bets")]
-    backtest_html = (
-        table(["Strategy", "Backtest bets", "Win %", "Backtest P&L", "ROI", "Max DD"],
-              bt_rows)
-        if bt_rows else
-        "<p class='empty'>No price-based backtest bets yet — no free historical price "
-        "series exists for any NBA market (verified, see Data Sources). No prices are "
-        "fabricated; decision-rule signal validation is shown below instead.</p>")
+    hist_rows = con.execute(
+        "SELECT * FROM hist_backtests WHERE season IN ('ALL','all') AND run_id="
+        "(SELECT run_id FROM hist_backtests ORDER BY generated_utc DESC LIMIT 1) "
+        "ORDER BY strategy_id").fetchall()
+    if bt_rows:
+        backtest_html = table(
+            ["Strategy", "Backtest bets", "Win %", "Backtest P&L", "ROI", "Max DD"],
+            bt_rows)
+    elif hist_rows:
+        backtest_html = (
+            table(["Rule", "Priced games", "Bets", "Win %", "P&L", "ROI", "Max DD"],
+                  [[("<b>MARKET baseline</b> (home every game)"
+                     if r["strategy_id"] == "MARKET" else
+                     f"<a href='strategies.html#{r['strategy_id']}'>{r['strategy_id']}</a>"),
+                    r["games_available"], r["bets"],
+                    f"{(r['win_rate'] or 0) * 100:.1f}%", fmt_money(r["pnl"]),
+                    fmt_pct(r["roi"]), fmt_money(r["max_dd"])] for r in hist_rows])
+            + "<p class='muted'>Simulated at the archive's own moneylines over 4,043 validated games "
+              "(2013-14..2022-23), same-season prior-only state, flat 1% stakes, probabilities shrunk "
+              "50% toward the price. <b>Every rule loses money at real prices</b>, and every rule "
+              "does worse than backing the home team at the same prices. Full detail, per season, on "
+              "the <a href='research.html'>research page</a>. Totals/spreads are excluded: the archive "
+              "prints lines but no per-side prices, and a simulated -110 would be an assumption, not "
+              "evidence.</p>")
+    else:
+        backtest_html = (
+            "<p class='empty'>No price-based backtest has run in this checkout yet. Where no free "
+            "historical price series exists, no price is ever fabricated; decision-rule signal "
+            "validation is shown below instead.</p>")
 
     lb = table(
         ["#", "Username", "Strategy", "Bankroll", "P&L", "ROI", "Bets", "Win %", "Status"],
@@ -808,11 +832,14 @@ def signal_snapshot_html(con) -> str:
         "<h2>Signal validation <span class=\"muted\">(pooled, all seasons — decision rule vs "
         "verified outcomes; NO prices, NOT P&amp;L)</span></h2>"
         + t
-        + "<p class=\"muted small\">No free historical price series exists for NBA markets "
-        "(verified by probe: settled Kalshi markets expose no candlesticks or trade tape; "
-        "ESPN keeps no past odds). This table shows whether each strategy's rule picks "
-        "winning sides more often than the league base rate, or beats the season-mean "
-        "total — evidence about the signal only. Per-season rows on each strategy page.</p>")
+        + "<p class=\"muted small\">This is evidence about the SIGNAL only, not P&amp;L: it asks "
+        "whether a rule picks winning sides more often than the league base rate, or beats the "
+        "season-mean total. Settled Kalshi markets expose no candlesticks or trade tape and ESPN "
+        "keeps no past odds, which is why outcome-only validation is the only option for these "
+        "rules. Where real historical prices DO exist (the SBR archive, 2013-14..2022-23) the same "
+        "rules are simulated against them in the table above — and every one of them loses money, "
+        "several of them converting a 60%+ hit rate into a negative return. Per-season rows on "
+        "each strategy page.</p>")
 
 
 def signal_validation_html(con, sid: str) -> str:
@@ -902,23 +929,28 @@ def _why_analysis(bt: dict, fwd: dict) -> str:
     return "<p>" + "</p><p>".join(parts) + "</p>"
 
 
-def upcoming(con, out_dir):
+def upcoming(con, out_dir):  # noqa: C901
     rows = con.execute(
         "SELECT * FROM bets WHERE kind='forward' AND result='pending' ORDER BY tipoff_utc").fetchall()
+    up_flags = flagged_bet_ids(con)
     body = f"""
 <h1>Upcoming simulated bets</h1>
 <p class="muted">Every intended bet is published here BEFORE the game starts, with the price and model state
 frozen at decision time. If this table is empty, no strategy currently sees a qualifying opportunity —
-that is a result, not an outage.</p>
+that is a result, not an outage. Rows carrying a <span class="bad">quarantine flag</span> were placed on a
+decision state later found defective: they stay published, they are excluded from exposure and ranking
+P&amp;L, and they will never be silently deleted or rewritten.</p>
 {table(["Strategy", "Game", "Tipoff (UTC)", "Market", "Pick", "Side", "Price (¢)", "Model prob",
-        "Mkt prob", "Edge", "Stake", "To win", "Trigger", "Source ts"],
+        "Mkt prob", "Edge", "Stake", "To win", "Trigger", "Source ts", "Flags"],
        [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["tipoff_utc"]), _esc(r["market"]),
          _esc(r["selection"]), _esc(r["side"]), r["price"],
          f"{r['model_prob']:.3f}" if r["model_prob"] is not None else "—",
          f"{r['market_prob']:.3f}" if r["market_prob"] is not None else "—",
          f"{r['edge']:+.3f}" if r["edge"] is not None else "—",
          fmt_money(r["stake_usd"]), fmt_money(r["to_win_usd"]),
-         f"<span class='trigger'>{_esc((r['notes'] or '')[:140])}</span>", _esc(r["source_ts"])]
+         f"<span class='trigger'>{_esc((r['notes'] or '')[:140])}</span>", _esc(r["source_ts"]),
+         ("<span class='bad mono small'>" + _esc(", ".join(up_flags[r["bet_id"]])) + "</span>")
+         if r["bet_id"] in up_flags else "<span class='muted'>—</span>"]
         for r in rows])}
 """
     _write(out_dir, "upcoming.html", page("Upcoming Bets", body, "upcoming.html"))
@@ -1048,9 +1080,14 @@ The site does not depend on any single fragile endpoint.</p>
         "Last verified", "Latest run", "Verification notes"], rows)}
 <h2>Known unavailable data (documented, not assumed)</h2>
 <ul>
-<li><b>Historical sportsbook closing lines (deep history):</b> no free, legal archive was found; paid archives
-exist and are excluded by policy. Consequence: historical backtests run only where Kalshi candlestick history
-exists; totals/spread model bets before that use clearly-labeled price assumptions (PRICED-ASSUMPTION).</li>
+<li><b>Historical sportsbook prices — found, with limits:</b> the SBR archive (2007-08..2022-23) is free and
+keyless, and supplies real opening/closing spreads and totals plus moneylines. Two limits are published rather
+than glossed over: the season pages only carry roughly October-December of each season (4,043 validated games
+over 2013-14..2022-23), and the archive prints lines without per-side prices for totals/spreads, so only
+moneyline markets can be simulated at a real price. Deep-history totals/spread PER-SIDE prices remain
+unavailable free; Kalshi candlestick history covers only the forward window.</li>
+<li><b>Paid odds archives:</b> exist (e.g. Scottfree, FantasyData) and are excluded by policy — no paid plan
+is used anywhere in this project.</li>
 <li><b>Historical injury reports:</b> no free dated archive — injury strategies are forward-tested first.</li>
 <li><b>Historical order-book depth:</b> Kalshi does not publish historical books; backtest entries use last
 closed hourly trade price +1 tick, labeled as an execution assumption.</li>
@@ -1077,7 +1114,7 @@ def hist_backtest_html(con) -> str:
     if not rows:
         return ""
     totals = con.execute(
-        "SELECT * FROM hist_backtests WHERE run_id=? AND season='ALL' "
+        "SELECT * FROM hist_backtests WHERE run_id=? AND season IN ('ALL','all') "
         "ORDER BY strategy_id", (run["run_id"],)).fetchall()
     baseline = con.execute(
         "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id='MARKET'",

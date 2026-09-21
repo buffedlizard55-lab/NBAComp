@@ -361,13 +361,26 @@ def test_version_history_records_preserved_rules():
 
 
 def test_uncertainty_is_published_not_hidden():
-    """The site must state the price limitation rather than imply a backtest edge."""
-    for f in ("index.html", "sources.html"):
-        path = os.path.join(REPO, f)
+    """The site must state the price limitations, not imply an unqualified edge.
+
+    Updated 2026-09-21 after the SBR archive landed: 'no free historical price
+    series exists' became FALSE, and a test that keeps asserting a false
+    statement would push the site back toward it. The invariant that survives is
+    the one that matters: published history must carry its limitations, and the
+    price-based result (including its baseline) must be visible.
+    """
+    index_path = os.path.join(REPO, "index.html")
+    sources_path = os.path.join(REPO, "sources.html")
+    for path in (index_path, sources_path):
         if not os.path.exists(path):
             continue
         html = open(path, encoding="utf-8").read()
-        assert "PRICED-ASSUMPTION" in html or "no free historical" in html.lower()
+        assert ("per-side prices" in html or "PRICED-ASSUMPTION" in html
+                or "no free historical" in html.lower())
+    if os.path.exists(index_path):
+        html = open(index_path, encoding="utf-8").read()
+        # every published price-based number must sit next to its baseline
+        assert "MARKET baseline" in html or "PRICED-ASSUMPTION" in html
 
 
 def test_validation_policy_is_conservative():

@@ -45,12 +45,32 @@ def run_checks(con) -> dict:
         "SELECT task, source, status, detail, ts_utc FROM collection_log "
         "WHERE status IN ('crash','fail') AND ts_utc >= ? ORDER BY id DESC LIMIT 40",
         (window_start,)).fetchall()
-    crash_tasks = sorted({r["task"] for r in recent if r["status"] == "crash"})
-    if crash_tasks:
+    crash_rows = [r for r in recent if r["status"] == "crash"]
+    # A crash is OPEN only while that task has not completed successfully since:
+    # the log is append-only, so a defect fixed in a later commit would otherwise
+    # keep the dashboard red forever (observed 2026-09-21: the SBR column
+    # migration crash stayed on the dashboard after the fix and a clean re-run).
+    open_crash_tasks, resolved_crash_tasks = [], []
+    for task in sorted({r["task"] for r in crash_rows}):
+        last_crash = con.execute(
+            "SELECT MAX(id) m FROM collection_log WHERE task=? AND status='crash'",
+            (task,)).fetchone()["m"]
+        last_ok = con.execute(
+            "SELECT MAX(id) m FROM collection_log WHERE task=? AND status IN ('ok','empty')",
+            (task,)).fetchone()["m"]
+        (resolved_crash_tasks if (last_ok or 0) > (last_crash or 0)
+         else open_crash_tasks).append(task)
+    if open_crash_tasks:
         record("critical", "collector-crash",
-               {"tasks": crash_tasks,
+               {"tasks": open_crash_tasks,
                 "latest": [{k: r[k] for k in ("task", "source", "ts_utc", "detail")}
-                           for r in recent if r["status"] == "crash"][:3]})
+                           for r in crash_rows if r["task"] in open_crash_tasks][:3]})
+    if resolved_crash_tasks:
+        record("info", "collector-crash-resolved",
+               {"tasks": resolved_crash_tasks,
+                "detail": "these tasks crashed earlier in the window and then "
+                          "completed successfully; the crash rows stay in "
+                          "collection_log as history"})
     fail_counts: dict[str, int] = {}
     for r in recent:
         if r["status"] == "fail":
