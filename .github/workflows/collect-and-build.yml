@@ -14,6 +14,9 @@ on:
       backfill:
         description: "Run full multi-season backfill first (slow, ~40min)"
         default: "false"
+      sbr:
+        description: "Force re-collection of the SBR historical-odds archive"
+        default: "false"
   push:
     paths-ignore:
       - "data/**"
@@ -158,6 +161,20 @@ jobs:
           # start times and ESPN boxscore IDs can be used at all. Their output
           # is committed evidence, not a claim in a report.
           python tools/probe_historical_shape.py || true
+
+      - name: Historical odds archive (SBR) — validated rows only
+        if: steps.skip.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          # The only free source found with real historical NBA prices. Runs
+          # once (while hist_odds is empty) or on demand via workflow_dispatch.
+          N=$(python -c "from nbacomp import db; con=db.connect('data/nbacomp.db'); print(con.execute('SELECT COUNT(*) FROM hist_odds').fetchone()[0])" 2>/dev/null || echo 0)
+          echo "hist_odds rows before: $N"
+          if [ "$N" = "0" ] || [ "${{ inputs.sbr }}" = "true" ]; then
+            python -m nbacomp.collect sbr-odds
+          else
+            echo "kept $N existing validated rows (dispatch with sbr=true to refresh)"
+          fi
 
       - name: Daily collection (schedule+odds, injuries, Kalshi, boxscores, verification)
         if: steps.skip.outputs.skip != 'true'

@@ -347,6 +347,31 @@ CREATE TABLE IF NOT EXISTS bets (
 );
 CREATE INDEX IF NOT EXISTS idx_bets_strat ON bets(strategy_id, kind, run_id);
 
+-- Historical sportsbook odds archive (SBR season pages). Only rows that passed
+-- the parser's structural + numeric cross-checks are stored; `reject_reason` is
+-- never set on stored rows, and rejected games are counted in
+-- collection_log/anomalies instead of being silently dropped.
+CREATE TABLE IF NOT EXISTS hist_odds (
+  season TEXT NOT NULL,
+  game_date_et TEXT NOT NULL,
+  away TEXT NOT NULL,
+  home TEXT NOT NULL,
+  away_q TEXT, home_q TEXT,              -- JSON quarter scores
+  away_final INTEGER NOT NULL,
+  home_final INTEGER NOT NULL,
+  open_total REAL, close_total REAL,
+  open_home_spread REAL, close_home_spread REAL,
+  ml_away INTEGER, ml_home INTEGER,
+  source TEXT NOT NULL DEFAULT 'sbr',
+  source_url TEXT NOT NULL,
+  source_row_hash TEXT,                  -- detects later edits at the source
+  cross_checked INTEGER NOT NULL DEFAULT 0,
+  cross_check_detail TEXT,
+  captured_utc TEXT NOT NULL,
+  PRIMARY KEY (season, game_date_et, away, home)
+);
+CREATE INDEX IF NOT EXISTS idx_hist_odds_season ON hist_odds(season, game_date_et);
+
 -- Bet quarantine flags. A bet placed by a version of the engine that is now
 -- known to be defective (stale model state, assumed price never observed,
 -- strategy parked by its own evidence) cannot be deleted or edited — the bets
