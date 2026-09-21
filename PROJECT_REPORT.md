@@ -365,6 +365,19 @@ section is plainly labeled.
 | Settled-Kalshi claim was wrong in both this report and the code comments | `kalshi-backfill … markets_total=0` for all 8 series | `kalshi_settled_history()` probes candles/tape with constructed tickers and records the true answer in `meta` |
 | Report/README drift (14 vs 19 strategies, 49/54 vs actual test count, stale branch/PR/deployment claims) | `strategies` table has 19 rows; `pytest` reports 92 | README + this report regenerated from the registry and from a real test run |
 
+### Fixed after the first verified runs (2026-09-21, runs `35553997534` / `35554765928`)
+
+| Defect | Evidence | Fix |
+|--------|----------|-----|
+| `team_gamelogs.pts` always NULL — `parse_team_boxscore` filled only `score` while the collector writes `pts` | 46 rows with `pts=NULL` in run `35553997534` | `pts` mirrors the observed score; incomplete rows are dropped and re-collected rather than patched from another table |
+| The same game stored twice — ESPN says `NY/GS/SA/UTAH/WSH/NO`, BRef and Kalshi tickers say `NYK/GSW/SAS/UTA/WAS/NOP` | 17 `duplicate-game` anomalies; 582 games with ESPN-only spellings; **zero** Kalshi markets joinable to a game | `engine.canon_team()` applied in all three ESPN collectors; `repair_team_vocab()` re-labelled 637 game rows + 366 gamelog rows and merged 497 duplicate games |
+| Non-NBA preseason opponents stored as NBA games | rows for `STARS`, `STRIPES`, `WORLD`, `GUANGZHOU`, `HAPOEL`, `LON`, `MEL` | `engine.is_nba_team()` filter in the collectors (skips + logs), 10 rows purged, audit raises `non-nba-team-in-games` |
+| Daily ESPN window reached only 8 days ahead, so the 2026-10-20 openers (the only games with live Kalshi markets) had no row | 0 scheduled games before run `35554765928` | `espn_forward_window()` (42 days) → 174 scheduled games and the first 24 odds rows |
+| Box-score collectors spent their budget on `bref:` rows whose id is not an ESPN event id | 41 `boxscore espn fail` rows | only `espn:`-namespaced ids are fetched |
+
+Repair verified by executing it against a copy of the committed 3,393-row database:
+**2,886 games, 0 duplicates, exactly the 30 NBA abbreviations, 0 non-NBA gamelog rows.**
+
 ### Still open
 
 - The `audit.run_checks` `injury-listing-late` query joins on team
@@ -431,12 +444,12 @@ Run in this pass, in a fresh venv (`python3 -m venv .venv && .venv/bin/pip
 install pytest`), on `arena/01a0c1af-nbacomp`:
 
 ```
-.venv/bin/python -m pytest tests   ->  97 passed
+.venv/bin/python -m pytest tests   ->  102 passed
 
 tests/test_collect_and_backtest.py   9 tests
 tests/test_core.py                  45 tests
 tests/test_live_shapes.py           18 tests
-tests/test_pipeline_fixes.py        25 tests   (new this pass)
+tests/test_pipeline_fixes.py        30 tests   (new this pass)
 ```
 
 The new file pins every defect above: snapshot stores markets that omit

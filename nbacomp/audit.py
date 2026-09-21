@@ -108,6 +108,24 @@ def run_checks(con) -> dict:
                            {"bet_id": b["bet_id"], "recorded": b["result"], "score_implied": expect})
 
     # --- games quality
+    from . import engine as _engine
+    bad_abbr = [r["v"] for r in con.execute(
+        "SELECT DISTINCT home_team AS v FROM games UNION SELECT DISTINCT away_team FROM games")
+        if not _engine.is_nba_team(r["v"])]
+    if bad_abbr:
+        n = con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"]
+        record("warn", "non-nba-team-in-games",
+               {"abbreviations": sorted(bad_abbr), "games": n,
+                "detail": "ESPN's NBA scoreboard also lists preseason exhibitions "
+                          "against non-NBA clubs; these rows corrupt league-wide features"})
+    alias = [r["v"] for r in con.execute(
+        "SELECT DISTINCT home_team AS v FROM games UNION SELECT DISTINCT away_team FROM games")
+        if _engine.canon_team(r["v"]) != r["v"]]
+    if alias:
+        record("warn", "non-canonical-team-abbreviation",
+               {"abbreviations": sorted(alias),
+                "detail": "same game can be stored twice under ESPN and BRef spellings, "
+                          "and Kalshi event tickers will not join"})
     dup_games = con.execute(
         "SELECT game_date_et, home_team, away_team, COUNT(*) c FROM games "
         "GROUP BY 1,2,3 HAVING c>1").fetchall()

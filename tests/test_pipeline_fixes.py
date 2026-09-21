@@ -478,3 +478,94 @@ def test_espn_forward_window_never_overwrites_a_final_score(con, monkeypatch):
     row = con.execute("SELECT * FROM games WHERE game_id='bref:x'").fetchone()
     assert row["home_score"] == 130 and row["status"] == "final"
     assert con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"] == 1
+
+
+# ------------------------------------------------- team vocabulary (probe8)
+def test_canon_team_maps_espn_abbrevs_to_the_kalshi_bref_set():
+    """Run 35554765928 stored the same game twice because ESPN says NY/GS/SA/
+    UTAH/WSH/NO while BRef and Kalshi event tickers say NYK/GSW/SAS/UTA/WAS/
+    NOP — 17 duplicate-game anomalies and no Kalshi market could be joined."""
+    from nbacomp import engine
+    assert engine.canon_team("NY") == "NYK" and engine.canon_team("GS") == "GSW"
+    assert engine.canon_team("SA") == "SAS" and engine.canon_team("UTAH") == "UTA"
+    assert engine.canon_team("WSH") == "WAS" and engine.canon_team("NO") == "NOP"
+    assert engine.canon_team("BOS") == "BOS" and engine.canon_team(None) is None
+    assert engine.is_nba_team("NYK") and engine.is_nba_team("WSH")
+    for junk in ("STARS", "STRIPES", "WORLD", "GUANGZHOU", "HAPOEL", "LON", "MEL"):
+        assert not engine.is_nba_team(junk)
+    assert len(engine.TEAM_NAMES) == 30
+
+
+def test_espn_collectors_canonicalize_and_reject_non_nba_games(con, monkeypatch):
+    monkeypatch.setattr(collect.espn, "scoreboard",
+                        lambda day: espn_scoreboard_ok(day, home="NY", away="GS", gid="401900001"))
+    collect.collect_espn_day(con, "20261020")
+    row = con.execute("SELECT * FROM games").fetchone()
+    assert row["home_team"] == "NYK" and row["away_team"] == "GSW"
+
+    monkeypatch.setattr(collect.espn, "scoreboard",
+                        lambda day: espn_scoreboard_ok(day, home="STARS", away="STRIPES",
+                                                       gid="401900002"))
+    collect.collect_espn_day(con, "20261021")
+    assert con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"] == 1
+    anoms = [r["check_name"] for r in con.execute("SELECT check_name FROM anomalies")]
+    assert "non-nba-game-skipped" in anoms
+
+
+def test_repair_team_vocab_canonicalizes_dedups_and_purges_non_nba(con):
+    """Executed for real against the committed DB from run 35554765928:
+    637 game rows + 366 gamelog rows renamed, 497 duplicate games merged,
+    10 non-NBA rows deleted -> 2,886 games, 0 duplicates, 30 abbreviations."""
+    for gid, src, home, away, hs in (
+            ("bref:2026-05-11-CLE-DET", "basketball-reference", "DET", "CLE", 100),
+            ("espn:401871336", "espn", "DET", "CLE", 100),
+            ("espn:401900003", "espn", "STARS", "STRIPES", 99),
+            ("espn:401900004", "espn", "NY", "GS", None)):
+        db.insert(con, "games", {
+            "game_id": gid, "source": src, "season": "2025-26",
+            "game_date_et": "2026-05-11" if gid != "espn:401900004" else "2026-10-20",
+            "tipoff_utc": "2026-05-12T00:00:00Z", "home_team": home, "away_team": away,
+            "home_score": hs, "away_score": 90 if hs else None,
+            "status": "final" if hs else "scheduled", "captured_utc": "x"})
+    stats = collect.repair_team_vocab(con)
+    assert stats["deleted_non_nba"] == 1
+    assert stats["merged_duplicates"] == 1
+    assert stats["renamed_games"] >= 2
+    rows = {r["game_id"]: r for r in con.execute("SELECT * FROM games")}
+    assert "espn:401871336" in rows and "bref:2026-05-11-CLE-DET" not in rows
+    assert rows["espn:401900004"]["home_team"] == "NYK"
+    assert rows["espn:401900004"]["away_team"] == "GSW"
+    assert all(r["home_team"] in engine_teams() for r in rows.values())
+    assert con.execute("SELECT COUNT(*) c FROM audit_log WHERE action='merge-duplicate-game'"
+                       ).fetchone()["c"] == 1
+
+
+def engine_teams():
+    from nbacomp import engine
+    return set(engine.TEAM_NAMES)
+
+
+def test_drop_incomplete_gamelogs_removes_null_pts_rows(con):
+    db.insert(con, "team_gamelogs", {
+        "season": "2025-26", "game_id": "espn:1", "game_date_et": "2026-05-11", "team": "DET",
+        "opp": "CLE", "is_home": 1, "pts": None, "opp_pts": 112, "source": "espn:summary",
+        "captured_utc": "x"})
+    db.insert(con, "team_gamelogs", {
+        "season": "2025-26", "game_id": "espn:2", "game_date_et": "2026-05-12", "team": "BOS",
+        "opp": "LAL", "is_home": 1, "pts": 110, "opp_pts": 100, "source": "espn:summary",
+        "captured_utc": "x"})
+    assert collect.drop_incomplete_gamelogs(con) == 1
+    left = [r["team"] for r in con.execute("SELECT team FROM team_gamelogs")]
+    assert left == ["BOS"]
+    assert collect.drop_incomplete_gamelogs(con) == 0      # idempotent
+
+
+def test_audit_flags_non_nba_and_aliased_team_abbreviations(con):
+    db.insert(con, "games", {
+        "game_id": "espn:bad1", "source": "espn", "season": "2026-27",
+        "game_date_et": "2026-10-05", "tipoff_utc": "2026-10-05T23:00:00Z",
+        "home_team": "STARS", "away_team": "NY", "status": "scheduled", "captured_utc": "x"})
+    summary = audit.run_checks(con)
+    names = {c["check"] for c in summary["checks"]}
+    assert "non-nba-team-in-games" in names
+    assert "non-canonical-team-abbreviation" in names

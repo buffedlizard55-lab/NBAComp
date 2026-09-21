@@ -45,13 +45,13 @@ What the database actually holds after Actions run `35553630400` (commit `f2133d
 
 | table | rows | note |
 |-------|------|------|
-| `games` | 2,643 | 2024-10-22 → 2026-06-13, all `final`, all with `tipoff_utc`, source Basketball-Reference |
+| `games` | 2,886 | 2024-10-22 → 2026-10-21 (finals + the scheduled 2026-27 preseason/openers), one canonical row per game |
 | `kalshi_markets` | 59 | 6 `KXNBAGAME` (the 2026-10-20 openers) + 53 `KXNBAMVP`, all live/active |
 | `kalshi_candles` | 406 | hourly OHLCV for those 6 openers, 2026-09-18 → 2026-09-21 |
 | `kalshi_orderbooks` | 6 | real quotes, e.g. `KXNBAGAME-26OCT20OKCSAS-SAS` bid 53 / ask 54 |
-| `odds_snapshots` | 0 | populated by the ESPN backfill as it walks back (cursor `20260901`) |
+| `odds_snapshots` | 48 | all **forward**: ESPN keeps no odds for past dates, so these are the first lines ever captured |
 | `injuries` | 0 | ESPN injury board is empty in the offseason |
-| `team_gamelogs` / `player_gamelogs` | 0 | box-score walk in progress (cursor `20241028`) |
+| `team_gamelogs` / `player_gamelogs` | 46 / 664 | box-score walk in progress; the first 46 rows had `pts=NULL` and are re-collected |
 | `bets` | 0 | no game market has tipped off yet |
 | `verifications` | 0 | cross-verification runs once ESPN and BRef rows overlap |
 
@@ -65,7 +65,14 @@ Three facts this establishes rather than assumes:
    result-based modelling, not enough to price a bet.
 3. **The 2026-27 season has not tipped off**, so the only live NBA markets are the three
    opening-night games and season-long futures.
-4. **No free historical NBA price series exists.** probe7 (`data/diagnostics.txt`, run
+4. **Team vocabulary had to be unified before anything could be joined.** ESPN abbreviates
+   six franchises differently from BRef and from Kalshi's event tickers
+   (`NY/GS/SA/UTAH/WSH/NO` vs `NYK/GSW/SAS/UTA/WAS/NOP`), which stored 497 duplicate games
+   and made **zero** Kalshi markets joinable to a game. ESPN's NBA scoreboard also lists
+   preseason exhibitions against non-NBA clubs (`STARS`, `STRIPES`, `WORLD`, `GUANGZHOU`,
+   `HAPOEL`, `LON`, `MEL`), which had been stored as NBA games. Both are fixed, repaired in
+   place, and now raised as audit findings if they recur.
+5. **No free historical NBA price series exists.** probe7 (`data/diagnostics.txt`, run
    `35554330261`) found past ESPN scoreboards return games with **no odds at all** (20260115:
    9 events / 0 odds; 20260613: 1/0; 20250115: 11/0; 20241022: 2/0), BRef publishes no odds,
    and ESPN's summary endpoint rejects BRef boxscore IDs (HTTP 400). With settled Kalshi
@@ -148,7 +155,7 @@ The sandbox/dev image has no pytest and a PEP-668-managed system Python, so use 
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pytest
-.venv/bin/python -m pytest tests          # offline suite, no network needed (93 tests)
+.venv/bin/python -m pytest tests          # offline suite, no network needed (102 tests)
 .venv/bin/python -m nbacomp.collect daily  # needs open internet (runs automatically in CI)
 .venv/bin/python tools/run_pipeline.py     # strategies + engines + audit + site build
 .venv/bin/python tools/db_report.py        # row counts + collection health (CI gate)
@@ -167,6 +174,7 @@ Collection tasks (`python -m nbacomp.collect <task>`):
 | `kalshi-candles` | candlesticks for stored markets in a window | window |
 | `kalshi-settled-history` | probes whether settled markets expose candles/tape | 60 games |
 | `bref-month` | current-month BRef schedule + verification (skipped in the offseason) | 2 pages |
+| `repair` | idempotent self-heal: canonical team abbreviations, de-duplicated games, non-NBA rows purged | 1 pass |
 
 Every fetch is logged to `collection_log` with its HTTP status, and every crash is recorded
 with its traceback; `tools/db_report.py` prints row counts and fails the CI job when a

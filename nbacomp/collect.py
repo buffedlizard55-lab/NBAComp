@@ -59,6 +59,13 @@ def collect_espn_day(con, day: str, verify: bool = False) -> int:
     games = espn.parse_scoreboard(r.json)
     for g in games:
         odds = g.pop("_odds", None)
+        if not (engine.is_nba_team(g["home_team"]) and engine.is_nba_team(g["away_team"])):
+            db.log_anomaly(con, "info", "non-nba-game-skipped",
+                           {"game_id": g["game_id"], "home": g["home_team"],
+                            "away": g["away_team"], "date": g["game_date_et"]})
+            continue
+        g["home_team"] = engine.canon_team(g["home_team"])
+        g["away_team"] = engine.canon_team(g["away_team"])
         row = {
             "game_id": g["game_id"], "source": g["source"], "season": g["season"],
             "game_date_et": g["game_date_et"] or "", "tipoff_utc": g["tipoff_utc"],
@@ -120,6 +127,90 @@ def backfill_days(con, start: str, end: str) -> int:
     return total
 
 
+def repair_team_vocab(con) -> dict:
+    """One-shot self-heal for rows written before the canonical-abbreviation fix.
+
+    Run 35554765928 committed 17 duplicate games (same date/matchup stored
+    twice under ESPN and BRef abbreviations) and rows for non-NBA exhibition
+    clubs (GUANGZHOU, HAPOEL, LON, MEL, STARS, STRIPES, WORLD) that ESPN's NBA
+    scoreboard lists during preseason. Nothing here invents data: rows are
+    either re-labelled with the canonical abbreviation, deleted because they
+    are not NBA games, or dropped because a later duplicate supersedes them.
+    Every action is written to audit_log.
+    """
+    stats = {"renamed_games": 0, "deleted_non_nba": 0, "merged_duplicates": 0,
+             "renamed_gamelogs": 0}
+    for table, cols in (("games", ("home_team", "away_team")),
+                        ("team_gamelogs", ("team",)),
+                        ("player_gamelogs", ("team",))):
+        for col in cols:
+            # materialised list: the loop below deletes/updates this same
+            # table, and mutating a table while iterating its live cursor
+            # silently skips values (the first version left 9 non-NBA rows).
+            values = [r["v"] for r in
+                      con.execute(f"SELECT DISTINCT {col} AS v FROM {table}").fetchall()]
+            for v in values:
+                # order matters: the non-NBA check must come first, because a
+                # value like 'STARS' canonicalises to itself and an equality
+                # short-circuit skipped the delete entirely (first version
+                # deleted 0 of 11 non-NBA rows).
+                if not engine.is_nba_team(v):
+                    if table == "games":
+                        n = con.execute(f"DELETE FROM {table} WHERE {col}=?", (v,)).rowcount
+                        stats["deleted_non_nba"] += n
+                        db.log_audit(con, "repair", "delete-non-nba", table,
+                                     {"abbrev": v, "rows": n})
+                    continue
+                cv = engine.canon_team(v)
+                if cv == v:
+                    continue
+                n = con.execute(f"UPDATE {table} SET {col}=? WHERE {col}=?", (cv, v)).rowcount
+                stats["renamed_games" if table == "games" else "renamed_gamelogs"] += n
+                db.log_audit(con, "repair", "canonicalize-abbrev", table,
+                             {"from": v, "to": cv, "rows": n})
+    # collapse games that are now identical except for source
+    dupes = con.execute(
+        "SELECT game_date_et, home_team, away_team, COUNT(*) c FROM games "
+        "GROUP BY 1,2,3 HAVING c>1").fetchall()
+    for r in dupes:
+        rows = con.execute(
+            "SELECT game_id, source, status, home_score FROM games WHERE game_date_et=? "
+            "AND home_team=? AND away_team=? ORDER BY (source LIKE 'espn%') DESC",
+            (r["game_date_et"], r["home_team"], r["away_team"])).fetchall()
+        keep = rows[0]["game_id"]
+        for dup in rows[1:]:
+            con.execute("UPDATE bets SET game_id=? WHERE game_id=?", (keep, dup["game_id"]))
+            con.execute("UPDATE team_gamelogs SET game_id=? WHERE game_id=?",
+                        (keep, dup["game_id"]))
+            con.execute("UPDATE player_gamelogs SET game_id=? WHERE game_id=?",
+                        (keep, dup["game_id"]))
+            con.execute("DELETE FROM games WHERE game_id=?", (dup["game_id"],))
+            stats["merged_duplicates"] += 1
+            db.log_audit(con, "repair", "merge-duplicate-game", keep,
+                         {"removed": dup["game_id"], "source": dup["source"]})
+    db.log_collection(con, "repair-team-vocab", "nbacomp", "ok", json.dumps(stats),
+                      rows=sum(stats.values()))
+    return stats
+
+
+def drop_incomplete_gamelogs(con) -> int:
+    """Delete team_gamelogs rows whose `pts` was never parsed, so the resumable
+    box-score walk re-fetches those days with the fixed parser.
+
+    Run 35553997534 stored 46 rows with pts=NULL (parse_team_boxscore filled
+    only `score`); patching them from the games table would have been derived
+    data, so they are removed and re-collected from the source instead.
+    """
+    n = con.execute("DELETE FROM team_gamelogs WHERE pts IS NULL").rowcount
+    if n:
+        db.log_audit(con, "repair", "drop-incomplete-gamelogs", "team_gamelogs",
+                     {"rows": n, "reason": "pts NULL - pre-fix parse"})
+        db.log_collection(con, "repair-gamelogs", "nbacomp", "ok",
+                          f"deleted {n} team_gamelogs rows with NULL pts for re-collection",
+                          rows=n)
+    return n
+
+
 def espn_forward_window(con, days_ahead: int = 42) -> dict:
     """Collect UPCOMING scheduled games (tipoffs) from ESPN's scoreboard.
 
@@ -148,6 +239,13 @@ def espn_forward_window(con, days_ahead: int = 42) -> dict:
             continue
         for g in espn.parse_scoreboard(r.json):
             odds = g.pop("_odds", None)
+            if not (engine.is_nba_team(g["home_team"]) and engine.is_nba_team(g["away_team"])):
+                db.log_anomaly(con, "info", "non-nba-game-skipped",
+                               {"game_id": g["game_id"], "home": g["home_team"],
+                                "away": g["away_team"], "date": g["game_date_et"]})
+                continue
+            g["home_team"] = engine.canon_team(g["home_team"])
+            g["away_team"] = engine.canon_team(g["away_team"])
             have = con.execute("SELECT game_id FROM games WHERE game_date_et=? "
                                "AND away_team=? AND home_team=?",
                                (g["game_date_et"], g["away_team"], g["home_team"])).fetchone()
@@ -267,6 +365,13 @@ def espn_backfill_resumable(con, days_per_run: int = 113,
         games = espn.parse_scoreboard(r.json)
         for g in games:
             odds = g.pop("_odds", None)
+            if not (engine.is_nba_team(g["home_team"]) and engine.is_nba_team(g["away_team"])):
+                db.log_anomaly(con, "info", "non-nba-game-skipped",
+                               {"game_id": g["game_id"], "home": g["home_team"],
+                                "away": g["away_team"], "date": g["game_date_et"]})
+                continue
+            g["home_team"] = engine.canon_team(g["home_team"])
+            g["away_team"] = engine.canon_team(g["away_team"])
             _merge_espn_game_row(con, {
                 "game_id": g["game_id"], "source": g["source"], "season": g["season"],
                 "game_date_et": g["game_date_et"] or "", "tipoff_utc": g["tipoff_utc"],
@@ -402,6 +507,7 @@ def boxscores_backfill_resumable(con, start_day: str, end_day: str,
     where the previous run stopped. Dates with no FINAL games in `games` are
     walked through for free (no network).
     """
+    drop_incomplete_gamelogs(con)
     row = con.execute("SELECT value FROM meta WHERE key='boxscore_backfill_next_day'").fetchone()
     cursor = row["value"] if row else start_day
     if cursor > end_day:
@@ -975,7 +1081,7 @@ def main():
                                         "kalshi-snapshot", "kalshi-candles", "espn-backfill",
                                         "espn-forward",
                                         "boxscores-backfill", "kalshi-settled-history",
-                                        "bref-month"])
+                                        "bref-month", "repair"])
     ap.add_argument("--days", type=int, default=113,
                     help="espn-backfill: day budget per run (default 113 = ~1 season)")
     ap.add_argument("--max-games", type=int, default=40,
@@ -1043,6 +1149,9 @@ def main():
             # the DB never left 0 games (the full backfill was gated behind a
             # manual workflow_dispatch input the cron never sets), so every
             # backtest logged "no games in window". 2026-09-21.
+            # idempotent self-heal for rows written before the canonical
+            # team-abbreviation / NBA-only filters existed
+            run_task("repair", repair_team_vocab, con)
             run_task("espn-backfill", espn_backfill_resumable, con, 113)
             # Upcoming schedule + tipoffs (the openers the live Kalshi markets
             # refer to). ESPN carries no odds for PAST dates (probe7), so this
@@ -1066,6 +1175,10 @@ def main():
             # BRef: backfill + verify the current month (skipped, not failed,
             # in the offseason — July/August/September have no monthly page).
             run_task("bref-month", bref_current_month, con, now)
+        elif args.command == "repair":
+            print(json.dumps({"team_vocab": repair_team_vocab(con),
+                              "incomplete_gamelogs_dropped": drop_incomplete_gamelogs(con)},
+                             indent=2))
         elif args.command == "espn-forward":
             print(json.dumps(espn_forward_window(con, args.days), indent=2))
         elif args.command == "espn-backfill":

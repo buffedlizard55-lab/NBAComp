@@ -257,6 +257,40 @@ ENTRIES = [
                        "captured line settles, that becomes the project's first verified closing-line dataset. Continue "
                        "researching any other free historical price source before concluding the backtest gap is permanent."),
     },
+    {
+        "question": "Why did the same game get stored twice, and why could no Kalshi market be joined to a game?",
+        "sources_searched": ("data/nbacomp.db committed by Actions run 35554765928 (commit 6b86779), queried with sqlite3: "
+                            "the set of distinct home/away abbreviations per source, the duplicate-game anomaly rows, and "
+                            "the games around 2026-10-20"),
+        "data_discovered": ("ESPN's site API and Basketball-Reference disagree on six abbreviations. Distinct values seen: "
+                            "ESPN {GS, NO, NY, SA, UTAH, WSH, Pnx} vs BRef {GSW, NOP, NYK, SAS, UTA, WAS}. Consequences "
+                            "measured in the committed DB: 17 duplicate-game anomalies (e.g. 2026-05-11 CLE@DET stored as "
+                            "both bref:2026-05-11-CLE-DET and espn:401871336), 582 games carrying ESPN-only spellings, and "
+                            "ZERO Kalshi markets joinable to games — Kalshi event tickers (KXNBAGAME-26OCT20BOSDET, "
+                            "…OKCSAS, …PHINYK) use the NBA.com/BRef set, while the matching game rows said DET/BOS, SA/OKC "
+                            "and NY/PHI. ESPN's NBA scoreboard also lists preseason exhibitions against non-NBA clubs: rows "
+                            "for GUANGZHOU, HAPOEL, LON, MEL, STARS, STRIPES and WORLD had been stored as NBA games."),
+        "hypothesis": "One canonical team vocabulary is a precondition for cross-source joins, not a cosmetic detail.",
+        "test_performed": ("Added engine.canon_team()/is_nba_team(), applied them in all three ESPN collectors, and ran the "
+                           "idempotent repair_team_vocab() against a COPY of the committed 3,393-row database before "
+                           "shipping it: renamed 637 game rows and 366 gamelog rows, merged 497 duplicate games, deleted 10 "
+                           "non-NBA rows -> 2,886 games, 0 duplicates, exactly the 30 NBA abbreviations, 0 non-NBA rows in "
+                           "team_gamelogs."),
+        "result": ("Fixed and pinned by 6 new tests. The three 2026-10-20 openers now read DET/BOS, NYK/PHI, SAS/OKC — the "
+                   "same teams the live Kalshi markets KXNBAGAME-26OCT20BOSDET / PHINYK / OKCSAS refer to, so the forward "
+                   "engine can finally join a market to a game. Also fixed on the way: repair's first version deleted 0 of "
+                   "11 non-NBA rows because a `canon == value` short-circuit ran before the NBA check, and it skipped "
+                   "values because it deleted rows while iterating that table's live cursor."),
+        "verification": ("Repair executed against a copy of data/nbacomp.db from commit 6b86779; before/after counts "
+                         "printed by the repair itself. tests/test_pipeline_fixes.py pins canon mapping, collector "
+                         "behaviour, repair semantics and the new audit checks (102 tests green)."),
+        "decision": ("Canonical (NBA.com/BRef/Kalshi) abbreviations are the only vocabulary stored in games, team_gamelogs "
+                     "and player_gamelogs; non-NBA opponents are skipped and logged as info; audit now raises "
+                     "non-nba-team-in-games and non-canonical-team-abbreviation so a new source cannot reintroduce either "
+                     "silently."),
+        "next_steps": ("Next scheduled run should show duplicate-game anomalies stop accruing and the first forward bets "
+                       "appear for the 2026-10-20 openers once a strategy's signal fires against a live Kalshi ask."),
+    },
 ]
 
 
