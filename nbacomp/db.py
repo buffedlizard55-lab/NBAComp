@@ -516,6 +516,13 @@ def _migrate(con: sqlite3.Connection) -> None:
         # every rolling feature. Existing rows keep NULL = unrecorded (never
         # guessed retroactively).
         con.execute("ALTER TABLE games ADD COLUMN season_type TEXT")
+    hcols = {r[1] for r in con.execute("PRAGMA table_info(hist_odds)")}
+    for col, ddl in (("spread_printed_row", "TEXT"),
+                     ("spread_sign_from_ml", "INTEGER")):
+        if col not in hcols:
+            # 2026-09-21: recorded when the archive's spread sign could not be
+            # trusted and the sign was taken from the moneyline instead.
+            con.execute(f"ALTER TABLE hist_odds ADD COLUMN {col} {ddl}")
     scols = {r[1] for r in con.execute("PRAGMA table_info(strategies)")}
     if "version_history" not in scols:
         # 2026-09-21: version history is part of the audit trail — a strategy
