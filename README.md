@@ -65,6 +65,13 @@ Three facts this establishes rather than assumes:
    result-based modelling, not enough to price a bet.
 3. **The 2026-27 season has not tipped off**, so the only live NBA markets are the three
    opening-night games and season-long futures.
+4. **No free historical NBA price series exists.** probe7 (`data/diagnostics.txt`, run
+   `35554330261`) found past ESPN scoreboards return games with **no odds at all** (20260115:
+   9 events / 0 odds; 20260613: 1/0; 20250115: 11/0; 20241022: 2/0), BRef publishes no odds,
+   and ESPN's summary endpoint rejects BRef boxscore IDs (HTTP 400). With settled Kalshi
+   markets exposing neither candles nor tape, **price-taking backtests are impossible** and
+   every strategy has to be forward-tested. BRef's schedule + finals + tipoffs support
+   modelling and settlement, not pricing.
 
 Before that run, `games`, `kalshi_markets`, `kalshi_candles`, `bets` and `anomalies` were
 all **0** while every workflow reported success. Three defects caused it, all fixed and all
@@ -152,7 +159,8 @@ Collection tasks (`python -m nbacomp.collect <task>`):
 | task | what it does | budget |
 |------|--------------|--------|
 | `daily` | everything below, in order, each task isolated so one crash cannot discard the rest | 1 run |
-| `espn-backfill` | walks the ESPN scoreboard **backwards**, cursor in `meta`, floor `20231001` | 113 days/run |
+| `espn-backfill` | walks the ESPN scoreboard **backwards** (schedule + results — ESPN keeps no odds for past dates), cursor in `meta`, floor `20231001` | 113 days/run |
+| `espn-forward` | upcoming schedule + tipoffs and the first pre-game lines | 42 days/run |
 | `boxscores-backfill` | box scores for FINAL games not yet logged, cursor in `meta` | 40 games/run |
 | `kalshi-discovery` | probes candidate NBA series tickers, records which exist | 1 page each |
 | `kalshi-snapshot` | OPEN markets + orderbooks (forward prices) | live series |

@@ -434,3 +434,47 @@ def test_espn_backfill_is_idempotent_for_its_own_rows(con, monkeypatch):
     assert con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"] == 1
     assert con.execute("SELECT COUNT(*) c FROM audit_log WHERE action='game-merge'"
                        ).fetchone()["c"] == 0
+
+
+def test_espn_forward_window_adds_upcoming_games_without_blanketing_existing(con, monkeypatch):
+    """probe7 proved past ESPN scoreboards carry NO odds, so upcoming dates are
+    the only source of tipoffs and pre-game lines. The daily job used to look
+    8 days ahead, so the 2026-10-20 openers (the only games with live Kalshi
+    markets) had no row for the forward engine to join to."""
+    # the fixture dates its event 00:30Z on the requested day; espn._et_date
+    # subtracts 5h, so the ET date is the previous UTC day. Day 1 of the
+    # forward window is tomorrow, i.e. ET date == today (UTC).
+    et_day = collect.datetime.now(collect.timezone.utc).strftime("%Y-%m-%d")
+    db.insert(con, "games", {
+        "game_id": "bref:keepme", "source": "basketball-reference",
+        "season": "2024-25", "game_date_et": et_day, "tipoff_utc": "2025-01-14T00:30:00Z",
+        "home_team": "BOS", "away_team": "LAL", "home_score": 112, "away_score": 105,
+        "status": "final", "captured_utc": "x", "verified": 1})
+    days = []
+    monkeypatch.setattr(collect.espn, "scoreboard",
+                        lambda day: (days.append(day), espn_scoreboard_ok(day, gid="401800001"))[1])
+    st = collect.espn_forward_window(con, days_ahead=2)
+    assert st["days"] == 2
+    # day 1 matches the existing (date, away, home) -> skipped; day 2 is new
+    assert st["skipped"] == 1 and st["inserted"] == 1
+    rows = {r["game_id"]: r for r in con.execute("SELECT * FROM games")}
+    assert rows["bref:keepme"]["home_score"] == 112      # untouched
+    assert rows["bref:keepme"]["status"] == "final"
+    assert len([r for r in rows.values() if r["source"] == "espn"]) == 1
+
+
+def test_espn_forward_window_never_overwrites_a_final_score(con, monkeypatch):
+    # day 1 of the forward window is tomorrow 00:30Z -> ET date == today (UTC)
+    et_day = collect.datetime.now(collect.timezone.utc).strftime("%Y-%m-%d")
+    db.insert(con, "games", {
+        "game_id": "bref:x", "source": "basketball-reference", "season": "2025-26",
+        "game_date_et": et_day, "tipoff_utc": "2025-01-14T00:30:00Z",
+        "home_team": "BOS", "away_team": "LAL", "home_score": 130, "away_score": 90,
+        "status": "final", "captured_utc": "x", "verified": 1})
+    monkeypatch.setattr(collect.espn, "scoreboard",
+                        lambda day: espn_scoreboard_ok(day, gid="401800002"))
+    st = collect.espn_forward_window(con, days_ahead=1)
+    assert st["inserted"] == 0 and st["skipped"] == 1
+    row = con.execute("SELECT * FROM games WHERE game_id='bref:x'").fetchone()
+    assert row["home_score"] == 130 and row["status"] == "final"
+    assert con.execute("SELECT COUNT(*) c FROM games").fetchone()["c"] == 1

@@ -182,6 +182,81 @@ ENTRIES = [
                        "kalshi_settled_availability:KXNBAGAME (candles / tape / unavailable). Until games and prices exist, "
                        "backtest and forward P&L stay at 0 and the site says so."),
     },
+    {
+        "question": "Did the 2026-09-21 fixes actually work on a real runner, and what data now exists?",
+        "sources_searched": ("GitHub Actions run 35553630400 (collect-and-build, branch arena/01a0c1af-nbacomp, commit c29a400) "
+                            "and the data it committed as f2133d9 '[auto] collect + pipeline + site build 2026-09-21T02:18:37Z': "
+                            "data/db_report.txt and data/nbacomp.db, read with sqlite3 in this session"),
+        "data_discovered": ("Row counts went from all-zero to: games=2643 (span 2024-10-22..2026-06-13, all status='final', "
+                            "all with tipoff_utc, source basketball-reference), kalshi_markets=59 (6 KXNBAGAME 'active' + "
+                            "53 KXNBAMVP), kalshi_candles=406 (hourly, 6 tickers, 2026-09-18..2026-09-21), "
+                            "kalshi_orderbooks=6 (real quotes, e.g. KXNBAGAME-26OCT20OKCSAS-SAS bid 53 / ask 54), "
+                            "collection_log=810, anomalies=6, strategies=19. Still zero: odds_snapshots, injuries, "
+                            "team_gamelogs, player_gamelogs, bets, verifications. "
+                            "'collector crashes recorded (since 2026-09-21T02:16:31Z): 0'. "
+                            "kalshi-settled-history: games_probed=60, tickers_probed=480, tickers_with_candles=0, candles=0, "
+                            "trades=0, availability=unavailable; the four tape probes "
+                            "(KXNBAGAME-26APR25DENMIN-{DEN,MIN,YES,NO}) each returned http=200 with trades=0. "
+                            "bref-backfill now logs 'skipped — 2026-september: offseason, no monthly page exists'. "
+                            "backtest logged 'ok' with bets=0 instead of 'empty'. "
+                            "meta cursors: espn_backfill_next_day=20260901, boxscore_backfill_next_day=20241028. "
+                            "New failure surfaced honestly: 41 'boxscore espn fail' rows, because the box-score backfill "
+                            "tried bref:-prefixed game rows whose game_id is not an ESPN id."),
+        "hypothesis": "The three defects were the whole reason the pipeline was empty.",
+        "test_performed": ("Pushed the fixes to arena/01a0c1af-nbacomp; the collect-and-build workflow ran on a real runner "
+                           "with live network; its committed data/db_report.txt and data/nbacomp.db were then queried here."),
+        "result": ("CONFIRMED. Every previously-empty table that has a live source is now populated, the snapshot crash is "
+                   "gone, and the run printed its own row counts. Two hard facts are now established rather than assumed: "
+                   "(1) settled Kalshi NBA markets expose NEITHER candlesticks NOR a trade tape through the public API "
+                   "(480 constructed tickers probed, 0 rows; 4 tape queries HTTP 200 with 0 trades), so no historical "
+                   "Kalshi price series exists and price history can only accumulate forward from 2026-09-18; "
+                   "(2) Basketball-Reference alone supplies a complete two-season schedule WITH final scores AND tipoff "
+                   "times (2643/2643 rows have tipoff_utc), so game-level modelling has a schedule and a result but still "
+                   "no price. Backtests therefore still produce 0 bets, and no performance is claimed."),
+        "verification": "data/db_report.txt and data/nbacomp.db at commit f2133d9 (run 35553630400, 2026-09-21T02:18:37Z).",
+        "decision": ("Raise the ESPN backfill budget from 20 to 113 days per run (one season per run, floor 20231001) and "
+                     "stop the box-score backfill from spending its budget on rows whose game_id is not an ESPN id. Whether "
+                     "BRef boxscore IDs are ESPN summary IDs is probed before it is relied on."),
+        "next_steps": ("Read probe7 output: (A) does a past ESPN scoreboard still carry bookmaker odds? (B) which data-stat "
+                       "carries BRef start times? (C) does ESPN summary accept a BRef boxscore ID?"),
+    },
+    {
+        "question": "probe7 (Actions run 35554330261, 2026-09-21T02:29:20Z): do historical prices, BRef start times and BRef boxscore IDs actually exist?",
+        "sources_searched": ("site.web.api.espn.com scoreboard for four historical dates (20260115, 20260613, 20250115, 20241022) "
+                            "and summary for a BRef-derived id; basketball-reference.com/leagues/NBA_2025_games-october.html "
+                            "(253,706 bytes). Output committed to data/diagnostics.txt by the runner."),
+        "data_discovered": ("(A) NO historical odds. Every past scoreboard returned 200 with games in state=post and "
+                            "events_with_odds=0: 20260115 -> 9 events / 0 odds, 20260613 -> 1/0, 20250115 -> 11/0, "
+                            "20241022 -> 2/0. ESPN drops the odds block once a game is final, so odds_snapshots can only "
+                            "ever be populated FORWARD from the moment a line is first captured. "
+                            "(B) BRef start times are real and the field is `game_start_time` ('Start (ET)', values like "
+                            "'7:30p', '10:00p'); the monthly page's full data-stat list is arena_name, attendance, "
+                            "box_score_text, date_game, game_duration, game_remarks, game_start_time, home_pts, "
+                            "home_team_name, overtimes, visitor_pts, visitor_team_name — no per-team shooting stats, so BRef "
+                            "monthly pages cannot supply pace/efficiency features. "
+                            "(C) NO. ESPN summary for 202410220BOS (the id in BRef's /boxscores/ link) returned HTTP 400, so "
+                            "BRef boxscore links cannot be used to fetch box scores."),
+        "hypothesis": "At least one free historical price channel exists.",
+        "test_performed": ("probe7 run on a real Actions runner; every HTTP status and row count committed to "
+                           "data/diagnostics.txt (probe7 block)."),
+        "result": ("Hypothesis REJECTED for every free channel tested. Combining probe6/probe7 with the settled-market "
+                   "probe: Kalshi exposes no candles or tape for settled NBA markets, ESPN keeps no odds for past games, "
+                   "BRef publishes no odds and no box-score link ESPN accepts. **There is no free historical NBA price "
+                   "series available to this project**, so backtests of price-taking strategies remain impossible and "
+                   "everything must be forward-tested. What BRef does give (2,643 games with finals AND tipoff times) "
+                   "supports schedule/result modelling and settlement, not pricing. Box scores can only come from ESPN "
+                   "event ids, i.e. from the days the ESPN walk covers (23 games -> 46 team rows / 664 player rows, "
+                   "cursor 20260511)."),
+        "verification": "data/diagnostics.txt probe7 block at commit 08713d4 (run 35554330261).",
+        "decision": ("Stop treating the ESPN backfill as an odds source and document it as schedule/results only. Add "
+                     "espn_forward_window() (42 days ahead) so upcoming games — including the 2026-10-20 openers that "
+                     "already have live Kalshi markets — exist as rows the forward engine can join, and so pre-game lines "
+                     "start being captured before they disappear. Keep every totals/spread bet that has no observed line "
+                     "labelled PRICED-ASSUMPTION, and keep claiming zero backtest results."),
+        "next_steps": ("Capture opening lines for the 2026-27 season from the first day they appear; when a game with a "
+                       "captured line settles, that becomes the project's first verified closing-line dataset. Continue "
+                       "researching any other free historical price source before concluding the backtest gap is permanent."),
+    },
 ]
 
 

@@ -199,6 +199,20 @@ paid archives and the policy decision to exclude them.
 
 ## Source limitations
 
+- **No free historical price series of any kind — established by probe, not
+  assumed (2026-09-21).** Three independent channels were tested on a real
+  runner (`data/diagnostics.txt`, probe7 / probe6):
+  * Kalshi settled NBA markets expose **no candlesticks and no trade tape**
+    (480 constructed tickers → 0 candles; 4 tape queries HTTP 200 → 0 trades);
+  * ESPN scoreboards for past dates return games with **no odds block at all**
+    (20260115: 9 events / 0 with odds; 20260613: 1/0; 20250115: 11/0;
+    20241022: 2/0);
+  * Basketball-Reference publishes no odds, and ESPN's `summary` endpoint
+    rejects BRef boxscore ids (`202410220BOS` → HTTP 400).
+
+  Consequence, stated plainly: **price-taking backtests cannot be run
+  honestly for any past NBA game.** Every strategy is therefore forward-tested,
+  and any bet whose line was not observed is labelled `PRICED-ASSUMPTION`.
 - **Historical sportsbook closing lines (totals/spread/props)**: no free
   archive exists; paid archives are excluded by policy. Consequence:
   pre-2025-26 historical totals/spread backtests are not attempted; -110
@@ -379,6 +393,16 @@ See **Source limitations** above. Additional structural limits:
 - Referee strategies are not implemented (per spec: "only if the
   assignment and historical statistics can be reliably verified").
 
+## Post-fix data-collection additions (2026-09-21)
+
+| addition | why | verified effect |
+|----------|-----|-----------------|
+| `espn_forward_window()` (42 days ahead) | the daily job looked only 8 days ahead, so the 2026-10-20 openers — the only games with live Kalshi markets — had no row for the forward engine to join | pending next run |
+| `_merge_espn_game_row()` | the ESPN walk duplicated games the BRef bootstrap already held (5 `duplicate-game` warnings) and BRef-only rows can never be joined to box scores or odds | pending next run |
+| `parse_team_boxscore` fills `pts` | run `35553997534` stored 46 `team_gamelogs` rows with `pts=NULL`, which would have starved every pace/efficiency feature | pending next run |
+| `espn-backfill` budget 20 → 113 days/run | the walk needs to reach 2023-10 to cover two full seasons | cursor moved `20260901` → `20260511` in run `35553997534` |
+| box-score collectors take `espn:`-namespaced ids only | 41 requests were spent on `bref:` rows whose id is not an ESPN event id | 46 team / 664 player rows landed once the ids matched |
+
 ## Recommended next research areas
 
 1. **Closing-line-value (CLV) signal**: for every forward bet record the
@@ -407,12 +431,12 @@ Run in this pass, in a fresh venv (`python3 -m venv .venv && .venv/bin/pip
 install pytest`), on `arena/01a0c1af-nbacomp`:
 
 ```
-.venv/bin/python -m pytest tests   ->  93 passed in 1.57s
+.venv/bin/python -m pytest tests   ->  97 passed
 
 tests/test_collect_and_backtest.py   9 tests
 tests/test_core.py                  45 tests
 tests/test_live_shapes.py           18 tests
-tests/test_pipeline_fixes.py        21 tests   (new this pass)
+tests/test_pipeline_fixes.py        25 tests   (new this pass)
 ```
 
 The new file pins every defect above: snapshot stores markets that omit

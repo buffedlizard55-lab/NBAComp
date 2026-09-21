@@ -120,6 +120,62 @@ def backfill_days(con, start: str, end: str) -> int:
     return total
 
 
+def espn_forward_window(con, days_ahead: int = 42) -> dict:
+    """Collect UPCOMING scheduled games (tipoffs) from ESPN's scoreboard.
+
+    probe7 (2026-09-21T02:29:20Z, data/diagnostics.txt) established that a past
+    ESPN scoreboard returns games with `state=post` and **no odds at all**
+    (20260115: 9 events, 0 with odds; 20260613: 1 event, 0 with odds; 20250115:
+    11/0; 20241022: 2/0). Historical prices therefore cannot come from ESPN —
+    but *future* dates do carry real tipoffs and, closer to tip, real lines.
+
+    The daily job used to look only 8 days ahead, so the 2026-10-20 openers —
+    the only games with live Kalshi markets — had no game row at all and the
+    forward engine had nothing to join them to. This walks 42 days ahead.
+
+    Existing rows are never overwritten with an empty future row: Basketball-
+    Reference rows carry final scores and verified tipoffs, and a scheduled
+    ESPN row for the same matchup must not blank them.
+    """
+    stats = {"days": 0, "inserted": 0, "skipped": 0, "odds": 0}
+    today = datetime.now(timezone.utc)
+    for i in range(1, days_ahead + 1):
+        day = (today + timedelta(days=i)).strftime("%Y%m%d")
+        r = espn.scoreboard(day)
+        save_source_status(con, "espn:scoreboard", r, detail=f"date={day} forward")
+        if not r.ok:
+            db.log_collection(con, "espn-forward", "espn", "fail", f"{day}: {r.error}")
+            continue
+        for g in espn.parse_scoreboard(r.json):
+            odds = g.pop("_odds", None)
+            have = con.execute("SELECT game_id FROM games WHERE game_date_et=? "
+                               "AND away_team=? AND home_team=?",
+                               (g["game_date_et"], g["away_team"], g["home_team"])).fetchone()
+            if have:
+                stats["skipped"] += 1
+            else:
+                db.insert(con, "games", {
+                    "game_id": g["game_id"], "source": g["source"], "season": g["season"],
+                    "game_date_et": g["game_date_et"] or "", "tipoff_utc": g["tipoff_utc"],
+                    "home_team": g["home_team"], "away_team": g["away_team"],
+                    "home_score": g["home_score"], "away_score": g["away_score"],
+                    "status": g["status"], "neutral_site": g["neutral_site"],
+                    "source_updated_utc": None, "captured_utc": util.utcnow_iso(),
+                    "verified": 0,
+                }, replace=True)
+                stats["inserted"] += 1
+            if odds:
+                _store_espn_odds(con, odds)
+                stats["odds"] += 1
+        stats["days"] += 1
+        time.sleep(0.35)
+    db.log_collection(con, "espn-forward", "espn", "ok",
+                      f"days={stats['days']} inserted={stats['inserted']} "
+                      f"skipped_existing={stats['skipped']} odds_rows={stats['odds']}",
+                      rows=stats["inserted"])
+    return stats
+
+
 # Oldest ESPN scoreboard date this project will walk back to. 2023-10 covers
 # the 2023-24 and 2024-25 seasons plus the 2024 offseason; going deeper buys
 # nothing for the current backtest windows and costs a request per day.
@@ -917,6 +973,7 @@ def main():
     ap.add_argument("command", choices=["backfill-days", "backfill-bref-months", "verify-bref-months",
                                         "boxscores", "daily", "kalshi-discovery", "kalshi-backfill",
                                         "kalshi-snapshot", "kalshi-candles", "espn-backfill",
+                                        "espn-forward",
                                         "boxscores-backfill", "kalshi-settled-history",
                                         "bref-month"])
     ap.add_argument("--days", type=int, default=113,
@@ -987,6 +1044,10 @@ def main():
             # manual workflow_dispatch input the cron never sets), so every
             # backtest logged "no games in window". 2026-09-21.
             run_task("espn-backfill", espn_backfill_resumable, con, 113)
+            # Upcoming schedule + tipoffs (the openers the live Kalshi markets
+            # refer to). ESPN carries no odds for PAST dates (probe7), so this
+            # is also the only channel that will ever hold pre-game lines.
+            run_task("espn-forward", espn_forward_window, con, 42)
             run_task("boxscores-backfill", boxscores_backfill_resumable, con,
                      "20241001", now.strftime("%Y%m%d"), 40)
             run_task("injuries", collect_injuries, con)
@@ -1005,6 +1066,8 @@ def main():
             # BRef: backfill + verify the current month (skipped, not failed,
             # in the offseason — July/August/September have no monthly page).
             run_task("bref-month", bref_current_month, con, now)
+        elif args.command == "espn-forward":
+            print(json.dumps(espn_forward_window(con, args.days), indent=2))
         elif args.command == "espn-backfill":
             print(json.dumps(espn_backfill_resumable(con, days_per_run=args.days), indent=2))
         elif args.command == "boxscores-backfill":
