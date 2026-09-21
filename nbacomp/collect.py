@@ -368,7 +368,7 @@ def kalshi_backfill(con, max_pages: int = 5, recent_days: int | None = None) -> 
                 if dates and min(dates) < cutoff:
                     break
             time.sleep(0.25)
-        n_events = skipped = 0
+        n_events = skipped = empty_streak = 0
         for e in events:
             ev_ticker = e.get("event_ticker") or e.get("ticker")
             if not ev_ticker:
@@ -377,7 +377,17 @@ def kalshi_backfill(con, max_pages: int = 5, recent_days: int | None = None) -> 
             ev_date = engine.parse_event_ticker(ev_ticker)[0]
             if cutoff and ev_date and ev_date < cutoff:
                 continue
+            if empty_streak >= 3:
+                # Settled markets are API-unexposed (verified 2026-09-21):
+                # after 3 consecutive empty events, stop burning a request
+                # per event (400+/series) and just finish the walk.
+                skipped += 1
+                continue
             ms = kalshi.get_markets_by_event(ev_ticker)
+            if not ms:
+                empty_streak += 1
+            else:
+                empty_streak = 0
             for m in ms:
                 try:
                     row = kalshi.parse_market(m, CAP2)
@@ -390,7 +400,7 @@ def kalshi_backfill(con, max_pages: int = 5, recent_days: int | None = None) -> 
             total += len(ms)
             time.sleep(0.2)
         db.log_collection(con, "kalshi-backfill", f"kalshi:{s}", "ok",
-                          f"events={n_events} skipped_no_ticker={skipped} markets_total={total}",
+                          f"events={n_events} skipped={skipped} markets_total={total}",
                           rows=n_events)
     if total == 0:
         db.log_collection(con, "kalshi-backfill", "kalshi", "empty",
