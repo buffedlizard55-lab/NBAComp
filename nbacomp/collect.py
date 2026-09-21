@@ -127,7 +127,7 @@ ESPN_BACKFILL_FLOOR = "20231001"
 BACKFILL_CURSOR_KEY = "espn_backfill_next_day"
 
 
-def espn_backfill_resumable(con, days_per_run: int = 20,
+def espn_backfill_resumable(con, days_per_run: int = 113,
                             floor: str = ESPN_BACKFILL_FLOOR) -> dict:
     """Walk ESPN's scoreboard BACKWARDS one day at a time, resuming across runs.
 
@@ -218,10 +218,19 @@ def bref_current_month(con, now: datetime | None = None) -> dict:
 
 
 def collect_boxscores(con, date_yyyymmdd: str) -> int:
-    """Fetch summaries for all FINAL games of an ET date; store player+team logs."""
+    """Fetch summaries for all FINAL games of an ET date; store player+team logs.
+
+    Only rows whose game_id is namespaced `espn:{id}` are fetched. Run
+    35553630400 (2026-09-21) logged 41 `boxscore espn fail` rows because this
+    used to take `game_id.split(':', 1)[1]` from Basketball-Reference rows
+    (`bref:2024-10-28-MIA-DET`), which yields a date fragment, not an ESPN
+    event id — one doomed request per game, and the request budget spent on
+    games that could never resolve.
+    """
     day = f"{date_yyyymmdd[:4]}-{date_yyyymmdd[4:6]}-{date_yyyymmdd[6:8]}"
     games = con.execute(
-        "SELECT * FROM games WHERE game_date_et=? AND status='final'", (day,)).fetchall()
+        "SELECT * FROM games WHERE game_date_et=? AND status='final' "
+        "AND game_id LIKE 'espn:%'", (day,)).fetchall()
     n = 0
     for g in games:
         gid = g["game_id"].split(":", 1)[1]
@@ -312,8 +321,8 @@ def boxscores_backfill_resumable(con, start_day: str, end_day: str,
             d += timedelta(days=1)
             continue
         pending = con.execute(
-            "SELECT count(*) AS c FROM games WHERE game_date_et=? AND status='final'",
-            (iso_day,)).fetchone()
+            "SELECT count(*) AS c FROM games WHERE game_date_et=? AND status='final' "
+            "AND game_id LIKE 'espn:%'", (iso_day,)).fetchone()
         if pending and pending["c"]:
             if spent >= max_games:
                 break
@@ -862,8 +871,8 @@ def main():
                                         "kalshi-snapshot", "kalshi-candles", "espn-backfill",
                                         "boxscores-backfill", "kalshi-settled-history",
                                         "bref-month"])
-    ap.add_argument("--days", type=int, default=20,
-                    help="espn-backfill: day budget per run (default 20)")
+    ap.add_argument("--days", type=int, default=113,
+                    help="espn-backfill: day budget per run (default 113 = ~1 season)")
     ap.add_argument("--max-games", type=int, default=40,
                     help="boxscores-backfill: request budget per run (default 40)")
     ap.add_argument("--start", help="YYYYMMDD or ISO")
@@ -929,7 +938,7 @@ def main():
             # the DB never left 0 games (the full backfill was gated behind a
             # manual workflow_dispatch input the cron never sets), so every
             # backtest logged "no games in window". 2026-09-21.
-            run_task("espn-backfill", espn_backfill_resumable, con, 20)
+            run_task("espn-backfill", espn_backfill_resumable, con, 113)
             run_task("boxscores-backfill", boxscores_backfill_resumable, con,
                      "20241001", now.strftime("%Y%m%d"), 40)
             run_task("injuries", collect_injuries, con)

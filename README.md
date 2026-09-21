@@ -35,25 +35,48 @@ RESEARCH → DISCOVER → VERIFY → MODEL → BACKTEST → FORWARD TEST → PAP
    methodology. The dashboard also publishes the pipeline's own open anomalies: an empty
    database is presented as a failure, never as a clean run.
 
-## Current state (verified 2026-09-21)
+## Current state (verified 2026-09-21, after the fix run)
 
-Read this before reading any result on the site — the honest status is that the
-competition has **no results yet**, and the reason is recorded rather than hidden:
+Read this before reading any result on the site. The competition has **no results yet** —
+no strategy has a settled bet, so no P&L, ROI or edge is claimed anywhere.
 
-- The 2026-27 NBA season has not tipped off (preseason starts late October 2026), so no
-  game markets are open and no forward bets can be placed yet.
-- At commit `53465b8` the committed database held `games=0`, `kalshi_markets=0`,
-  `kalshi_candles=0`, `bets=0`. Three defects caused that and were fixed on 2026-09-21
-  (research log entry 9, `tests/test_pipeline_fixes.py`):
-  1. `kalshi_snapshot` crashed on live market rows that omit `series_ticker`, so **no Kalshi
-     price was ever stored**;
-  2. the two-season history backfill was gated behind a manual `workflow_dispatch` input the
-     6-hourly cron never sets, so `games` never left 0 and every backtest logged
-     *"no games in window"*;
-  3. the daily Basketball-Reference task requested the current month, which does not exist in
-     the offseason, logging a 404 "failure" every run.
-- Consequence to state plainly: **no strategy has a backtest or forward result yet, and none is
-  claimed.** Everything on the leaderboard is a $1,000 starting bankroll with 0 bets.
+What the database actually holds after Actions run `35553630400` (commit `f2133d9`,
+2026-09-21T02:18:37Z), read out of `data/db_report.txt` and `data/nbacomp.db`:
+
+| table | rows | note |
+|-------|------|------|
+| `games` | 2,643 | 2024-10-22 → 2026-06-13, all `final`, all with `tipoff_utc`, source Basketball-Reference |
+| `kalshi_markets` | 59 | 6 `KXNBAGAME` (the 2026-10-20 openers) + 53 `KXNBAMVP`, all live/active |
+| `kalshi_candles` | 406 | hourly OHLCV for those 6 openers, 2026-09-18 → 2026-09-21 |
+| `kalshi_orderbooks` | 6 | real quotes, e.g. `KXNBAGAME-26OCT20OKCSAS-SAS` bid 53 / ask 54 |
+| `odds_snapshots` | 0 | populated by the ESPN backfill as it walks back (cursor `20260901`) |
+| `injuries` | 0 | ESPN injury board is empty in the offseason |
+| `team_gamelogs` / `player_gamelogs` | 0 | box-score walk in progress (cursor `20241028`) |
+| `bets` | 0 | no game market has tipped off yet |
+| `verifications` | 0 | cross-verification runs once ESPN and BRef rows overlap |
+
+Three facts this establishes rather than assumes:
+
+1. **Settled Kalshi NBA markets expose no price history at all.** 480 constructed tickers
+   were probed for candlesticks and 4 for the trade tape: 0 candles, 0 trades (HTTP 200).
+   Price history can therefore only accumulate forward from 2026-09-18.
+2. **Basketball-Reference alone yields a complete two-season schedule with finals and
+   tipoff times** (2,643/2,643 rows have `tipoff_utc`) — enough for schedule- and
+   result-based modelling, not enough to price a bet.
+3. **The 2026-27 season has not tipped off**, so the only live NBA markets are the three
+   opening-night games and season-long futures.
+
+Before that run, `games`, `kalshi_markets`, `kalshi_candles`, `bets` and `anomalies` were
+all **0** while every workflow reported success. Three defects caused it, all fixed and all
+pinned by `tests/test_pipeline_fixes.py` (research-log entries 9 and 10):
+
+1. `kalshi_snapshot` crashed on live market rows that omit `series_ticker`, so **no Kalshi
+   price was ever stored**;
+2. the two-season history backfill was gated behind a manual `workflow_dispatch` input the
+   6-hourly cron never sets, so `games` stayed at 0 and every backtest logged
+   *"no games in window"*;
+3. the daily Basketball-Reference task requested the current month, which does not exist in
+   the offseason, logging a 404 "failure" every run.
 
 ## The competition
 
@@ -118,7 +141,7 @@ The sandbox/dev image has no pytest and a PEP-668-managed system Python, so use 
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pytest
-.venv/bin/python -m pytest tests          # offline suite, no network needed (92 tests)
+.venv/bin/python -m pytest tests          # offline suite, no network needed (93 tests)
 .venv/bin/python -m nbacomp.collect daily  # needs open internet (runs automatically in CI)
 .venv/bin/python tools/run_pipeline.py     # strategies + engines + audit + site build
 .venv/bin/python tools/db_report.py        # row counts + collection health (CI gate)
@@ -129,7 +152,7 @@ Collection tasks (`python -m nbacomp.collect <task>`):
 | task | what it does | budget |
 |------|--------------|--------|
 | `daily` | everything below, in order, each task isolated so one crash cannot discard the rest | 1 run |
-| `espn-backfill` | walks the ESPN scoreboard **backwards**, cursor in `meta`, floor `20231001` | 20 days/run |
+| `espn-backfill` | walks the ESPN scoreboard **backwards**, cursor in `meta`, floor `20231001` | 113 days/run |
 | `boxscores-backfill` | box scores for FINAL games not yet logged, cursor in `meta` | 40 games/run |
 | `kalshi-discovery` | probes candidate NBA series tickers, records which exist | 1 page each |
 | `kalshi-snapshot` | OPEN markets + orderbooks (forward prices) | live series |

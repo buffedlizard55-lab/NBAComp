@@ -36,6 +36,41 @@ publishes the entire pipeline as a static GitHub Pages site.
 > exited 0. **Current honest result count: 0 backtested strategies, 0 forward-tested
 > strategies, 0 paper bets, $0 P&L.** Nothing in this report claims otherwise.
 
+> ### Verification of the fix — Actions run `35553630400`, commit `f2133d9` (2026-09-21T02:18:37Z)
+>
+> The fixes were pushed and executed on a real runner, and its committed
+> `data/db_report.txt` / `data/nbacomp.db` were queried directly:
+>
+> | table | before (`53465b8`) | after (`f2133d9`) |
+> |-------|--------------------|-------------------|
+> | `games` | 0 | **2,643** (2024-10-22 → 2026-06-13, all `final`, all with `tipoff_utc`) |
+> | `kalshi_markets` | 0 | **59** (6 `KXNBAGAME` openers + 53 `KXNBAMVP`, all active) |
+> | `kalshi_candles` | 0 | **406** (hourly, 2026-09-18 → 2026-09-21, 6 tickers) |
+> | `kalshi_orderbooks` | 0 | **6** (e.g. `KXNBAGAME-26OCT20OKCSAS-SAS` bid 53 / ask 54) |
+> | `collection_log` | 697 | 810 |
+> | `anomalies` | 0 | 6 (3 × `kalshi-multi-tickers-per-event` info, `no-bets-despite-data`, `persistent-source-failure`) |
+> | `odds_snapshots` / `injuries` / `team_gamelogs` / `bets` | 0 | still 0 (see below) |
+>
+> `collector crashes recorded (since 2026-09-21T02:16:31Z): 0`; `backtest` logged `ok` with
+> `bets=0` instead of `empty`; `bref-backfill` logged `skipped — offseason` instead of a 404
+> failure.
+>
+> Two facts are now established rather than assumed:
+>
+> - **Settled Kalshi NBA markets expose no price history.** `kalshi-settled-history` probed
+>   60 games → 480 constructed market tickers for candlesticks and 4 tickers for the trade
+>   tape: `candles=0`, `trades=0`, tape queries HTTP 200 with 0 rows, recorded as
+>   `availability=unavailable` in `meta`. Historical Kalshi prices do not exist; history can
+>   only accumulate forward.
+> - **Basketball-Reference alone supplies a full two-season schedule with finals and tipoff
+>   times** (2,643/2,643 rows have `tipoff_utc`), which is enough to model schedules and
+>   settle results but not enough to price a bet.
+>
+> Still honestly zero: no odds history yet (the ESPN backfill cursor is at `20260901` and
+> walks back ~113 days per run to `20231001`), no injuries (the ESPN board is empty in the
+> offseason), no box scores (cursor `20241028`), and **no bets of any kind** — so still
+> **0 backtested strategies, 0 forward-tested strategies, $0 P&L**.
+
 ## Strategies discovered (19, all v1.0.0)
 
 | ID | Username | Category | Win condition |
@@ -372,12 +407,12 @@ Run in this pass, in a fresh venv (`python3 -m venv .venv && .venv/bin/pip
 install pytest`), on `arena/01a0c1af-nbacomp`:
 
 ```
-.venv/bin/python -m pytest tests   ->  92 passed in 1.66s
+.venv/bin/python -m pytest tests   ->  93 passed in 1.57s
 
 tests/test_collect_and_backtest.py   9 tests
 tests/test_core.py                  45 tests
 tests/test_live_shapes.py           18 tests
-tests/test_pipeline_fixes.py        20 tests   (new this pass)
+tests/test_pipeline_fixes.py        21 tests   (new this pass)
 ```
 
 The new file pins every defect above: snapshot stores markets that omit

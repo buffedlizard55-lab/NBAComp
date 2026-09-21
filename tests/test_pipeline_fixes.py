@@ -375,3 +375,21 @@ def espn_scoreboard_ok(day):
 def espn_scoreboard_fail():
     from nbacomp import http
     return http.HttpResult(0, None, "mock://espn", error="URLError: timed out")
+
+
+def test_boxscore_backfill_skips_games_without_an_espn_id(con, monkeypatch):
+    """Run 35553630400 wasted its whole box-score budget on BRef-only rows:
+    `bref:2024-10-28-MIA-DET`.split(':')[1] is a date fragment, not an ESPN
+    event id, so every summary request 404'd (41 logged failures)."""
+    db.insert(con, "games", {
+        "game_id": "bref:2024-10-28-MIA-DET", "source": "basketball-reference",
+        "season": "2024-25", "game_date_et": "2024-10-28",
+        "tipoff_utc": "2024-10-28T23:30:00Z", "home_team": "DET", "away_team": "MIA",
+        "home_score": 100, "away_score": 90, "status": "final", "captured_utc": "x"})
+    touched = []
+    monkeypatch.setattr(collect, "collect_boxscores", lambda c, d: touched.append(d) or 0)
+    st = collect.boxscores_backfill_resumable(con, "20241028", "20241030", max_games=40)
+    assert touched == []            # no ESPN id -> no request
+    assert st["games"] == 0 and st["done"] is True
+    assert con.execute("SELECT COUNT(*) c FROM collection_log WHERE status='fail'"
+                       ).fetchone()["c"] == 0
