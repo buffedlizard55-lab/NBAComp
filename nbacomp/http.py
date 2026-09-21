@@ -48,6 +48,17 @@ class HttpResult:
     def ok(self) -> bool:
         return 200 <= self.status < 300 and self.json is not None
 
+    @property
+    def ok_body(self) -> bool:
+        """2xx with a non-empty body, regardless of content type.
+
+        For HTML/text endpoints (Basketball-Reference): .ok requires
+        parseable JSON, which HTML never is — using .ok there silently
+        fails every fetch (found 2026-09-21: BRef backfill AND verify
+        could never succeed). JSON callers must keep using .ok.
+        """
+        return 200 <= self.status < 300 and bool(self.body)
+
 
 def get(url: str, params: dict | None = None, headers: dict | None = None,
         timeout: float = 20.0, retries: int = 2, min_interval: float = 0.0,

@@ -555,26 +555,49 @@ def main():
                 d += timedelta(days=1)
             print(f"boxscore rows: {n}")
         elif args.command == "daily":
+            # Per-task isolation: one crashing source must not discard the
+            # other tasks' work (get_db commits only at clean exit, so each
+            # task commits separately; tracebacks go to stdout AND the
+            # collection_log, never swallowed).
+            def run_task(name, fn, *a, **k):
+                try:
+                    out = fn(*a, **k)
+                    con.commit()
+                    return out
+                except Exception:
+                    import traceback
+                    tb = traceback.format_exc()
+                    print(f"TASK-FAIL {name}:\n{tb}", flush=True)
+                    try:
+                        db.log_collection(con, f"daily-{name}", "nbacomp", "crash",
+                                          tb[-1500:])
+                        con.commit()
+                    except Exception:
+                        pass
+                    return None
+
             now = datetime.now(timezone.utc)
             d = now - timedelta(days=2)
             for _ in range(11):
-                collect_espn_day(con, d.strftime("%Y%m%d"))
+                run_task("espn-day", collect_espn_day, con, d.strftime("%Y%m%d"))
                 d += timedelta(days=1)
-            collect_injuries(con)
-            kalshi_snapshot(con)
+            run_task("injuries", collect_injuries, con)
+            run_task("kalshi-snapshot", kalshi_snapshot, con)
             # candles for open markets: the ONLY Kalshi history source
             # (settled markets are not API-exposed). Idempotent.
-            kalshi_candles_forward(con)
+            run_task("kalshi-candles-forward", kalshi_candles_forward, con)
             # recent settled events (settlement ground truth for forward bets)
-            kalshi_backfill(con, max_pages=2)
+            run_task("kalshi-backfill", kalshi_backfill, con, max_pages=2)
             # yesterday's boxscores (player logs + rolling features)
             y = now - timedelta(days=1)
-            collect_boxscores(con, y.strftime("%Y%m%d"))
+            run_task("boxscores", collect_boxscores, con, y.strftime("%Y%m%d"))
             # BRef: backfill + verify the current month. Oct-Dec belong to the
             # season ending NEXT year (2026-10 -> season-end 2027).
             seas_end = now.year + (1 if now.month >= 10 else 0)
-            bref.backfill_month(con, seas_end, _month_name(now.month))
-            bref.verify_month(con, seas_end, _month_name(now.month))
+            run_task("bref-backfill", bref.backfill_month, con, seas_end,
+                     _month_name(now.month))
+            run_task("bref-verify", bref.verify_month, con, seas_end,
+                     _month_name(now.month))
         elif args.command == "kalshi-discovery":
             found = kalshi_discovery(con)
             print(json.dumps({k: v for k, v in found.items() if v["exists"]}, indent=2))

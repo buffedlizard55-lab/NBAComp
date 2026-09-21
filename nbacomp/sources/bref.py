@@ -199,9 +199,9 @@ def verify_month(con, season_end_year: int, month: str) -> int:
     r = http.get(monthly_games_url(season_end_year, month), min_interval=1.2)
     db.insert(con, "source_status", {
         "source_id": "bref:monthly-games", "checked_utc": util.utcnow_iso(),
-        "ok": 1 if r.ok else 0, "http_status": r.status,
+        "ok": 1 if r.ok_body else 0, "http_status": r.status,
         "detail": f"{season_end_year}-{month}", "sample_hash": None}, replace=True)
-    if not r.ok:
+    if not r.ok_body:
         db.log_collection(con, "bref-verify", "basketball-reference", "fail",
                           f"{season_end_year}-{month}: {r.error}")
         return 0
@@ -269,9 +269,9 @@ def backfill_month(con, season_end_year: int, month: str) -> dict:
     r = http.get(monthly_games_url(season_end_year, month), min_interval=1.2)
     db.insert(con, "source_status", {
         "source_id": "bref:monthly-backfill", "checked_utc": util.utcnow_iso(),
-        "ok": 1 if r.ok else 0, "http_status": r.status,
+        "ok": 1 if r.ok_body else 0, "http_status": r.status,
         "detail": f"{season_end_year}-{month}", "sample_hash": None}, replace=True)
-    if not r.ok:
+    if not r.ok_body:
         db.log_collection(con, "bref-backfill", "basketball-reference", "fail",
                           f"{season_end_year}-{month}: {r.error}")
         return stats

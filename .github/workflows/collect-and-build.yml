@@ -121,7 +121,8 @@ jobs:
         if: steps.skip.outputs.skip != 'true'
         run: |
           python -m nbacomp.collect kalshi-discovery || true
-          python -m nbacomp.collect daily
+          python -m nbacomp.collect daily 2>&1 | tee data/daily.log
+          test ${PIPESTATUS[0]} -eq 0
 
       - name: Pipeline (strategies, backtest, paper engine, settlement, audit, site)
         if: steps.skip.outputs.skip != 'true'
@@ -135,11 +136,11 @@ jobs:
         run: python tools/probe_sources.py || true
 
       - name: Commit (data + site, or diagnostics on failure)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && (success() || failure())
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ -f data/nbacomp.db ]; then python tools/db_checkpoint.py; fi
+          if [ -f data/nbacomp.db ]; then python tools/db_checkpoint.py || true; fi
           rm -f data/nbacomp.db-wal data/nbacomp.db-shm
           git add -A data index.html leaderboard.html strategies.html upcoming.html \
             positions.html history.html sources.html research.html methodology.html \

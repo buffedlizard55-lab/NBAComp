@@ -9,8 +9,20 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nbacomp import backtest, collect, db, engine, util
+from nbacomp import backtest, collect, db, engine, http, util
 from nbacomp.sources import bref, kalshi
+
+
+def test_http_ok_vs_ok_body():
+    # .ok requires parseable JSON; HTML pages are never .ok (this silently
+    # broke ALL BRef fetching until ok_body existed). Never regress.
+    html = http.HttpResult(200, b"<html>x</html>", "mock://bref")
+    assert html.ok is False
+    assert html.ok_body is True
+    js = http.HttpResult(200, b'{"a":1}', "mock://api")
+    assert js.ok is True and js.ok_body is True
+    err = http.HttpResult(404, b"nope", "mock://x", error="HTTP 404")
+    assert err.ok is False and err.ok_body is False
 
 # --- REAL market payload: GET /markets?series_ticker=KXNBAGAME&status=open,
 # first row, observed 2026-09-20 (SAS @ OKC opener) -------------------------
@@ -339,7 +351,8 @@ def test_bref_backfill_month_inserts_and_dedups(tmp_path, monkeypatch):
     from nbacomp import http
 
     class FakeResp:
-        ok = True
+        ok = False  # HTML is never .ok (JSON-only property)
+        ok_body = True
         status = 200
         body = BREF_FIXTURE_HTML.encode()
         error = None
