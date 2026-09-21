@@ -246,14 +246,19 @@ The core pipeline uses only **keyless, free, public** sources:
 - **NBA.com/stats (stats.nba.com)** — registered but unreachable from
   CI runners (Akamai 403 / connection tarpitting); collectors exist for
   when network conditions allow.
-- **BallDon'tLie API v1 (keyless)** — added this pass: multi-season game
-  lists, per-game box scores and season aggregates. Roles: (1) deepen box
-  scores for seasons the per-game ESPN walk has not reached yet, (2)
-  independent final-score cross-check (conflicts are critical anomalies,
-  never silently resolved — the source is a separate pipeline, i.e.
-  semi-independent), (3) the team rows it provides have OREB=NULL and the
-  model treats such rows as pace-unavailable (never 0). Reachability from
-  CI runners is verified at runtime and recorded in `source_status`.
+- **BallDon'tLie API — evaluated and EXCLUDED** — assessed this pass for
+  multi-season game lists, per-game box scores and season aggregates
+  (deep history + an independent, semi-independent final-score cross-check
+  while the ESPN walk was measured at ~2 weeks to reach 2023-24).
+  CI run 35561731651 (2026-09-21) then verified the keyless API is
+  retired — HTTP 404 on every endpoint — and the service now requires a
+  registered API key. A signup key is not keyless, so the source was
+  excluded under the data policy **the same day it was first exercised**:
+  collectors are gated and log `skipped`, and zero rows from it ever
+  entered the database (verified 2026-09-21, local + CI databases).
+  The keyless-era design notes (OREB=NULL rows ⇒ pace unavailable, never
+  0; score conflicts would be critical anomalies, never resolved
+  silently) remain in `sources/balldontlie.py` for the record.
 - **Basketball-Reference** — independent score verification (BREF monthly
   results pages; HTML scraping).
 - **Kalshi trade-api v2** — public (no-key) market-data endpoint for NBA
@@ -471,7 +476,12 @@ Repair verified by executing it against a copy of the committed 3,393-row databa
 - The PR #2 first run showed an `action_required` status (Node.js 20
   deprecation warning). Subsequent runs all `success`. Tracking the
   Node 20 action if it persists.
-- BallDon'tLie reachability from GitHub Actions runners is unverified
+- BallDon'tLie deep-history is closed: CI run 35561731651 verified (2026-09-21)
+  that the keyless API is retired (HTTP 404 on all endpoints) and the service
+  now requires a registered API key — excluded under the keyless-only policy;
+  collectors gated to log `skipped`; zero rows from this source ever entered
+  the DB (verified the same day). The ESPN per-game box walk remains the sole
+  box-score channel (~2 weeks to reach 2023-24 at the current budget)
   (the sandbox has no egress). The collectors log failures and the ESPN
   walk remains primary; the first scheduled run will confirm.
 - Kalshi prop-series settlement cross-check assumes YES = "Over X.5" on
@@ -503,7 +513,7 @@ See **Source limitations** above. Additional structural limits:
 | `parse_team_boxscore` fills `pts` | run `35553997534` stored 46 `team_gamelogs` rows with `pts=NULL`, which would have starved every pace/efficiency feature | pending next run |
 | `espn-backfill` budget 20 → 113 days/run | the walk needs to reach 2023-10 to cover two full seasons | cursor moved `20260901` → `20260511` in run `35553997534` |
 | box-score collectors take `espn:`-namespaced ids only | 41 requests were spent on `bref:` rows whose id is not an ESPN event id | 46 team / 664 player rows landed once the ids matched |
-| `sources/balldontlie.py` + three resumable collectors (seasons, games, boxes), request budget ~150/run, per-run cursors in `meta` | the ESPN per-game box walk is measured at ~2 weeks to reach 2023-24; deep-history box scores and an independent final-score cross-check are available keyless from BallDon'tLie | pending first Actions run (sandbox has no egress; reachability from runners unverified and honestly logged either way) |
+| `sources/balldontlie.py` + three resumable collectors (seasons, games, boxes) — **built, then disabled** after CI verification | the ESPN per-game box walk is measured at ~2 weeks to reach 2023-24; deep-history boxes and an independent score cross-check would close that gap | first Actions run (35561731651) proved the keyless API retired (404 on all endpoints; key now required) → excluded by policy the same day; collectors log `skipped`; 0 rows ever collected (verified) |
 | quarter-score collection from ESPN summaries (`quarter_scores` table, cumulative observed scores only) | KXNBA1H settlement needs the captured halftime score as its fallback source | pending next run |
 | `signal_backtest.py` + pipeline wiring | no free historical prices exist, so decision rules are validated outcome-only (see Signal validation section) | 5,994 rule firings over 2,788 final games in the smoke run; results in R-013 |
 

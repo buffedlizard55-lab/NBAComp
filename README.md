@@ -57,7 +57,7 @@ placed the competition's first bets, read out of `data/nbacomp.db`:
 | `kalshi_orderbooks` | 48 | real quotes, e.g. `KXNBAGAME-26OCT20OKCSAS-SAS` bid 53 / ask 54 |
 | `odds_snapshots` | 240 | all **forward**: ESPN keeps no odds for past dates, so these are the first lines ever captured |
 | `injuries` | 0 | ESPN injury board is empty in the offseason |
-| `team_gamelogs` / `player_gamelogs` | 182 / 3,158 | box-score walk in progress (~2,697 ESPN finals still lack team box scores — the new BallDon'tLie deep-history collectors target exactly this gap) |
+| `team_gamelogs` / `player_gamelogs` | 182 / 3,158 | box-score walk in progress (~2,697 ESPN finals still lack team box scores; the incremental ESPN walk is the channel — BallDon'tLie was evaluated for deep history and excluded: its keyless API is retired, it now requires a registered key — CI-verified 2026-09-21) |
 | `quarter_scores` | 0 | KXNBA1H settlement fallback; starts filling as in-game scores are captured |
 | `bets` | 9 | all **open** (NBA-002 UNDER on 2026-27 preseason/opening-week lines, `PRICED-ASSUMPTION` at −110); none settled — the season has not tipped off |
 | `verifications` | 0 | cross-verification runs once ESPN and BRef rows overlap |
@@ -142,7 +142,8 @@ limitations and look-ahead controls; the full text is on the site's strategy pag
 ## Data policy (non-negotiables)
 
 - Core pipeline = **keyless, free, public** sources only (ESPN, NBA.com/stats,
-  BallDon'tLie, Basketball-Reference, Kalshi public market data).
+  Basketball-Reference, Kalshi public market data). BallDon'tLie was
+  evaluated and excluded (keyless API retired; registered key now required).
   Registration-required or paid sources are excluded and documented.
 - Free trials / freemium tiers are **not** treated as free.
 - Nothing is invented: no odds, no stats, no fills, no liquidity, no results. If something
@@ -180,8 +181,7 @@ Collection tasks (`python -m nbacomp.collect <task>`):
 | `espn-backfill` | walks the ESPN scoreboard **backwards** (schedule + results — ESPN keeps no odds for past dates), cursor in `meta`, floor `20231001` | 113 days/run |
 | `espn-forward` | upcoming schedule + tipoffs and the first pre-game lines | 42 days/run |
 | `boxscores-backfill` | box scores for FINAL games not yet logged, cursor in `meta` | 40 games/run |
-| `bdlt-season-games` (in `daily`) | BallDon'tLie season game lists: deep-history scores + independent final-score cross-check (`score-mismatch-balldontlie` on conflict), resumable per season | ~150 requests/run budget |
-| `bdlt-boxscores` (in `daily`) | BallDon'tLie per-game box scores for finals missing team rows (OREB=NULL rows make pace features unavailable, never 0), cursor in `meta` | ~150 requests/run budget |
+| `bdlt-*` (in `daily`) | **DISABLED** — BallDon'tLie retired its keyless API (HTTP 404 on all endpoints, CI-verified 2026-09-21) and now requires a registered API key, which the keyless-only policy excludes; collectors short-circuit and log `skipped`. Zero rows from this source ever entered the DB (verified 2026-09-21) | — |
 | `kalshi-discovery` | probes candidate NBA series tickers, records which exist | 1 page each |
 | `kalshi-snapshot` | OPEN markets + orderbooks (forward prices) | live series |
 | `kalshi-candles` | candlesticks for stored markets in a window | window |

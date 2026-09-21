@@ -1,6 +1,18 @@
-"""BallDon'tLie API v1 — free, keyless bulk season data.
+"""BallDon'tLie API — DISABLED (keyless access retired; excluded by policy).
 
-Base: https://www.balldontlie.io/api/v1 (no API key; public service).
+STATUS 2026-09-21: retired as a source for this project. CI run
+35561731651 (collect-and-build) hit HTTP 404 on every endpoint of the
+legacy keyless base (https://www.balldontlie.io/api/v1). The service now
+serves NBA data only behind a registered API key
+(https://api.balldontlie.io, key in the Authorization header; a "free
+tier" exists but requires account registration). A signup key is not
+keyless, so the project's free-keyless-only data policy excludes it.
+No row from this source ever entered the database (verified 2026-09-21:
+0 rows with source LIKE '%balldontlie%'). The client code below is kept
+for the record; all collectors in nbacomp.collect are gated on the
+BDLT_DISABLED_REASON constant and never send requests.
+
+Original design notes (keyless era):
 Endpoints used:
   GET /games?seasons[]=YYYY[&per_page=250&offset=N]
       season game lists (ids, teams+abbrevs, dates, final scores)

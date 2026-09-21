@@ -1171,10 +1171,37 @@ def _contracts(*vals) -> int | None:
 BDLT_SEASONS = [2020, 2021, 2022, 2023, 2024]  # requested years; verified from data
 BDLT_CURSOR_KEY = "bdlt_boxscore_cursor"
 
+# --- availability gate (added 2026-09-21) ----------------------------------
+# RUNNER-VERIFIED 2026-09-21 (collect-and-build CI run 35561731651): the
+# legacy keyless base https://www.balldontlie.io/api/v1 returns HTTP 404 on
+# EVERY endpoint (bdlt-season-games, bdlt-boxscores and bdlt-season-stats all
+# failed with 404 on the first page of season 2020). The service moved its
+# NBA data behind a registered API key (api.balldontlie.io, key sent in the
+# Authorization header, "free tier" after account signup). A signup key is
+# NOT keyless, so the source is excluded by this project's free-keyless-only
+# data policy. Verified also that zero rows from this source ever entered the
+# database (0 rows with source LIKE '%balldontlie%', local + CI databases,
+# 2026-09-21), so there is nothing to purge. The collectors below stay in
+# place, gated off here; each logs status 'skipped' (not 'fail') per run so
+# audit's persistent-failure channel is not polluted with an intentional
+# exclusion.
+BDLT_DISABLED_REASON = (
+    "keyless API retired (HTTP 404 on all endpoints; CI-verified 2026-09-21 "
+    "run 35561731651); service now requires a registered API key — excluded "
+    "by the project's keyless-only data policy")
+
+if BDLT_DISABLED_REASON:  # constant documentation marker; gate is in the functions
+    pass
+
 
 def bdlt_check_and_store_season_games(con, season_start_year: int) -> dict:
     """Fetch one season's game list; verify/insert games; sanity-check the
     season semantics from the returned data. Returns stats."""
+    if BDLT_DISABLED_REASON:
+        db.log_collection(con, "bdlt-season-games", "balldontlie", "skipped",
+                          BDLT_DISABLED_REASON, rows=0)
+        return {"games": 0, "verified": 0, "mismatches": 0, "inserted": 0,
+                "date_range": None, "labels": set()}
     stats = {"games": 0, "verified": 0, "mismatches": 0, "inserted": 0,
              "date_range": None, "labels": set()}
     page = 1
@@ -1296,6 +1323,12 @@ def bdlt_boxscores_resumable(con, max_games: int = 150) -> dict:
     the cursor at the exact index where it stopped.
     """
     season, offset = _bdlt_boxscore_cursor(con)
+    if BDLT_DISABLED_REASON:
+        db.log_collection(con, "bdlt-boxscores", "balldontlie", "skipped",
+                          BDLT_DISABLED_REASON, rows=0)
+        return {"season": season, "offset": offset, "fetched": 0,
+                "skipped": 0, "stopped": "disabled (keyless API retired)",
+                "done": False, "budget": max_games}
     stats = {"season": season, "offset": offset, "fetched": 0, "skipped": 0,
              "stopped": None, "done": False, "budget": max_games}
     processed = 0
@@ -1425,6 +1458,10 @@ def _store_bdlt_boxscore(con, game_id: str, box: dict) -> int:
 
 def bdlt_season_stats(con, season_start_year: int) -> dict:
     """Per-season team + player aggregates (idempotent)."""
+    if BDLT_DISABLED_REASON:
+        db.log_collection(con, "bdlt-season-stats", "balldontlie", "skipped",
+                          BDLT_DISABLED_REASON, rows=0)
+        return {"teams": 0, "players": 0}
     stats = {"teams": 0, "players": 0}
     page = 1
     while True:
