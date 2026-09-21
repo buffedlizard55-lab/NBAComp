@@ -507,27 +507,27 @@ def boxscores_backfill_resumable(con, start_day: str, end_day: str,
     where the previous run stopped. Dates with no FINAL games in `games` are
     walked through for free (no network).
     """
-    dropped = drop_incomplete_gamelogs(con)
+    drop_incomplete_gamelogs(con)
     row = con.execute("SELECT value FROM meta WHERE key='boxscore_backfill_next_day'").fetchone()
     cursor = row["value"] if row else start_day
     if cursor > end_day:
-        # The walk finished previously. Only restart it if something was just
-        # deleted for re-collection AND there are finals again to fetch —
-        # otherwise every run would re-walk two seasons for nothing.
-        if not dropped:
+        # The walk finished previously. Whether it is really COMPLETE is a
+        # question about the data, not about the cursor: run 3572932 proved a
+        # cursor past the end can coexist with zero rows (the repair had
+        # deleted the incomplete ones), and a cursor-only check then reported
+        # "done" forever. So look for the earliest espn: final whose game has
+        # no team_gamelogs row and restart there.
+        gap = con.execute(
+            "SELECT MIN(g.game_date_et) AS d FROM games g "
+            "WHERE g.status='final' AND g.game_id LIKE 'espn:%' AND NOT EXISTS ("
+            "  SELECT 1 FROM team_gamelogs t WHERE t.game_id = g.game_id)").fetchone()
+        if not gap or not gap["d"]:
             db.log_collection(con, "boxscores-backfill", "espn", "done",
-                              f"cursor={cursor} end={end_day}", rows=0)
+                              f"cursor={cursor} end={end_day} all espn finals covered", rows=0)
             return {"games": 0, "rows": 0, "cursor": cursor, "done": True}
-        first = con.execute(
-            "SELECT MIN(game_date_et) d FROM games WHERE status='final' "
-            "AND game_id LIKE 'espn:%'").fetchone()
-        if not first or not first["d"]:
-            db.log_collection(con, "boxscores-backfill", "espn", "done",
-                              f"cursor={cursor} end={end_day} nothing to re-collect", rows=0)
-            return {"games": 0, "rows": 0, "cursor": cursor, "done": True}
-        cursor = first["d"].replace("-", "")
+        cursor = gap["d"].replace("-", "")
         db.log_collection(con, "boxscores-backfill", "espn", "ok",
-                          f"restart after repair: dropped={dropped} cursor->{cursor}", rows=0)
+                          f"uncovered espn finals found, restarting at {cursor}", rows=0)
     d = datetime.strptime(cursor, "%Y%m%d")
     end = datetime.strptime(end_day, "%Y%m%d")
     spent = rows = 0

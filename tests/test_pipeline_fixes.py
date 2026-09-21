@@ -571,6 +571,22 @@ def test_audit_flags_non_nba_and_aliased_team_abbreviations(con):
     assert "non-canonical-team-abbreviation" in names
 
 
+def test_boxscore_backfill_restarts_when_a_finished_cursor_leaves_gaps(con, monkeypatch):
+    """A cursor past the end does not mean the data is complete: run 3572932
+    reported 'done' while team_gamelogs held 0 rows."""
+    db.insert(con, "games", {
+        "game_id": "espn:9", "source": "espn", "season": "2025-26", "game_date_et": "2026-05-13",
+        "tipoff_utc": "2026-05-14T00:00:00Z", "home_team": "DET", "away_team": "CLE",
+        "home_score": 100, "away_score": 90, "status": "final", "captured_utc": "x"})
+    db.insert(con, "meta", {"key": "boxscore_backfill_next_day", "value": "20260922",
+                            "updated_utc": "x"})
+    touched = []
+    monkeypatch.setattr(collect, "collect_boxscores", lambda c, d: touched.append(d) or 2)
+    st = collect.boxscores_backfill_resumable(con, "20241001", "20260921", max_games=40)
+    assert touched == ["20260513"]
+    assert st["done"] is True
+
+
 def test_boxscore_backfill_restarts_after_a_repair_deletes_rows(con, monkeypatch):
     """Run 3572932 left team_gamelogs at 0: the repair deleted the 46 rows with
     pts=NULL, but the cursor had already walked past those days and the
