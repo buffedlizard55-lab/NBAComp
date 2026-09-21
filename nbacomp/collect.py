@@ -115,6 +115,9 @@ def collect_sbr_season(con, season: str) -> dict:
     db.log_collection(con, f"sbr-{season}", "sbr",
                       "ok" if stored else "empty",
                       f"parsed={len(games)} rejected={len(rejects)}", rows=stored)
+    db.insert(con, "meta", {"key": "sbr_parser_version",
+                            "value": sbr.SBR_PARSER_VERSION,
+                            "updated_utc": util.utcnow_iso()}, replace=True)
     if rejects:
         db.log_anomaly(con, "warn", "sbr-rows-rejected",
                        {"season": season, "n_rejected": len(rejects),

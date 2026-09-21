@@ -169,11 +169,14 @@ jobs:
           # The only free source found with real historical NBA prices. Runs
           # once (while hist_odds is empty) or on demand via workflow_dispatch.
           N=$(python -c "from nbacomp import db; con=db.connect('data/nbacomp.db'); print(con.execute('SELECT COUNT(*) FROM hist_odds').fetchone()[0])" 2>/dev/null || echo 0)
-          echo "hist_odds rows before: $N"
-          if [ "$N" = "0" ] || [ "${{ inputs.sbr }}" = "true" ]; then
+          V=$(python -c "from nbacomp import db; con=db.connect('data/nbacomp.db'); r=con.execute(\"SELECT value FROM meta WHERE key='sbr_parser_version'\").fetchone(); print(r[0] if r else '0')" 2>/dev/null || echo 0)
+          CUR=$(python -c "from nbacomp.sources import sbr; print(sbr.SBR_PARSER_VERSION)")
+          echo "hist_odds rows before: $N (stored parser version $V, code version $CUR)"
+          if [ "$N" = "0" ] || [ "$V" != "$CUR" ] || [ "${{ inputs.sbr }}" = "true" ]; then
+            python tools/probe_sbr_shape.py 2022-23 || true
             python -m nbacomp.collect sbr-odds
           else
-            echo "kept $N existing validated rows (dispatch with sbr=true to refresh)"
+            echo "kept $N validated rows (parser unchanged; dispatch with sbr=true to refresh)"
           fi
 
       - name: Daily collection (schedule+odds, injuries, Kalshi, boxscores, verification)

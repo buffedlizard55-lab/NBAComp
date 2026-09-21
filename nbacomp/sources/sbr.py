@@ -74,6 +74,12 @@ _NAME_FIXES = {
 }
 
 
+#: Bump whenever the parser changes what it accepts or how it reads a field.
+#: The workflow re-collects the archive when the stored value differs, so a
+#: parser fix always re-validates the data instead of leaving stale rows behind.
+SBR_PARSER_VERSION = "2"
+
+
 def _norm_name(raw: str) -> str:
     return re.sub(r"[^a-z]", "", (raw or "").lower())
 

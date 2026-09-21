@@ -1,0 +1,56 @@
+"""Probe the SBR archive page shape (what the parser actually sees).
+
+Answers questions that decide how much historical price data exists:
+  * how many data rows / games the page really contains
+  * the date span (the first collection pass only reached 31 December, so the
+    page may be paginated or month-split)
+  * whether the page links to further season pages
+Output is appended to data/diagnostics.txt (committed evidence, not a claim).
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+from collections import Counter
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from nbacomp import util  # noqa: E402
+from nbacomp.sources import sbr  # noqa: E402
+
+
+def main() -> int:
+    season = sys.argv[1] if len(sys.argv) > 1 else "2022-23"
+    r = sbr.fetch_season(season)
+    lines = [f"[{util.utcnow_iso()}] SBR shape probe season={season} status={r.status} "
+             f"bytes={len(r.body or b'')} err={r.error}"]
+    if not getattr(r, "ok_body", False):
+        lines.append("  fetch failed: nothing to parse (no data claimed)")
+    else:
+        html = r.body.decode("utf-8", "replace")
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I)
+        data_rows = [r_ for r_ in rows if len(sbr._cells(r_)) >= 13 and
+                     re.fullmatch(r"\d{4}", sbr._cells(r_)[0] or "")]
+        dates = sorted({sbr._cells(r_)[0] for r_ in data_rows})
+        games, rejects = sbr.parse_season(html, season)
+        lines.append(f"  tables={len(re.findall(r'<table', html, re.I))} "
+                     f"tr={len(rows)} data_rows={len(data_rows)} "
+                     f"distinct_dates={len(dates)} span={dates[0] if dates else '-'}"
+                     f"..{dates[-1] if dates else '-'}")
+        lines.append(f"  parsed_games={len(games)} rejected={len(rejects)} "
+                     f"reject_reasons={dict(Counter(x['reason'].split(':')[0] for x in rejects))}")
+        months = Counter(d[:2] for d in dates)
+        lines.append(f"  rows_by_month={dict(months)}")
+        links = sorted(set(re.findall(r'href="([^"]*nba-odds[^"]*)"', html, re.I)))
+        lines.append(f"  season_links={links[:12]}")
+        pages = sorted(set(re.findall(r'href="([^"]*' + re.escape(season) + r'[^"]*)"', html, re.I)))
+        lines.append(f"  pagination_links={[p for p in pages if p not in links][:12]}")
+    with open("data/diagnostics.txt", "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
