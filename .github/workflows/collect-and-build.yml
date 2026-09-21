@@ -72,20 +72,28 @@ jobs:
           git push origin HEAD || true
 
       - name: Full backfill part 1 — schedule/results (two seasons)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         run: |
           python -m nbacomp.collect backfill-days --start 20241001 --end 20250701
           python -m nbacomp.collect backfill-days --start 20251001 --end "$(date -u +%Y%m%d)"
 
+      - name: Full backfill part 1b — Basketball-Reference schedule/results (incl. 2026-27 openers)
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
+        continue-on-error: true
+        run: |
+          python -m nbacomp.collect backfill-bref-months --months "2025:october,2025:november,2025:december,2025:january,2025:february,2025:march,2025:april,2025:may,2025:june"
+          python -m nbacomp.collect backfill-bref-months --months "2026:october,2026:november,2026:december,2026:january,2026:february,2026:march,2026:april,2026:may,2026:june"
+          python -m nbacomp.collect backfill-bref-months --months "2027:october"
+
       - name: Full backfill part 2 — independent verification (Basketball-Reference)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         continue-on-error: true
         run: |
           python -m nbacomp.collect verify-bref-months --months "2025:october,2025:november,2025:december,2025:january,2025:february,2025:march,2025:april,2025:may,2025:june"
           python -m nbacomp.collect verify-bref-months --months "2026:october,2026:november,2026:december,2026:january,2026:february,2026:march,2026:april,2026:may,2026:june"
 
       - name: Full backfill part 3 — Kalshi history (discovery, settled events, candles)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         continue-on-error: true
         run: |
           python -m nbacomp.collect kalshi-discovery
@@ -93,13 +101,13 @@ jobs:
           python -m nbacomp.collect kalshi-candles --series KXNBAGAME --start 2024-10-01T00:00:00Z --end "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Full backfill part 4 — box scores 2025-26 (player + team logs)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         continue-on-error: true
         run: |
           python -m nbacomp.collect boxscores --start 20251001 --end 20260715
 
       - name: Full backfill part 5 — box scores 2024-25 (player + team logs)
-        if: steps.skip.outputs.skip != 'true'
+        if: steps.skip.outputs.skip != 'true' && inputs.backfill == 'true'
         continue-on-error: true
         run: |
           python -m nbacomp.collect boxscores --start 20241001 --end 20250715

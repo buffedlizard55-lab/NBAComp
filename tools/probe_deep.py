@@ -82,6 +82,21 @@ def main():
                 ev = f"parse-err {e}"
         log(f"{label}: {code} bytes={len(body)} {ev}")
 
+    # same URLs via the app's urllib + node transports (curl 403s from
+    # runners while node-fetch 200s — this row proves the fallback live)
+    for label, url in [
+        ("urllib site.web scoreboard 20260115", f"{WEB}/scoreboard?dates=20260115"),
+    ]:
+        rr = http.get(url)
+        nn = len((rr.json or {}).get("events") or []) if rr.ok else -1
+        log(f"{label}: http={rr.status} events={nn} err={rr.error}")
+    for label, url in [
+        ("node site.web scoreboard 20260115", f"{WEB}/scoreboard?dates=20260115"),
+    ]:
+        rr = http.node_fetch(url)
+        nn = len((rr.json or {}).get("events") or []) if rr.ok else -1
+        log(f"{label}: http={rr.status} events={nn} err={rr.error}")
+
     # summary for one historical event -> boxscore presence
     code, body = curl(f"{WEB}/scoreboard?dates=20260115")
     if code == 200:
@@ -120,8 +135,9 @@ def main():
         m0 = markets[0]
         log(f"  sample: {m0.get('ticker')} result={m0.get('result')} close={m0.get('close_time')}")
         r2 = http.get(f"{kalshi.BASE}/markets/candlesticks",
-                      {"tickers": m0["ticker"], "start_ts": start, "end_ts": end, "interval": 60})
-        cs = (r2.json or {}).get("candlesticks") or []
+                      {"market_tickers": m0["ticker"], "start_ts": start, "end_ts": end,
+                       "period_interval": 60})
+        cs = (r2.json or {}).get("markets") or []
         ncand = sum(len(e.get("candlesticks") or []) for e in cs)
         log(f"kalshi candles settled ticker: http={r2.status} entries={len(cs)} candles={ncand}")
         if cs and cs[0].get("candlesticks"):

@@ -24,13 +24,17 @@ FALLBACK_BASE = "https://external-api.kalshi.com/trade-api/v2"
 
 # Candidate NBA series tickers to probe. Existence is NOT assumed; whatever the
 # API confirms is recorded in the source registry / series table.
+# (KXNBAPTS/REBS/ASTS/PTSALT added 2026-09-20: prior discovery missed the
+# points-props series the registry had already confirmed.)
 CANDIDATE_SERIES = [
     "KXNBAGAME", "KXNBASPREAD", "KXNBATOTAL", "KXNBA1H", "KXNBAQ1",
     "KXNBAMVP", "KXNBACHAMP", "KXNBACHAMPS", "KXNBAFINAL",
-    "KXNBAPOINT", "KXNBAPT", "KXNBAREB", "KXNBAREBOUND", "KXNBAAST",
-    "KXNBAASSIST", "KXNBATHREE", "KXNBATHREES", "KXNBASTL", "KXNBABLK",
+    "KXNBAPOINT", "KXNBAPT", "KXNBAPTS", "KXNBAPTSALT",
+    "KXNBAREB", "KXNBAREBOUND", "KXNBAREBOUNDS", "KXNBAREBS",
+    "KXNBAAST", "KXNBAASSIST", "KXNBAASSISTS", "KXNBAASTS",
+    "KXNBATHREE", "KXNBATHREES", "KXNBASTL", "KXNBABLK",
     "KXNBADD", "KXNBADBLDBL", "KXNBAPRA", "KXNBATO", "KXNBAPOINTS",
-    "KXNBAREBOUNDS", "KXNBAASSISTS", "KXNBA3PM",
+    "KXNBA3PM",
 ]
 
 
@@ -114,19 +118,25 @@ def get_markets_by_event(event_ticker: str, max_pages: int = 10) -> list[dict]:
 
 def get_candlesticks(tickers: list[str], start_ts_ms: int, end_ts_ms: int,
                      interval: int = 60) -> list[dict]:
-    """Batch candlesticks. Returns list of {ticker, candlesticks:[...]}."""
+    """Batch candlesticks. Returns list of {market_ticker, candlesticks:[...]}.
+
+    Live-API verified 2026-09-20: the endpoint requires `market_tickers` +
+    `period_interval` (not `tickers`/`interval` — those 400), and nests rows
+    under the `markets` key (not `candlesticks`). Both old mistakes silently
+    returned zero rows; fixed and pinned by unit test.
+    """
     out: list[dict] = []
     B = 20  # conservative batch size
     for i in range(0, len(tickers), B):
         chunk = tickers[i:i + B]
         r = _get("/markets/candlesticks", {
-            "tickers": ",".join(chunk),
+            "market_tickers": ",".join(chunk),
             "start_ts": int(start_ts_ms // 1000),
             "end_ts": int(end_ts_ms // 1000),
-            "interval": interval,
+            "period_interval": interval,
         })
         if r.ok:
-            out.extend((r.json or {}).get("candlesticks") or [])
+            out.extend((r.json or {}).get("markets") or [])
     return out
 
 
@@ -221,26 +231,72 @@ def classify_market(m: dict) -> str:
     return "unknown"
 
 
+def _cents(m: dict, *keys) -> int | None:
+    """First present quote as integer cents.
+
+    Live-API verified 2026-09-20: current markets expose dollar strings
+    (yes_bid_dollars "0.5400", volume_fp "9922.32") and NO cent integers.
+    Legacy cent fields are kept as fallback; unknown stays None (never 0 —
+    0 cents would be a fabricated price).
+    """
+    for k in keys:
+        v = m.get(k)
+        if v is None or v == "":
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        # *_dollars are fractions of $1 (x100 -> cents); legacy fields are
+        # already cents. (*_fp volume fields are NOT dollars — see _count.)
+        return int(round(f * 100.0)) if k.endswith("_dollars") else int(f)
+    return None
+
+
+def _count(m: dict, *keys) -> int | None:
+    """First present volume/OI field as integer contracts (no rescaling)."""
+    for k in keys:
+        v = m.get(k)
+        if v is None or v == "":
+            continue
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def parse_market(m: dict, captured_utc: str) -> dict:
-    st = m.get("strike") or {}
+    st: dict = {}
+    for blob_key in ("strike", "custom_strike"):
+        blob = m.get(blob_key)
+        if isinstance(blob, dict):
+            st.update(blob)
+    for scalar_key in ("strike_type", "floor_strike", "cap_strike"):
+        if m.get(scalar_key) is not None:
+            st[scalar_key] = m.get(scalar_key)
+    result = m.get("result") or None
     return {
         "ticker": m.get("ticker"),
         "series_ticker": m.get("series_ticker"),
         "event_ticker": m.get("event_ticker"),
         "title": m.get("title"),
-        "subtitle": m.get("market_subtitle") or m.get("subtitle"),
+        # live shape: yes_sub_title ("San Antonio") / no_sub_title; legacy
+        # market_subtitle/subtitle kept as fallback (unit-test pinned).
+        "subtitle": (m.get("yes_sub_title") or m.get("market_subtitle")
+                     or m.get("subtitle")),
         "market_type": classify_market(m),
         "strike_values": None if not st else
         __import__("json").dumps(st, default=str),
         "status": m.get("status"),
         "close_time": _iso(m.get("close_time")),
         "expected_expiration_time": _iso(m.get("expected_expiration_time")),
-        "yes_bid": m.get("yes_bid"),
-        "yes_ask": m.get("yes_ask"),
-        "last_price": m.get("last_price"),
-        "volume": m.get("volume"),
-        "open_interest": m.get("open_interest"),
-        "result": m.get("result"),
+        "yes_bid": _cents(m, "yes_bid_dollars", "yes_bid"),
+        "yes_ask": _cents(m, "yes_ask_dollars", "yes_ask"),
+        "last_price": _cents(m, "last_price_dollars", "last_price"),
+        "volume": _cents(m, "volume_fp", "volume"),
+        "open_interest": _cents(m, "open_interest_fp", "open_interest"),
+        "result": result,
         "settled_time": _iso(m.get("settled_time")),
         "captured_utc": captured_utc,
     }
