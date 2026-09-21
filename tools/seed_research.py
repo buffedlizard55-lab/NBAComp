@@ -130,6 +130,58 @@ ENTRIES = [
         "decision": "Continue collecting data via GitHub Actions; every pipeline run will inflate real results on top of this scaffold.",
         "next_steps": "Pass 4 (live): first real ESPN scoreboard + Kalshi backfill + box-scores + paper-betting pass executed in Actions.",
     },
+    {
+        "question": "Pass 4 (correction, 2026-09-21): the published database was empty while every job reported success — what was actually wrong?",
+        "sources_searched": ("Committed pipeline output: data/nbacomp.db at 53465b8 (SQLite queried directly), data/diagnostics.txt, "
+                            "data/leaderboard.json, the live Pages dashboard https://buffedlizard55-lab.github.io/NBAComp/, "
+                            "`gh run list` for buffedlizard55-lab/NBAComp, and the repo working tree (git status clean, "
+                            "git diff HEAD empty)"),
+        "data_discovered": ("Row counts at 53465b8: games=0, odds_snapshots=0, kalshi_markets=0, kalshi_candles=0, "
+                            "kalshi_orderbooks=0, injuries=0, team_gamelogs=0, player_gamelogs=0, bets=0, verifications=0, "
+                            "anomalies=0; collection_log=697 rows, strategies=19, research_log=8. Live dashboard cards read "
+                            "'Games in database 0 (0 cross-verified)' and 'Kalshi NBA series live 0'; leaderboard shows "
+                            "19 strategies all at $1,000 / 0 bets. collection_log evidence: 'daily-kalshi-snapshot' status "
+                            "'crash' x2 (2026-09-21T00:15:22Z and 00:36:56Z) with "
+                            "'sqlite3.IntegrityError: NOT NULL constraint failed: kalshi_markets.series_ticker'; every "
+                            "'backtest' row status 'empty' detail 'no games in window' (8 rows); "
+                            "'bref-backfill'/'bref-verify' 'fail' with '2026-september: HTTP 404'; 'espn-day' ok with rows=0 "
+                            "for 20260920..20260929 (offseason); GitHub Pages API status 'built'. Sandbox network: "
+                            "pypi.org 200, api.github.com 200, site.api.espn.com / stats.nba.com / basketball-reference.com / "
+                            "api.elections.kalshi.com all unreachable (curl 000) — so no live collection is possible here."),
+        "hypothesis": None,
+        "test_performed": ("Queried the committed database and the live site instead of trusting prior claims; then wrote "
+                           "tests/test_pipeline_fixes.py (20 tests) pinning each fixed behaviour; full suite run locally in a "
+                           "fresh venv: 92 passed. The suite could NOT be run before this pass from the sandbox as claimed "
+                           "earlier — pytest was not installed (pip is PEP-668 blocked), which is why an empty pipeline "
+                           "passed review."),
+        "result": ("Three independent defects, each silently producing zero rows: (1) kalshi_snapshot crashed on any live "
+                   "market row lacking `series_ticker` (a NOT NULL column), so the whole task died and NO Kalshi price was "
+                   "ever stored; (2) the two-season history backfill was gated behind the manual workflow_dispatch `backfill` "
+                   "input that the 6-hourly cron never sets, and the daily job only fetched today-2..today+8, so `games` "
+                   "stayed at 0 and every backtest logged 'no games in window'; (3) the BRef daily task requested the "
+                   "current month, which in the offseason has no page, logging a 404 'fail' every run and masking real "
+                   "failures. Contributing process defect: 72 tests passed while none of them covered any of these paths, "
+                   "and the audit had no empty-database check, so the run exited 0 and published a clean-looking site."),
+        "verification": ("Every number above was read from data/nbacomp.db, data/diagnostics.txt and the live dashboard in "
+                         "this pass (2026-09-21 ~02:00Z); the fixes are pinned by tests/test_pipeline_fixes.py, "
+                         "92 passed locally."),
+        "decision": ("(a) normalize_market_row() fills series_ticker from the query parameter actually sent and event_ticker "
+                     "from the ticker prefix, rejects identity-less rows with an anomaly instead of crashing the task; "
+                     "(b) espn_backfill_resumable() and boxscores_backfill_resumable() make history catch-up automatic and "
+                     "budgeted, with cursors in `meta` (floors 20231001 / 20241001), plus a BRef two-season bootstrap in the "
+                     "workflow that runs only while `games` is empty; (c) the BRef task is 'skipped' (not 'fail') in "
+                     "Jul/Aug/Sep and uses the season-end-year mapping; (d) kalshi_settled_history() probes whether settled "
+                     "markets still expose candlesticks or the trade tape, constructing event tickers from verified game "
+                     "rows ({SERIES}-{YY}{MON}{DD}{TEAM1}{TEAM2}) and market tickers as {event}-{AWAY|HOME|YES|NO}, and "
+                     "stores ONLY tickers that actually returned rows; (e) audit now raises critical anomalies for empty "
+                     "games / empty kalshi_markets, collector crashes in the last 24h, and persistent source failures, and "
+                     "the dashboard publishes a pipeline-health banner with them; (f) the workflow prints a row-count report "
+                     "and fails the job when a collector crashed."),
+        "next_steps": ("Verify the next scheduled Actions run on real network: expect games > 0 from the BRef bootstrap, "
+                       "kalshi_markets > 0 from the fixed snapshot, zero 'crash' rows, and a recorded answer for "
+                       "kalshi_settled_availability:KXNBAGAME (candles / tape / unavailable). Until games and prices exist, "
+                       "backtest and forward P&L stay at 0 and the site says so."),
+    },
 ]
 
 

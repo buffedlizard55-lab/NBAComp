@@ -120,16 +120,102 @@ def backfill_days(con, start: str, end: str) -> int:
     return total
 
 
-def verify_bref_months(con, seasons: list[tuple[int, list[str]]]) -> int:
-    n = 0
-    for year, months in seasons:
-        for m in months:
-            n += bref.verify_month(con, year, m)
-            time.sleep(1.0)
-    return n
+# Oldest ESPN scoreboard date this project will walk back to. 2023-10 covers
+# the 2023-24 and 2024-25 seasons plus the 2024 offseason; going deeper buys
+# nothing for the current backtest windows and costs a request per day.
+ESPN_BACKFILL_FLOOR = "20231001"
+BACKFILL_CURSOR_KEY = "espn_backfill_next_day"
 
 
-# ------------------------------------------------------------------ boxscores
+def espn_backfill_resumable(con, days_per_run: int = 20,
+                            floor: str = ESPN_BACKFILL_FLOOR) -> dict:
+    """Walk ESPN's scoreboard BACKWARDS one day at a time, resuming across runs.
+
+    Why this exists (2026-09-21 defect): the daily job only fetched
+    `today-2 .. today+8`, and the two-season backfill lived behind a manual
+    `workflow_dispatch` input that the cron never sets — so `games` stayed at
+    0 rows forever and every backtest logged "no games in window". This makes
+    the history catch-up automatic and incremental: each scheduled run spends
+    a bounded request budget and records its cursor in `meta`, so a fresh
+    database self-heals to a full two-season history without human action.
+
+    Dates are fetched oldest-first from the cursor. A day that fails (network
+    error, not "zero games") stops the walk WITHOUT advancing the cursor, so
+    the day is retried on the next run rather than silently skipped.
+    """
+    row = con.execute("SELECT value FROM meta WHERE key=?", (BACKFILL_CURSOR_KEY,)).fetchone()
+    today = datetime.now(timezone.utc)
+    cursor_day = row["value"] if row else today.strftime("%Y%m%d")
+    stats = {"days_fetched": 0, "games": 0, "cursor": cursor_day, "done": False,
+             "stopped": None}
+    d = datetime.strptime(cursor_day, "%Y%m%d") - timedelta(days=1)
+    for _ in range(max(0, days_per_run)):
+        day = d.strftime("%Y%m%d")
+        if day < floor:
+            stats["done"] = True
+            stats["cursor"] = floor
+            break
+        r = espn.scoreboard(day)
+        save_source_status(con, "espn:scoreboard", r, detail=f"date={day} backfill")
+        if not r.ok:
+            stats["stopped"] = f"{day}: {r.error}"
+            break  # cursor NOT advanced -> retried next run
+        games = espn.parse_scoreboard(r.json)
+        for g in games:
+            odds = g.pop("_odds", None)
+            db.insert(con, "games", {
+                "game_id": g["game_id"], "source": g["source"], "season": g["season"],
+                "game_date_et": g["game_date_et"] or "", "tipoff_utc": g["tipoff_utc"],
+                "home_team": g["home_team"], "away_team": g["away_team"],
+                "home_score": g["home_score"], "away_score": g["away_score"],
+                "status": g["status"], "neutral_site": g["neutral_site"],
+                "source_updated_utc": None, "captured_utc": util.utcnow_iso(),
+                "verified": 0,
+            }, replace=True)
+            if odds:
+                _store_espn_odds(con, odds)
+        stats["days_fetched"] += 1
+        stats["games"] += len(games)
+        db.insert(con, "meta", {"key": BACKFILL_CURSOR_KEY, "value": day,
+                                "updated_utc": util.utcnow_iso()}, replace=True)
+        d -= timedelta(days=1)
+        time.sleep(0.35)
+    db.log_collection(con, "espn-backfill", "espn",
+                      "done" if stats["done"] else ("fail" if stats["stopped"] else "ok"),
+                      f"days={stats['days_fetched']} games={stats['games']} "
+                      f"cursor={stats['cursor']} floor={floor}"
+                      + (f" stopped={stats['stopped']}" if stats["stopped"] else ""),
+                      rows=stats["games"])
+    return stats
+
+
+# Basketball-Reference monthly pages only exist for months that had games.
+# July/August/September are offseason -> the page 404s, and logging that as a
+# source "fail" every 6 hours was noise that hid real failures
+# (observed 2026-09-21: bref-backfill/bref-verify "2026-september: HTTP 404").
+BREF_GAME_MONTHS = {"october", "november", "december", "january", "february",
+                    "march", "april", "may", "june"}
+
+
+def bref_current_month(con, now: datetime | None = None) -> dict:
+    """Backfill + verify the CURRENT month on Basketball-Reference.
+
+    Season-end-year mapping matches bref.calendar_year_for(): Oct-Dec of
+    calendar year Y belong to the season ENDING in Y+1. Skipped (logged as
+    `skipped`, not `fail`) during the offseason.
+    """
+    now = now or datetime.now(timezone.utc)
+    month = _month_name(now.month)
+    if month not in BREF_GAME_MONTHS:
+        db.log_collection(con, "bref-backfill", "basketball-reference", "skipped",
+                          f"{now.year}-{month}: offseason, no monthly page exists")
+        return {"skipped": f"{now.year}-{month}"}
+    seas_end = now.year + (1 if now.month >= 10 else 0)
+    st = bref.backfill_month(con, seas_end, month)
+    verified = bref.verify_month(con, seas_end, month)
+    st["verified"] = verified
+    return st
+
 
 def collect_boxscores(con, date_yyyymmdd: str) -> int:
     """Fetch summaries for all FINAL games of an ET date; store player+team logs."""
@@ -193,6 +279,60 @@ def collect_boxscores(con, date_yyyymmdd: str) -> int:
     return n
 
 
+def boxscores_backfill_resumable(con, start_day: str, end_day: str,
+                                 max_games: int = 40) -> dict:
+    """Collect box scores for FINAL games, resuming across runs.
+
+    Box scores are one request per game, so a full two-season sweep cannot fit
+    in a single scheduled run. The cursor (`boxscore_backfill_next_day`) makes
+    it incremental: each run spends at most `max_games` requests and continues
+    where the previous run stopped. Dates with no FINAL games in `games` are
+    walked through for free (no network).
+    """
+    row = con.execute("SELECT value FROM meta WHERE key='boxscore_backfill_next_day'").fetchone()
+    cursor = row["value"] if row else start_day
+    if cursor > end_day:
+        db.log_collection(con, "boxscores-backfill", "espn", "done",
+                          f"cursor={cursor} end={end_day}", rows=0)
+        return {"games": 0, "rows": 0, "cursor": cursor, "done": True}
+    d = datetime.strptime(cursor, "%Y%m%d")
+    end = datetime.strptime(end_day, "%Y%m%d")
+    spent = rows = 0
+    last_done = None
+    # Days already covered, computed once: the naive per-day
+    # `game_id NOT IN (SELECT game_id FROM team_gamelogs)` form rescans the
+    # whole log for every date of a 700-day walk.
+    done_days = {r[0] for r in con.execute(
+        "SELECT DISTINCT game_date_et FROM team_gamelogs")}
+    while d <= end:
+        day = d.strftime("%Y%m%d")
+        iso_day = f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+        if iso_day in done_days:
+            last_done = day
+            d += timedelta(days=1)
+            continue
+        pending = con.execute(
+            "SELECT count(*) AS c FROM games WHERE game_date_et=? AND status='final'",
+            (iso_day,)).fetchone()
+        if pending and pending["c"]:
+            if spent >= max_games:
+                break
+            rows += collect_boxscores(con, day)
+            spent += pending["c"]
+            done_days.add(iso_day)
+        last_done = day
+        d += timedelta(days=1)
+    done = d > end
+    next_day = ((datetime.strptime(last_done, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
+                if last_done else cursor)
+    db.insert(con, "meta", {"key": "boxscore_backfill_next_day", "value": next_day,
+                            "updated_utc": util.utcnow_iso()}, replace=True)
+    db.log_collection(con, "boxscores-backfill", "espn", "done" if done else "ok",
+                      f"cursor={cursor} next={next_day} games_touched={spent} "
+                      f"rows={rows} end={end_day}", rows=rows)
+    return {"games": spent, "rows": rows, "cursor": cursor, "next": next_day, "done": done}
+
+
 def collect_injuries(con) -> int:
     r = espn.injuries()
     save_source_status(con, "espn:injuries", r)
@@ -233,9 +373,43 @@ def _live_series(con) -> list[str]:
     return [s for s, v in found.items() if v.get("exists")]
 
 
+def normalize_market_row(row: dict, queried_series: str) -> dict | None:
+    """Make one parsed Kalshi market row insertable, or return None.
+
+    kalshi_markets.ticker / series_ticker / event_ticker are NOT NULL. The
+    live /markets payload does NOT always carry `series_ticker` (runner
+    evidence 2026-09-21T00:36:56Z, data/nbacomp.db collection_log id=680:
+    `IntegrityError: NOT NULL constraint failed: kalshi_markets.series_ticker`
+    — the whole snapshot task crashed on the first such row, so ZERO Kalshi
+    prices were ever stored and the paper engine had nothing to price).
+
+    Recovery rules (no invention):
+      * series_ticker: fall back to the series we actually queried — that is
+        the request parameter, i.e. observed, not guessed.
+      * event_ticker: fall back to the market ticker's own prefix
+        (`KXNBAGAME-26OCT20LALBOS-YES` -> `KXNBAGAME-26OCT20LALBOS`).
+      * still missing identity -> return None so the caller can log an
+        anomaly instead of writing a partial row.
+    """
+    if not row.get("ticker"):
+        return None
+    if not row.get("series_ticker"):
+        row["series_ticker"] = queried_series
+    if not row.get("event_ticker"):
+        tk = row["ticker"]
+        if "-" in tk:
+            head = tk.rsplit("-", 1)[0]
+            if head and head != tk:
+                row["event_ticker"] = head
+    if not row.get("series_ticker") or not row.get("event_ticker"):
+        return None
+    return row
+
+
 def kalshi_snapshot(con) -> int:
     """Refresh OPEN markets (forward prices) + orderbooks for the main series."""
     n = 0
+    rejected = 0
     CAP2 = util.utcnow_iso()
     book_tickers: list[str] = []
     for s in _live_series(con):
@@ -244,17 +418,29 @@ def kalshi_snapshot(con) -> int:
         except Exception as e:
             db.log_collection(con, "kalshi-snapshot", f"kalshi:{s}", "fail", str(e)[:200])
             continue
+        stored = 0
         for m in markets:
             try:
                 row = kalshi.parse_market(m, CAP2)
             except Exception as e:
                 db.log_anomaly(con, "warn", "kalshi-market-parse-error",
                                {"ticker": m.get("ticker"), "err": str(e)[:200]})
+                rejected += 1
+                continue
+            row = normalize_market_row(row, s)
+            if row is None:
+                db.log_anomaly(con, "warn", "kalshi-market-missing-identity",
+                               {"ticker": m.get("ticker"), "queried_series": s,
+                                "keys": sorted(m.keys())[:25]})
+                rejected += 1
                 continue
             db.insert(con, "kalshi_markets", row, replace=True)
             n += 1
+            stored += 1
             if s in ("KXNBAGAME", "KXNBASPREAD", "KXNBATOTAL", "KXNBA1H", "KXNBAQ1"):
                 book_tickers.append(row["ticker"])
+        db.log_collection(con, "kalshi-snapshot", f"kalshi:{s}", "ok",
+                          f"open_markets={stored}", rows=stored)
         time.sleep(0.3)
     # per-ticker orderbooks (batch endpoint shape unreliable in probes)
     books = 0
@@ -279,8 +465,15 @@ def kalshi_snapshot(con) -> int:
         }, replace=True)
         books += 1
         time.sleep(0.15)
-    db.log_collection(con, "kalshi-snapshot", "kalshi", "ok",
-                      f"open_markets={n} books={books}", rows=n)
+    status = "ok" if (n or not book_tickers) else "partial"
+    db.log_collection(con, "kalshi-snapshot", "kalshi", status,
+                      f"open_markets={n} books={books} rejected={rejected}", rows=n)
+    if n == 0 and rejected:
+        # Never let a total-loss run look like a quiet success: the site,
+        # the paper engine and every downstream number depend on these rows.
+        db.log_anomaly(con, "critical", "kalshi-snapshot-stored-nothing",
+                       {"rejected": rejected,
+                        "detail": "live /markets returned rows but none were storable"})
     return n
 
 
@@ -455,6 +648,141 @@ def kalshi_candles_forward(con, days: int = 3, interval: int = 60) -> int:
     return n
 
 
+MONTH_ABBR = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+
+def event_ticker_for(date_et: str, team_a: str, team_b: str,
+                     series: str = "KXNBAGAME") -> str | None:
+    """Build a Kalshi NBA event ticker from a verified game row.
+
+    Format runner-verified 2026-09-20/21 (data/diagnostics.txt probe5 and the
+    real open-market fixtures in tests/test_live_shapes.py):
+    `{SERIES}-{YY}{MON}{DD}{TEAM1}{TEAM2}`, e.g. KXNBAGAME-26OCT20OKCSAS.
+    Both team orders are returned as candidates by `event_ticker_candidates`
+    because the API's ordering rule was never observed directly — we probe
+    both instead of guessing one.
+    """
+    try:
+        y, m, d = date_et.split("-")
+    except (ValueError, AttributeError):
+        return None
+    if len(y) != 4:
+        return None
+    return f"{series}-{y[2:]}{MONTH_ABBR[int(m) - 1]}{int(d):02d}{team_a}{team_b}"
+
+
+def event_ticker_candidates(date_et: str, home: str, away: str,
+                            series: str = "KXNBAGAME") -> list[str]:
+    out = []
+    for a, b in ((away, home), (home, away)):
+        t = event_ticker_for(date_et, a, b, series)
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def market_ticker_candidates(event_ticker: str, home: str, away: str) -> list[str]:
+    """Candidate market tickers for one event.
+
+    Live markets in KXNBAGAME are per-team (fixture-verified:
+    `KXNBAGAME-26OCT20OKCSAS-SAS` / `-OKC`), while generic binary Kalshi
+    markets are `-YES`/`-NO`. We probe all four rather than assume which
+    convention a settled series used; only tickers that actually return data
+    are ever stored.
+    """
+    return [f"{event_ticker}-{s}" for s in (away, home, "YES", "NO")]
+
+
+def kalshi_settled_history(con, series: str = "KXNBAGAME", max_games: int = 60,
+                           interval: int = 60) -> dict:
+    """Attempt to recover price history for SETTLED Kalshi markets.
+
+    Why this exists: settled market ROWS are not exposed by the public API
+    (runner-verified 2026-09-21, collection_log: "settled markets not exposed
+    by public API"), so `kalshi_backfill` can never yield history and the
+    backtester had nothing to price against. Whether settled markets still
+    expose CANDLESTICKS or the TRADE tape is a separate question, and this
+    function is the experiment.
+
+    Tickers are CONSTRUCTED from verified game rows already in `games`
+    (date + both team abbreviations -> event ticker, then the four market
+    suffixes). Nothing is invented: if a constructed ticker does not exist
+    the endpoint returns no rows for it and nothing is stored. A zero yield
+    is logged as `empty` and recorded in `meta` so the site can state
+    honestly that settled price history is unavailable.
+    """
+    CAP2 = util.utcnow_iso()
+    games = con.execute(
+        "SELECT game_id, game_date_et, home_team, away_team FROM games "
+        "WHERE status='final' ORDER BY game_date_et DESC LIMIT ?", (max_games,)).fetchall()
+    if not games:
+        db.log_collection(con, "kalshi-settled-history", f"kalshi:{series}", "empty",
+                          "no final games in database to derive tickers from", rows=0)
+        return {"games_probed": 0, "tickers_probed": 0, "candles": 0, "trades": 0,
+                "availability": "no-games"}
+
+    ev_by_ticker: dict[str, str] = {}
+    game_by_ev: dict[str, dict] = {}
+    for g in games:
+        for ev in event_ticker_candidates(g["game_date_et"], g["home_team"], g["away_team"], series):
+            for tk in market_ticker_candidates(ev, g["home_team"], g["away_team"]):
+                ev_by_ticker[tk] = ev
+                game_by_ev[ev] = dict(g)
+    tickers = sorted(ev_by_ticker)
+
+    now_s = int(datetime.now(timezone.utc).timestamp())
+    start_s = now_s - 500 * 86400
+    got = kalshi.get_candlesticks(tickers, start_s * 1000, now_s * 1000, interval)
+    candles = _store_candles(con, got, interval)
+
+    hit_tickers = [e.get("market_ticker") for e in got if e.get("candlesticks")]
+    for tk in hit_tickers:
+        ev = ev_by_ticker.get(tk) or (tk.rsplit("-", 1)[0] if "-" in tk else tk)
+        # A ticker that returned candles demonstrably exists. Record its
+        # identity so the backtester can join it to a game; every price field
+        # stays NULL because no quote was observed on this channel.
+        db.insert(con, "kalshi_markets", {
+            "ticker": tk, "series_ticker": series, "event_ticker": ev,
+            "title": None, "subtitle": None,
+            "market_type": "winner" if series == "KXNBAGAME" else "unknown",
+            "strike_values": None, "status": "settled", "close_time": None,
+            "expected_expiration_time": None, "yes_bid": None, "yes_ask": None,
+            "last_price": None, "volume": None, "open_interest": None,
+            "result": None, "settled_time": None, "captured_utc": CAP2,
+        }, replace=False)
+
+    # trade tape: an independent historical price channel, sampled
+    trades = 0
+    for tk in (hit_tickers or tickers)[:4]:
+        tr = kalshi._get("/markets/trades", {"ticker": tk, "limit": 1000})
+        rows = ((tr.json or {}).get("trades") or []) if tr.ok else []
+        trades += len(rows)
+        db.log_collection(con, "kalshi-settled-history", f"kalshi:tape:{tk}",
+                          "ok" if tr.ok else "fail",
+                          f"http={tr.status} trades={len(rows)}"
+                          + ("" if tr.ok else f" err={tr.error}"), rows=len(rows))
+        time.sleep(0.25)
+
+    availability = ("candles-available" if candles else
+                    "tape-available" if trades else "unavailable")
+    db.log_collection(con, "kalshi-settled-history", f"kalshi:{series}",
+                      "ok" if (candles or trades) else "empty",
+                      f"games_probed={len(games)} tickers_probed={len(tickers)} "
+                      f"tickers_with_candles={len(hit_tickers)} candles={candles} "
+                      f"trades={trades} availability={availability}",
+                      rows=candles + trades)
+    db.insert(con, "meta", {"key": f"kalshi_settled_availability:{series}",
+                            "value": json.dumps({"availability": availability,
+                                                 "candles": candles, "trades": trades,
+                                                 "games_probed": len(games),
+                                                 "tickers_probed": len(tickers),
+                                                 "checked_utc": CAP2}),
+               "updated_utc": CAP2}, replace=True)
+    return {"games_probed": len(games), "tickers_probed": len(tickers),
+            "candles": candles, "trades": trades, "availability": availability}
+
+
 def _store_candles(con, got: list[dict], interval: int) -> int:
     n = 0
     C = util.utcnow_iso()
@@ -531,7 +859,13 @@ def main():
     ap = argparse.ArgumentParser(description="NBAComp data collection")
     ap.add_argument("command", choices=["backfill-days", "backfill-bref-months", "verify-bref-months",
                                         "boxscores", "daily", "kalshi-discovery", "kalshi-backfill",
-                                        "kalshi-snapshot", "kalshi-candles"])
+                                        "kalshi-snapshot", "kalshi-candles", "espn-backfill",
+                                        "boxscores-backfill", "kalshi-settled-history",
+                                        "bref-month"])
+    ap.add_argument("--days", type=int, default=20,
+                    help="espn-backfill: day budget per run (default 20)")
+    ap.add_argument("--max-games", type=int, default=40,
+                    help="boxscores-backfill: request budget per run (default 40)")
     ap.add_argument("--start", help="YYYYMMDD or ISO")
     ap.add_argument("--end", help="inclusive")
     ap.add_argument("--months", help="e.g. 2026:october,2026:november (season-end-year:month)")
@@ -591,6 +925,13 @@ def main():
             for _ in range(11):
                 run_task("espn-day", collect_espn_day, con, d.strftime("%Y%m%d"))
                 d += timedelta(days=1)
+            # Automatic, resumable two-season history catch-up. Without this
+            # the DB never left 0 games (the full backfill was gated behind a
+            # manual workflow_dispatch input the cron never sets), so every
+            # backtest logged "no games in window". 2026-09-21.
+            run_task("espn-backfill", espn_backfill_resumable, con, 20)
+            run_task("boxscores-backfill", boxscores_backfill_resumable, con,
+                     "20241001", now.strftime("%Y%m%d"), 40)
             run_task("injuries", collect_injuries, con)
             run_task("kalshi-snapshot", kalshi_snapshot, con)
             # candles for open markets: the ONLY Kalshi history source
@@ -598,16 +939,25 @@ def main():
             run_task("kalshi-candles-forward", kalshi_candles_forward, con)
             # recent settled events (settlement ground truth for forward bets)
             run_task("kalshi-backfill", kalshi_backfill, con, max_pages=2)
+            # does Kalshi expose candles/tape for settled NBA markets? probed
+            # and recorded every run; a zero yield is logged as empty.
+            run_task("kalshi-settled-history", kalshi_settled_history, con)
             # yesterday's boxscores (player logs + rolling features)
             y = now - timedelta(days=1)
             run_task("boxscores", collect_boxscores, con, y.strftime("%Y%m%d"))
-            # BRef: backfill + verify the current month. Oct-Dec belong to the
-            # season ending NEXT year (2026-10 -> season-end 2027).
-            seas_end = now.year + (1 if now.month >= 10 else 0)
-            run_task("bref-backfill", bref.backfill_month, con, seas_end,
-                     _month_name(now.month))
-            run_task("bref-verify", bref.verify_month, con, seas_end,
-                     _month_name(now.month))
+            # BRef: backfill + verify the current month (skipped, not failed,
+            # in the offseason — July/August/September have no monthly page).
+            run_task("bref-month", bref_current_month, con, now)
+        elif args.command == "espn-backfill":
+            print(json.dumps(espn_backfill_resumable(con, days_per_run=args.days), indent=2))
+        elif args.command == "boxscores-backfill":
+            print(json.dumps(boxscores_backfill_resumable(
+                con, args.start or "20241001", args.end or datetime.now(timezone.utc).strftime("%Y%m%d"),
+                args.max_games), indent=2))
+        elif args.command == "kalshi-settled-history":
+            print(json.dumps(kalshi_settled_history(con, args.series or "KXNBAGAME"), indent=2))
+        elif args.command == "bref-month":
+            print(json.dumps(bref_current_month(con), indent=2))
         elif args.command == "kalshi-discovery":
             found = kalshi_discovery(con)
             print(json.dumps({k: v for k, v in found.items() if v["exists"]}, indent=2))

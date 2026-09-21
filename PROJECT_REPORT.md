@@ -9,6 +9,33 @@ data, encodes discovered strategies as data-defined hypotheses, runs them in
 an honest no-look-ahead backtester and a forward paper-trading engine, and
 publishes the entire pipeline as a static GitHub Pages site.
 
+> ### STATUS CORRECTION — verified 2026-09-21
+>
+> Earlier revisions of this report described a pipeline that was collecting data and a
+> competition that was about to populate. **That was not true.** At commit `53465b8`
+> (the state this correction pass started from) the committed database contained
+> `games=0`, `odds_snapshots=0`, `kalshi_markets=0`, `kalshi_candles=0`,
+> `kalshi_orderbooks=0`, `injuries=0`, `team_gamelogs=0`, `player_gamelogs=0`, `bets=0`,
+> `verifications=0` — read directly out of `data/nbacomp.db`. The live dashboard showed
+> "Games in database 0 (0 cross-verified)" and 19 strategies at $1,000 with 0 bets.
+>
+> Three defects caused the empty pipeline and are fixed in this pass (details in
+> *Known bugs*, research-log entry 9, and `tests/test_pipeline_fixes.py`):
+>
+> 1. `kalshi_snapshot` crashed on live market rows that omit `series_ticker`
+>    (`IntegrityError: NOT NULL constraint failed: kalshi_markets.series_ticker`), so the
+>    task died and **no Kalshi price was ever stored**;
+> 2. the two-season history backfill was gated behind a manual `workflow_dispatch` input
+>    that the 6-hourly cron never sets, and the daily job only fetched `today-2..today+8`,
+>    so `games` never left 0 and every backtest logged *"no games in window"*;
+> 3. the daily Basketball-Reference task requested the current month, which has no page in
+>    the offseason, logging a 404 "failure" every run and masking real failures.
+>
+> A process defect made all three survivable: the test suite was green (72 tests) while
+> covering none of those paths, the audit had no empty-database check, and the workflow
+> exited 0. **Current honest result count: 0 backtested strategies, 0 forward-tested
+> strategies, 0 paper bets, $0 P&L.** Nothing in this report claims otherwise.
+
 ## Strategies discovered (19, all v1.0.0)
 
 | ID | Username | Category | Win condition |
@@ -43,9 +70,17 @@ Implementations in `nbacomp/backtest.py`. The same evaluator set runs in the
 forward paper engine so a backtested rule is exactly the rule traded in the
 competition.
 
+- **Result to date: 0 backtest bets.** Every `backtest` row in
+  `collection_log` reads `status='empty'`, `detail='no games in window'`
+  (8 rows at `53465b8`) because `games` was empty. The engine is implemented
+  and unit-tested, but it has never had verified prices to run on, so no
+  backtest number is reported anywhere.
 - **Backtest universe**: Kalshi NBA winner markets where hourly candlestick
   history exists; settled events are walked via the `event_ticker` encoding
-  (KXNBAGAME-YYMMDDTEAM1TEAM2 → date + team pair).
+  (KXNBAGAME-YYMMDDTEAM1TEAM2 → date + team pair). Whether settled markets
+  still expose candlesticks is probed every run by
+  `collect.kalshi_settled_history` and recorded in
+  `meta:kalshi_settled_availability:KXNBAGAME` — it is not assumed.
 - **Prices**: last fully-closed hourly candle strictly before decision, +1
   tick slippage; depth unobservable, labeled.
 - **Totals/spread**: priced at standard −110 by default; every such bet row
@@ -76,14 +111,33 @@ workflow_dispatch), capturing:
 Every bet is timestamped at decision time and at settlement time;
 exposure is capped at 25% of bankroll per strategy.
 
+**Result to date: 0 forward bets.** The engine needs (a) upcoming games with
+tipoffs and (b) a mapped Kalshi winner market with a live ask; at `53465b8`
+neither existed (0 games, 0 markets, and the 2026-27 season has not tipped
+off). The leaderboard therefore shows 19 strategies at their $1,000 starting
+bankroll with 0 bets and status `awaiting-opportunity`.
+
 ## Current paper-trading strategies
 
-All 19 strategies are registered and representable in the competition.
-Wallets initialized to $1,000 each. The leaderboard sorts by total
-forward P&L (primary competition objective). At the time of this report
-the sandbox cannot reach ESPN/Kalshi directly — data collection runs in
-GitHub Actions on the schedule, so forward bets will populate the
-leaderboard as soon as the first scheduled run executes.
+All 19 strategies are registered and represented on the leaderboard, each
+with a $1,000 virtual wallet, sorted by total forward P&L (the primary
+competition objective). **Every one of them currently has 0 bets and $0 P&L**
+(`data/leaderboard.json` at `53465b8`: 19 entries, all `pnl: 0.0`,
+`bets: 0`, `status: "awaiting-opportunity"`).
+
+Two separate reasons, both real:
+
+1. The 2026-27 season has not tipped off (preseason late October 2026), so no
+   game markets are open and no game bet is possible yet. Season-long futures
+   (KXNBAMVP, championship) are the only live NBA series right now and no
+   strategy trades them yet.
+2. Before this pass, the collectors were not storing anything even when data
+   existed — see the status correction above.
+
+The sandbox this report was written in cannot reach ESPN/Kalshi/BRef at all
+(`curl` to `site.api.espn.com`, `stats.nba.com`, `basketball-reference.com`
+and `api.elections.kalshi.com` all return `000`; only `pypi.org` and
+`api.github.com` answer), so all collection executes in GitHub Actions.
 
 ## Data sources
 
@@ -145,9 +199,29 @@ paid archives and the policy decision to exclude them.
   but no `ticker`/`close_time` keys on the event row; the
   `event_ticker` field (KXNBAGAME-26JUN13NYKSAS) carries both the date
   and team pair.
-- `/markets?series=X&status=settled` returns zero rows — settled
-  history must be walked via `/events?series=X&status=settled`
-  cursor pagination (200/page; 1,448+ events observed over 8 pages).
+- **Settled markets are NOT retrievable from the public API — corrected
+  2026-09-21.** An earlier revision of this report claimed settled history
+  could be walked via `/events?series=X&status=settled` and that each event's
+  markets carry the recorded result. **That claim was false.** The events
+  endpoint does return settled event rows (200/page, 1,448+ observed over 8
+  pages, `data/diagnostics.txt` probe5), but for every settled event the
+  per-event market queries came back empty: `/markets?event_ticker=…`,
+  `/events/{ticker}`, series+`status=settled` filters and direct ticker GETs
+  all returned 0 rows or 404. Evidence: `collection_log` rows
+  `kalshi-backfill kalshi:KXNBAGAME … events=3 skipped=397 markets_total=0`
+  for all 8 live series, plus the summary row *"settled markets not exposed by
+  public API"*. Consequence: **no historical Kalshi price series exists for
+  settled NBA markets**, so backtests cannot be priced from them.
+- What is still untested (now probed on every run by
+  `collect.kalshi_settled_history`, answer recorded in
+  `meta:kalshi_settled_availability:KXNBAGAME`): whether settled markets still
+  expose **candlesticks** or the **trade tape**. Tickers for those queries are
+  constructed from verified game rows — event `{SERIES}-{YY}{MON}{DD}{TEAM1}{TEAM2}`
+  and market `{event}-{AWAY|HOME|YES|NO}` (live KXNBAGAME markets are per-team:
+  `KXNBAGAME-26OCT20OKCSAS-SAS`, fixture-verified) — and only tickers that
+  actually return rows are ever stored.
+- Fee schedule `ceil(0.07 · C · P · (1−P))` is implemented in
+  `util.kalshi_fees_dollars` and pinned by a formula-level unit test.
 
 ## MasterSite findings
 
@@ -198,37 +272,51 @@ The site is intentionally **clean, fast, mobile-friendly, search-
 and filterable, and renders no fabricated data** — every empty
 section is plainly labeled.
 
-## GitHub status
+## GitHub status (verified 2026-09-21 with `gh`)
 
 - Repository: `buffedlizard55-lab/NBAComp`
-- Branch: `arena/01a0c0e1-nbacomp` (this session)
-- Working tree clean; latest commit at time of this report:
-  `5c3f6af Auto: refresh site after pipeline + tests`
-- All pushes green.
+- Session branch: `arena/01a0c1af-nbacomp`, cut from `main` at `53465b8c757b66b368deee268d3deb136b766089`
+  (`[auto] collect + pipeline + site build 2026-09-21T00:37:13Z`).
+- `main` HEAD at the time of this correction: `53465b8…` — i.e. `main` and this
+  session's starting point are the same commit.
+- Workflows present: `collect-and-build` (cron `23 */6 * * *`, plus push and
+  `workflow_dispatch`) and `tests` (push + PR). Recent runs on 2026-09-21 are
+  green for `tests`; the `collect-and-build` runs were "successful" while the
+  database they committed was empty — which is exactly what the new
+  `tools/db_report.py` gate now prevents.
+- Open PRs at the time of writing: **#4** from another session branch
+  (`arena/01a0c12e-nbacomp`, "Live-shape fixes…"), still open; **#3**, **#2**,
+  **#1** merged. This pass's work goes out on `arena/01a0c1af-nbacomp`.
 
-## Pull request status
+## Deployment status (verified 2026-09-21)
 
-PR **#2**: "Pass 1+2+3: extend forward engine to all 19 strategies + add risk metrics"
-URL: https://github.com/buffedlizard55-lab/NBAComp/pull/2
-
-Tests workflow (`/tests`) is **PASSING** on PR #2. Confirmed run:
-`✓ pytest in 10s (ID 106160068250)` with all 7 steps green.
-
-## Deployment status
-
-The site is built locally and lives in the repo root (`index.html` etc.)
-on the `arena/01a0c0e1-nbacomp` branch. GitHub Pages is configured in the
-repo to serve `main:/` — once the PR is merged to main, the deployed
-site will reflect the new build. **A live preview is running on port
-8765 of this sandbox** (process `nbacomp-local-site`); pages return 200.
-
-**Production deployment to `https://buffedlizard55-lab.github.io/NBAComp/`
-is dependent on merging the PR (the configured deployment branch is
-`main`).** This sandbox cannot push to `main` directly; the PR is the
-intended path. I did not claim the deployment succeeded because I cannot
-verifiably confirm what is on `main` until the maintainer merges.
+- GitHub Pages **is enabled and built**: `gh api repos/buffedlizard55-lab/NBAComp/pages`
+  returns `status: "built"`, `source: {branch: main, path: /}`,
+  `html_url: https://buffedlizard55-lab.github.io/NBAComp/`, `https_enforced: true`.
+- The deployed dashboard was fetched and read in this pass; its cards show
+  `Games in database 0 (0 cross-verified)`, `Kalshi NBA series live 0`, forward
+  P&L `+$0.00`, `Strategies with live bets 0/19`, and a 19-row leaderboard of
+  $1,000 / 0-bet strategies. So the site is genuinely live, and genuinely empty.
+- `curl` to the Pages host from this sandbox returns `000` (network egress is
+  limited to `pypi.org` / `api.github.com` here); the page content above was
+  read through the workspace's page-fetch tool, not curl.
+- The site is regenerated from the database on every `collect-and-build` run and
+  committed to `main`, so deployment does not depend on a manual step.
 
 ## Known bugs
+
+### Fixed in this pass (2026-09-21)
+
+| Defect | Evidence | Fix |
+|--------|----------|-----|
+| `kalshi_snapshot` crashed on any live market row without `series_ticker`, killing the whole task so no Kalshi price was ever stored | `collection_log` `daily-kalshi-snapshot` `crash` ×2 with `IntegrityError: NOT NULL constraint failed: kalshi_markets.series_ticker` | `collect.normalize_market_row()`: series from the query actually sent, event from the ticker prefix; identity-less rows are skipped with an anomaly; a zero-store run raises `kalshi-snapshot-stored-nothing` |
+| Two-season history backfill only ran on manual `workflow_dispatch` with `backfill=true`; the cron never sets it, and `daily` fetched only `today-2..today+8`, so `games` stayed at 0 | `games=0` in the committed DB; 8× `backtest … 'no games in window'` | `espn_backfill_resumable()` (20 days/run, cursor in `meta`, floor `20231001`), `boxscores_backfill_resumable()` (40 games/run), plus a BRef two-season bootstrap in the workflow that runs only while `games` is empty |
+| BRef daily task requested the current month, which has no page in the offseason → a 404 logged as `fail` every run | `bref-backfill` / `bref-verify` `'2026-september: HTTP 404'` | `bref_current_month()` logs `skipped` in Jul/Aug/Sep and uses the season-end-year mapping |
+| Audit reported an empty database as clean; workflow exited 0 and published a green site | `anomalies=0` while every data table was 0 | audit raises `empty-games-table`, `empty-kalshi-markets-table`, `collector-crash` (24 h window), `persistent-source-failure`, `no-bets-despite-data`; dashboard shows a pipeline-health banner; `tools/db_report.py` prints row counts and fails the job on a crash |
+| Settled-Kalshi claim was wrong in both this report and the code comments | `kalshi-backfill … markets_total=0` for all 8 series | `kalshi_settled_history()` probes candles/tape with constructed tickers and records the true answer in `meta` |
+| Report/README drift (14 vs 19 strategies, 49/54 vs actual test count, stale branch/PR/deployment claims) | `strategies` table has 19 rows; `pytest` reports 92 | README + this report regenerated from the registry and from a real test run |
+
+### Still open
 
 - The `audit.run_checks` `injury-listing-late` query joins on team
   abbrev without considering game-direction; a Player X injury with
@@ -280,17 +368,50 @@ See **Source limitations** above. Additional structural limits:
 
 ## Test summary
 
+Run in this pass, in a fresh venv (`python3 -m venv .venv && .venv/bin/pip
+install pytest`), on `arena/01a0c1af-nbacomp`:
+
 ```
-54 tests, all green
-tests/test_collect_and_backtest.py  .............................  9 passed
-tests/test_core.py                   ............................ 45 passed
+.venv/bin/python -m pytest tests   ->  92 passed in 1.66s
+
+tests/test_collect_and_backtest.py   9 tests
+tests/test_core.py                  45 tests
+tests/test_live_shapes.py           18 tests
+tests/test_pipeline_fixes.py        20 tests   (new this pass)
 ```
+
+The new file pins every defect above: snapshot stores markets that omit
+`series_ticker` and raises an anomaly when nothing is storable; the ESPN
+backfill walks backwards, persists its cursor, and refuses to advance past a
+failed day; the box-score backfill respects its request budget, resumes, and
+never refetches a logged day; the BRef task skips the offseason and uses the
+season-end year; settled-history stores only tickers that returned candles and
+records `unavailable` when the API returns nothing; the audit flags an empty
+pipeline; the dashboard publishes its own anomalies.
+
+Note on why the earlier passes missed all of this: pytest is not installed in
+this sandbox and the system Python is PEP-668 managed, so a bare `python -m
+pytest` fails with "No module named pytest". Earlier claims of a green suite
+came from a venv; the suite itself simply had no coverage of the collector
+paths that were failing.
 
 ## Honesty statement
 
-No data was invented. No prices, results, fills, liquidity, or URLs
-were fabricated. Where data is unavailable, the system surfaces
-`"unverified"`, `"pending"`, or explicit gap markers — never a
-plausible-looking placeholder. Historical claims (e.g. web archive
-counts, free-tier pricing, Kalshi series existence) were verified at
-the recorded times and continue to be re-verified on every CI run.
+No data was invented: no prices, results, fills, liquidity, or URLs were
+fabricated, and where data is unavailable the system surfaces `"unverified"`,
+`"pending"`, or explicit gap markers rather than a plausible-looking
+placeholder.
+
+That standard was not fully met in *prose*, and this revision corrects it.
+Earlier revisions described a system that was collecting and about to produce
+results when the committed database was empty, repeated a false claim about
+settled Kalshi markets being retrievable, and carried stale branch, PR, test
+count and deployment details. Each of those statements has been replaced above
+with what was actually read from `data/nbacomp.db`, `data/diagnostics.txt`,
+`gh`, and the live Pages site on 2026-09-21, and each fix is pinned by a test
+in `tests/test_pipeline_fixes.py`.
+
+What remains genuinely unverified is labelled as such: whether Kalshi exposes
+candlesticks or a trade tape for settled NBA markets (probed every run, answer
+recorded in `meta`), and every strategy's actual edge — no strategy has a
+single settled bet, so no performance claim of any kind is made.

@@ -227,6 +227,34 @@ def index(con, out_dir):
     recent = con.execute(
         "SELECT * FROM bets WHERE result IN ('win','loss') ORDER BY settlement_utc DESC LIMIT 8").fetchall()
 
+    # --- pipeline health: failures are shown, never hidden behind a green site
+    health = con.execute(
+        "SELECT severity, check_name, detail_json, detected_utc FROM anomalies "
+        "WHERE severity IN ('critical','warn') ORDER BY detected_utc DESC, id DESC LIMIT 200").fetchall()
+    latest_critical: dict[str, dict] = {}
+    for h in health:
+        if h["severity"] == "critical" and h["check_name"] not in latest_critical:
+            latest_critical[h["check_name"]] = dict(h)
+    candles = con.execute("SELECT COUNT(*) c FROM kalshi_candles").fetchone()["c"]
+    books = con.execute("SELECT COUNT(*) c FROM kalshi_orderbooks").fetchone()["c"]
+    kmarkets = con.execute("SELECT COUNT(*) c FROM kalshi_markets").fetchone()["c"]
+    if latest_critical:
+        items = "".join(
+            f"<li><code>{_esc(k)}</code> — <span class='muted'>{_esc(v['detected_utc'])}</span> "
+            f"<code class='small'>{_esc((v['detail_json'] or '')[:200])}</code></li>"
+            for k, v in sorted(latest_critical.items()))
+        health_html = (f"<div class='card' style='border-left:4px solid #c0392b'>"
+                       f"<div class='k'>Pipeline health: {len(latest_critical)} critical "
+                       f"anomal{'y' if len(latest_critical) == 1 else 'ies'} open</div>"
+                       f"<ul class='small'>{items}</ul>"
+                       f"<p class='muted small'>Full audit trail on the "
+                       f"<a href='sources.html'>data sources</a> page. The site publishes its own "
+                       f"failures rather than presenting an empty database as a clean run.</p></div>")
+    else:
+        health_html = ("<div class='card' style='border-left:4px solid #27ae60'>"
+                       "<div class='k'>Pipeline health</div>"
+                       "<div class='v'>no critical anomalies</div></div>")
+
     lb = table(
         ["#", "Username", "Strategy", "Bankroll", "P&L", "ROI", "Bets", "Win %", "Status"],
         [[i + 1, r["username"], f"<a href='strategies.html#{r['id']}'>{_esc(r['name'])}</a>",
@@ -248,8 +276,9 @@ def index(con, out_dir):
   <div class="card"><div class="k">Strategies with live bets</div><div class="v">{active}/{len(S.STRATEGIES)}</div></div>
   <div class="card"><div class="k">Games in database</div><div class="v">{games:,} <span class="muted">({verified:,} cross-verified)</span></div></div>
   <div class="card"><div class="k">Injury listings collected</div><div class="v">{inj:,}</div></div>
-  <div class="card"><div class="k">Kalshi NBA series live</div><div class="v">{kseries}</div></div>
+  <div class="card"><div class="k">Kalshi NBA markets stored</div><div class="v">{kmarkets:,} <span class="muted">({kseries} series · {candles:,} candles · {books:,} books)</span></div></div>
 </div>
+{health_html}
 <h2>Competition leaderboard <span class="muted">(forward paper trades)</span></h2>
 {lb}
 <p class="muted">Strategies with zero bets are shown as <i>awaiting-opportunity</i> — the 2026-27 season tips off in
