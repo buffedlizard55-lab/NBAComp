@@ -72,12 +72,15 @@ def collect_espn_day(con, day: str, verify: bool = False) -> int:
         # cross-check (2026-09-21: INSERT OR REPLACE with verified=0
         # silently downgraded verified rows on every daily run).
         prev = con.execute(
-            "SELECT verified, verified_against FROM games WHERE game_id=?",
+            "SELECT verified, verified_against, season_type FROM games WHERE game_id=?",
             (g["game_id"],)).fetchone()
         verified = prev["verified"] if prev else 0
         verified_against = prev["verified_against"] if prev else None
+        # never downgrade a recorded season type to NULL on a re-fetch
+        season_type = g.get("season_type") or (prev["season_type"] if prev else None)
         row = {
             "game_id": g["game_id"], "source": g["source"], "season": g["season"],
+            "season_type": season_type,
             "game_date_et": g["game_date_et"] or "", "tipoff_utc": g["tipoff_utc"],
             "home_team": g["home_team"], "away_team": g["away_team"],
             "home_score": g["home_score"], "away_score": g["away_score"],
@@ -117,6 +120,12 @@ def _store_espn_odds(con, odds: dict):
         items.append(("total", f"line {odds['total']:g}", odds["total"], None))
     if odds.get("spread_home") is not None:
         items.append(("spread", f"home {odds['spread_home']:+g}", odds["spread_home"], None))
+    # observed over/under prices for the total (usually both sides) — these
+    # turn the total from a line into a PRICE, which is what a P&L needs
+    if odds.get("total") is not None and odds.get("over_odds") is not None:
+        items.append(("total", f"over {odds['total']:g}", odds["total"], odds["over_odds"]))
+    if odds.get("total") is not None and odds.get("under_odds") is not None:
+        items.append(("total", f"under {odds['total']:g}", odds["total"], odds["under_odds"]))
     if odds.get("ml_home") is not None:
         items.append(("ml", "home", None, odds["ml_home"]))
     if odds.get("ml_away") is not None:

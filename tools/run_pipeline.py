@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nbacomp import (audit, backtest, db, paper, signal_backtest, sitegen,  # noqa: E402
-                     strategies as S, util)
+                     strategies as S, util, validation)
 
 BACKTEST_SEASONS = ["2023-24", "2024-25", "2025-26"]
 
@@ -32,6 +32,7 @@ def register_strategies(con):
             "expected_edge": j(m["expected_edge"]), "failure_modes": j(m["failure_modes"]),
             "data_limitations": j(m["data_limitations"]),
             "lookahead_controls": j(m["lookahead_controls"]), "lineage": m.get("lineage"),
+            "version_history": j(m.get("history") or []),
             "status": "active", "created_utc": ts, "updated_utc": ts}, replace=True)
 
 
@@ -54,6 +55,24 @@ def main():
         n_settled = paper.settle_finished(con)
         paper.mark_open_positions(con)
         print(f"forward: new={n_new} settled={n_settled}")
+
+        # 2a) quarantine: flag open bets whose decision state is invalid
+        q = paper.quarantine_bets(con, run_id=f"quarantine-{util.utcnow_iso()[:10]}")
+        if q:
+            print("quarantined:", q)
+
+        # 2b) validation tiers: derived from stored evidence, published so the
+        # site can show exactly why each strategy is trading or parked
+        tiers = validation.all_tiers(con)
+        from collections import Counter
+        print("tiers:", dict(Counter(t["tier"] for t in tiers.values())))
+        for sid, t in tiers.items():
+            db.insert(con, "meta", {
+                "key": f"tier:{sid}",
+                "value": json.dumps({"tier": t["tier"], "detail": t["detail"],
+                                     "policy": t["policy"], "reason": t["reason"],
+                                     "run_id": (t["evidence"] or {}).get("run_id")}),
+                "updated_utc": util.utcnow_iso()}, replace=True)
 
         # 3) audit
         summary = audit.run_checks(con)

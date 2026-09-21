@@ -96,6 +96,7 @@ def parse_scoreboard(js: dict) -> list[dict]:
                 "game_id": f"espn:{ev.get('id')}",
                 "source": "espn",
                 "season": _season_label(ev.get("season")),
+                "season_type": _season_type_label(ev.get("season")),
                 "game_date_et": _et_date(ev.get("date")),
                 "tipoff_utc": ev.get("date"),
                 "home_team": home["abbrev"],
@@ -165,6 +166,31 @@ def _season_label(season: dict | None) -> str:
         return "unknown"
 
 
+def _season_type_label(season: dict | None) -> str | None:
+    """ESPN season.type -> preseason|regular|postseason (None when absent).
+
+    ESPN encodes season type as 1=preseason, 2=regular season, 3=postseason
+    and also exposes a slug. Nothing is inferred when the field is missing:
+    the value stays None ("unrecorded") rather than being guessed from dates,
+    because a wrong preseason/regular label would silently corrupt every
+    rolling feature built from it.
+    """
+    try:
+        st = (season or {}).get("type")
+        slug = str((season or {}).get("slug") or "")
+        if isinstance(st, str) and st.isdigit():
+            st = int(st)
+        if st == 1 or slug in ("preseason", "pre-season"):
+            return "preseason"
+        if st == 2 or slug in ("regular-season", "regular"):
+            return "regular"
+        if st in (3, 4) or slug in ("postseason", "post-season", "playoffs"):
+            return "postseason"
+        return None
+    except Exception:
+        return None
+
+
 def _et_date(iso_date: str | None) -> str | None:
     dt = _parse(iso_date)
     if not dt:
@@ -208,8 +234,25 @@ def _parse_odds(o: dict, game_id: str) -> dict | None:
                 out["spread_home"] = float(spread)
             except (TypeError, ValueError):
                 pass
+        # Total price (both sides). ESPN exposes `overOdds`/`underOdds` for
+        # many events; when present these are REAL observed prices, which
+        # replaces the blind -110 assumption for totals on those games.
+        for key, src_key in (("over_odds", "overOdds"), ("under_odds", "underOdds")):
+            v = o.get(src_key)
+            if v is None:
+                v = ((o.get("current") or {}).get(src_key)
+                     if isinstance(o.get("current"), dict) else None)
+            if isinstance(v, (int, float, str)):
+                try:
+                    out[key] = int(float(v))
+                except (TypeError, ValueError):
+                    pass
         h = o.get("homeTeamOdds") or {}
         a = o.get("awayTeamOdds") or {}
+        if not isinstance(h, dict):
+            h = {}
+        if not isinstance(a, dict):
+            a = {}
         if isinstance(h.get("moneyLine"), (int, float)):
             out["ml_home"] = int(h["moneyLine"])
         if isinstance(a.get("moneyLine"), (int, float)):

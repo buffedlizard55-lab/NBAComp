@@ -9,7 +9,7 @@
 <nav><a href="index.html">Dashboard</a><a href="leaderboard.html">Leaderboard</a><a href="strategies.html" class="active">Strategies</a><a href="upcoming.html">Upcoming Bets</a><a href="positions.html">Open Positions</a><a href="history.html">Trade History</a><a href="sources.html">Data Sources</a><a href="research.html">Research</a><a href="methodology.html">Methodology</a></nav></header>
 <main><h1>Strategies</h1><p class='muted'>Every strategy is a versioned, testable hypothesis with explicit rules. Backtest and forward records are labeled separately and never mixed.</p>
 <div class="strategy-card" id="NBA-001">
-<h2>Rest Edge Raven <span class="mono">NBA-001 v1.0.0</span>
+<h2>Rest Edge Raven <span class="mono">NBA-001 v1.1.0</span>
 <span class="pill">Rest &amp; Scheduling</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@RestEdgeRaven</b></p>
@@ -18,38 +18,44 @@
 <ul class="rules"><li>home team rested &gt;= 2 days</li><li>away team on 2nd night of B2B (rest_days==0)</li><li>model_prob - market_prob &gt;= 0.04</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>kalshi:markets</code> <code>kalshi:candles</code> <code>nba:teamgamelogs</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> Literature prior: B2B cost ~1.5-3.0 pts; exploiting only when market gap &gt;= 4pp</p>
+<p><b>Verification status.</b> <span class='pill tier-outcome_validated'>outcome validated</span> 65.0% hits vs 54.9% base rate on 123 firings (+10.2%). <span class='muted'>decision rule beat its base rate on verified results (outcome-only, no prices)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 50% toward the market · max credible edge 8% · stake scale 0.50x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 (a) Elo margin-of-victory multiplier corrected to the published FiveThirtyEight form; (b) rolling state restricted to the current season and refused when older than 14 days; (c) central probability calibration + tier gating. Rule text unchanged. Expected-edge note restated from our own measurement: B2B costs -2.11 net points (t=-4.24, n=1321 team-games).</li></ul></details>
 <p><b>Look-ahead controls.</b> ['rest computed only from games strictly before decision date', 'price must be timestamped at or before decision']</p>
 <details><summary>Failure modes</summary><ul><li>market already prices B2B</li><li>small sample</li><li>rest policies change by team</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>historical prices only where Kalshi candles exist</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 80/123 · hit rate 65.0% vs base rate 54.9% (+10.2pp) · Brier 0.209 · avg model prob 61.1% · streaks 8 hit / 5 miss</td></tr><tr><td>2023-24</td><td>hits 31/49 · hit rate 63.3% vs base rate 54.9% (+8.4pp) · Brier 0.201 · avg model prob 60.6% · streaks 6 hit / 5 miss</td></tr><tr><td>2024-25</td><td>hits 22/33 · hit rate 66.7% vs base rate 54.6% (+12.1pp) · Brier 0.166 · avg model prob 60.0% · streaks 6 hit / 4 miss</td></tr><tr><td>2025-26</td><td>hits 27/41 · hit rate 65.8% vs base rate 55.1% (+10.7pp) · Brier 0.255 · avg model prob 62.6% · streaks 8 hit / 3 miss</td></tr></tbody></table></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-002">
-<h2>Pace Pulse Pete <span class="mono">NBA-002 v1.0.0</span>
+<h2>Pace Pulse Pete <span class="mono">NBA-002 v1.1.0</span>
 <span class="pill">Pace &amp; Totals</span>
-<span class="pill status">active (open bets)</span></h2>
+<span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@PacePulsePete</b></p>
 <p><b>Thesis.</b> Game totals can be modeled from rolling possession pace and rolling offensive/defensive efficiency; the market is slow to update when a team's pace or efficiency regime shifts.</p>
 <p><b>Rules.</b> Computes expected total from last-15-games rolling pace and ORtg/DRtg and bets over/under when the model differs from the market line by &gt;= 8 points.</p>
 <ul class="rules"><li>both teams &gt;= 5 prior games with box data</li><li>|model_total - market_total| &gt;= 8</li></ul>
 <p><b>Markets.</b> <code>kalshi:total</code> <code>total</code>  <br><b>Data sources.</b> <code>nba:teamgamelogs</code> <code>espn:scoreboard</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-failed'>failed</span> model MAE 17.04 is WORSE than the naive league-mean MAE 16.69 over 2666 evaluated games. <span class='muted'>verified evidence contradicts the rule; parked, not hidden</span></p><p class='muted small'>Policy from this tier: NO bets (parked) · probability shrunk 100% toward the market · max credible edge 0% · stake scale 0.00x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 (a) same-season, freshness-gated rolling state; (b) totals priced from an observed ESPN over/under price when captured instead of a blind -110; (c) calibration/tier gating. Evidence note: this rule's own outcome-only validation is WORSE than the naive league-mean baseline (MAE 17.04 vs 16.69) and its directional hit rate is 49.2% on 535 firings, so the rule is PARKED by its own evidence (tier: failed) pending new evidence.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['rolling windows strictly exclude the current game']</p>
 <details><summary>Failure modes</summary><ul><li>injury shifts pace</li><li>garbage time inflates totals</li><li>rolling window lag</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>team gamelogs lack opponent shooting splits</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>n 0 · MAE 17.04 pts vs season-mean baseline 16.69</td></tr><tr><td>2024-25</td><td>n 0 · MAE 16.98 pts vs season-mean baseline 16.78</td></tr><tr><td>2025-26</td><td>n 0 · MAE 17.09 pts vs season-mean baseline 16.61</td></tr></tbody></table></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+<div class='perf'><b>Quarantined</b>: 10 bet(s) (10 open) excluded from the figures above because their decision state was flagged defective; settled P&L +$0.00 is listed on <a href='positions.html#quarantined'>positions.html</a>.</div>
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><div class='twrap'><table class=''><thead><tr><th>Game</th><th>Market</th><th>Pick</th><th>Price</th><th>Model</th><th>Result</th><th>P&amp;L</th></tr></thead><tbody><tr><td>PHI @ NYK 2026-10-20</td><td>total</td><td>under 231.5</td><td>-110.0</td><td>0.713</td><td>pending</td><td>—</td></tr><tr><td>OKC @ SAS 2026-10-20</td><td>total</td><td>under 230.5</td><td>-110.0</td><td>0.750</td><td>pending</td><td>—</td></tr><tr><td>MIN @ MIA 2026-10-21</td><td>total</td><td>under 242.5</td><td>-110.0</td><td>0.830</td><td>pending</td><td>—</td></tr><tr><td>UTA @ MEM 2026-10-21</td><td>total</td><td>under 241.5</td><td>-110.0</td><td>0.689</td><td>pending</td><td>—</td></tr><tr><td>IND @ NOP 2026-10-21</td><td>total</td><td>under 242.5</td><td>-110.0</td><td>0.706</td><td>pending</td><td>—</td></tr></tbody></table></div></details>
 </div>
 <div class="strategy-card" id="NBA-003">
-<h2>Elo Oracle <span class="mono">NBA-003 v1.0.0</span>
+<h2>Elo Oracle <span class="mono">NBA-003 v1.1.0</span>
 <span class="pill">Team Ratings / Moneyline</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@EloOracle</b></p>
@@ -58,18 +64,21 @@
 <ul class="rules"><li>edge &gt;= 0.04</li><li>price available at decision time</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>nba:teamgamelogs</code> <code>kalshi:candles</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-outcome_validated'>outcome validated</span> 65.4% hits vs 51.9% base rate on 2727 firings (+13.5%). <span class='muted'>decision rule beat its base rate on verified results (outcome-only, no prices)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 50% toward the market · max credible edge 8% · stake scale 0.50x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 Elo margin-of-victory multiplier corrected (the previous implementation dropped the rating-gap denominator). Rule text unchanged; ratings differ, so the version is bumped.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['Elo updated only with games before decision']</p>
 <details><summary>Failure modes</summary><ul><li>Elo lags roster news</li><li>regression to market efficiency</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>no lineup-level ratings yet</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
-<details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 1783/2724 · hit rate 65.5% vs base rate 52.0% (+13.5pp) · Brier 0.217 · avg model prob 69.2% · streaks 18 hit / 7 miss</td></tr><tr><td>2024-25</td><td>hits 840/1319 · hit rate 63.7% vs base rate 52.0% (+11.7pp) · Brier 0.221 · avg model prob 68.0% · streaks 16 hit / 7 miss</td></tr><tr><td>2025-26</td><td>hits 943/1405 · hit rate 67.1% vs base rate 51.9% (+15.2pp) · Brier 0.214 · avg model prob 70.3% · streaks 18 hit / 6 miss</td></tr></tbody></table></details>
+<details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 1784/2727 · hit rate 65.4% vs base rate 51.9% (+13.5pp) · Brier 0.217 · avg model prob 69.2% · streaks 18 hit / 7 miss</td></tr><tr><td>2024-25</td><td>hits 841/1322 · hit rate 63.6% vs base rate 52.0% (+11.6pp) · Brier 0.221 · avg model prob 68.0% · streaks 16 hit / 7 miss</td></tr><tr><td>2025-26</td><td>hits 943/1405 · hit rate 67.1% vs base rate 51.9% (+15.2pp) · Brier 0.214 · avg model prob 70.3% · streaks 18 hit / 6 miss</td></tr></tbody></table></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-004">
-<h2>Line Move Tracker <span class="mono">NBA-004 v1.1.0</span>
+<h2>Line Move Tracker <span class="mono">NBA-004 v1.2.0</span>
 <span class="pill">Market Movement</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@LineMoveTracker</b></p>
@@ -78,18 +87,21 @@
 <ul class="rules"><li>|price(T-2h) - price(T-48h)| &gt;= 8 cents</li><li>both prices exist</li><li>fixed 1% stake (directional rule; no probability edge claimed)</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code>  <br><b>Data sources.</b> <code>kalshi:candles</code> <code>kalshi:orderbooks</code> </p>
 <p><b>Sizing.</b> FIXED 1% of current bankroll (v1.1.0; Kelly with model_prob=market price is identically zero — the v1.0.0 rule could never trade) · <b>Expected edge.</b> no assumed edge; movement is treated as informative ONLY by test result</p>
+<p><b>Verification status.</b> <span class='pill tier-weak'>weak</span> no rule firings recorded. <span class='muted'>evidence present but inconclusive (small sample or inside the noise band)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.1.0</b> → v1.2.0 (2026-09-21): 2026-09-21 central calibration/tier policy applied to sizing (v1.1.0 fixed the identically-zero Kelly stake). Signal rule unchanged.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['both price points strictly before decision']</p>
 <details><summary>Failure modes</summary><ul><li>movement already complete</li><li>noise at low liquidity</li><li>one-sided flow</li><li>fixed stake overbets strong moves and underbets weak ones</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>candles are last-trade based; historical book depth unknown</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-005">
-<h2>Injury IQ Ivan <span class="mono">NBA-005 v1.0.0</span>
+<h2>Injury IQ Ivan <span class="mono">NBA-005 v1.1.0</span>
 <span class="pill">Injuries</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@InjuryIQIvan</b></p>
@@ -98,18 +110,21 @@
 <ul class="rules"><li>injury listing published before decision time</li><li>edge &gt;= 0.04</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>espn:injuries</code> <code>nba:playergamelogs</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> Literature prior: starter absence ~2.0-4.5 pts depending on usage</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 Elo MOV correction + central calibration/tier policy.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['only listings with published_utc &lt;= decision are used']</p>
 <details><summary>Failure modes</summary><ul><li>market reacts faster than our collection cadence</li><li>injury listing lag</li><li>next-man-up variance</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>ESPN injury board is not an official league confirmation</li><li>historical backtest impossible without dated injury history</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-006">
-<h2>Home Court Hana <span class="mono">NBA-006 v1.0.0</span>
+<h2>Home Court Hana <span class="mono">NBA-006 v1.1.0</span>
 <span class="pill">Home/Away</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@HomeCourtHana</b></p>
@@ -118,18 +133,21 @@
 <ul class="rules"><li>home rolling home-game net rating - away rolling road-game net rating &gt; 4.0</li><li>edge &gt;= 0.04</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>nba:teamgamelogs</code> <code>kalshi:candles</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-outcome_validated'>outcome validated</span> 63.5% hits vs 54.9% base rate on 1314 firings (+8.6%). <span class='muted'>decision rule beat its base rate on verified results (outcome-only, no prices)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 50% toward the market · max credible edge 8% · stake scale 0.50x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 Elo MOV correction, same-season freshness gate, central calibration/tier policy.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['rolling splits exclude current game']</p>
 <details><summary>Failure modes</summary><ul><li>splits are noisy at small n</li><li>travel/schedule confounds</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>needs &gt;= 8 home games / 8 road games</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 834/1314 · hit rate 63.5% vs base rate 54.9% (+8.6pp) · Brier 0.216 · avg model prob 72.7% · streaks 10 hit / 6 miss</td></tr><tr><td>2024-25</td><td>hits 371/570 · hit rate 65.1% vs base rate 54.6% (+10.5pp) · Brier 0.216 · avg model prob 74.8% · streaks 10 hit / 5 miss</td></tr><tr><td>2025-26</td><td>hits 463/744 · hit rate 62.2% vs base rate 55.1% (+7.1pp) · Brier 0.216 · avg model prob 71.2% · streaks 9 hit / 6 miss</td></tr></tbody></table></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-007">
-<h2>Road Warrior Rex <span class="mono">NBA-007 v1.0.0</span>
+<h2>Road Warrior Rex <span class="mono">NBA-007 v1.1.0</span>
 <span class="pill">Travel &amp; Schedule Spots</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@RoadWarriorRex</b></p>
@@ -138,18 +156,21 @@
 <ul class="rules"><li>away road_trip_len &gt;= 5</li><li>away tz_shift &gt;= 2</li><li>edge &gt;= 0.04</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>kalshi:candles</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-outcome_validated'>outcome validated</span> 59.7% hits vs 54.9% base rate on 57 firings (+4.8%). <span class='muted'>decision rule beat its base rate on verified results (outcome-only, no prices)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 50% toward the market · max credible edge 8% · stake scale 0.50x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 Elo MOV correction, same-season freshness gate, central calibration/tier policy. Measured note: road-trip finales (5+ away games) hit 61.8% vs a 54.9% base rate on 76 firings (z=1.22) — promising, underpowered.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['trip length computed from strictly prior games']</p>
 <details><summary>Failure modes</summary><ul><li>charters erase travel cost</li><li>rare spot -&gt; small sample</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>great-circle city distances, not charter flight data</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 34/57 · hit rate 59.7% vs base rate 54.9% (+4.8pp) · Brier 0.178 · avg model prob 65.8% · streaks 8 hit / 4 miss</td></tr><tr><td>2023-24</td><td>hits 13/21 · hit rate 61.9% vs base rate 54.9% (+7.0pp) · Brier 0.146 · avg model prob 64.6% · streaks 7 hit / 4 miss</td></tr><tr><td>2024-25</td><td>hits 14/22 · hit rate 63.6% vs base rate 54.6% (+9.1pp) · Brier 0.212 · avg model prob 74.9% · streaks 8 hit / 3 miss</td></tr><tr><td>2025-26</td><td>hits 7/14 · hit rate 50.0% vs base rate 55.1% (-5.1pp) · Brier 0.172 · avg model prob 53.0% · streaks 3 hit / 2 miss</td></tr></tbody></table></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-008">
-<h2>Glass Guru <span class="mono">NBA-008 v1.0.0</span>
+<h2>Glass Guru <span class="mono">NBA-008 v1.1.0</span>
 <span class="pill">Player Props (Rebounds)</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@GlassGuru</b></p>
@@ -158,18 +179,21 @@
 <ul class="rules"><li>rolling5 REB - line &gt;= 1.5</li><li>minutes rolling5 &gt;= 20</li><li>market exists</li></ul>
 <p><b>Markets.</b> <code>kalshi:prop:rebounds</code>  <br><b>Data sources.</b> <code>nba:playergamelogs</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 central calibration/tier policy (props are forward-only: no free historical prop prices exist).</li></ul></details>
 <p><b>Look-ahead controls.</b> ['props priced only from snapshots before decision']</p>
 <details><summary>Failure modes</summary><ul><li>role changes</li><li>garbage time</li><li>prop lines already sharp</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>requires Kalshi rebound-prop series; auto-activates when discovered</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-009">
-<h2>Dime Doc <span class="mono">NBA-009 v1.0.0</span>
+<h2>Dime Doc <span class="mono">NBA-009 v1.1.0</span>
 <span class="pill">Player Props (Assists)</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@DimeDoc</b></p>
@@ -178,18 +202,21 @@
 <ul class="rules"><li>rolling5 AST - line &gt;= 1.2</li><li>minutes rolling5 &gt;= 20</li><li>market exists</li></ul>
 <p><b>Markets.</b> <code>kalshi:prop:assists</code>  <br><b>Data sources.</b> <code>nba:playergamelogs</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 central calibration/tier policy (forward-only).</li></ul></details>
 <p><b>Look-ahead controls.</b> ['props priced only from snapshots before decision']</p>
 <details><summary>Failure modes</summary><ul><li>teammate shooting variance</li><li>lineup changes</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>requires prop series discovery</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-010">
-<h2>Regime Ranger <span class="mono">NBA-010 v1.0.0</span>
+<h2>Regime Ranger <span class="mono">NBA-010 v1.1.0</span>
 <span class="pill">Three-Point Regression</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@RegimeRanger</b></p>
@@ -198,18 +225,21 @@
 <ul class="rules"><li>rolling10 3P% - season 3P% &gt; +0.035 and 3PA/game &gt;= 35 -&gt; under</li><li>season 3P% - rolling10 3P% &gt; 0.035 and 3PA/game &gt;= 35 -&gt; over</li><li>edge vs line-implied prob &gt;= 0.03</li></ul>
 <p><b>Markets.</b> <code>kalshi:total</code> <code>total</code>  <br><b>Data sources.</b> <code>nba:teamgamelogs</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; regression hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-weak'>weak</span> no rule firings recorded. <span class='muted'>evidence present but inconclusive (small sample or inside the noise band)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 observed-price totals pricing + calibration/tier policy; same-season freshness gate.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['season-to-date stats end strictly before current game']</p>
 <details><summary>Failure modes</summary><ul><li>real offensive regime changes</li><li>small samples</li><li>both-teams-hot seasons</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>team logs do not include opponent 3P defense</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-011">
-<h2>Profile Sage <span class="mono">NBA-011 v1.0.0</span>
+<h2>Profile Sage <span class="mono">NBA-011 v1.1.0</span>
 <span class="pill">Shot Profile / Offensive Rebounding</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@ProfileSage</b></p>
@@ -218,18 +248,21 @@
 <ul class="rules"><li>team OREB rates &gt;= league 60th pct (rolling)</li><li>|model-market| &gt;= 6</li></ul>
 <p><b>Markets.</b> <code>kalshi:total</code> <code>total</code>  <br><b>Data sources.</b> <code>nba:teamgamelogs</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-weak'>weak</span> no rule firings recorded. <span class='muted'>evidence present but inconclusive (small sample or inside the noise band)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 observed-price totals pricing + calibration/tier policy; same-season freshness gate.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['rolling windows exclude current game']</p>
 <details><summary>Failure modes</summary><ul><li>lineup size changes</li><li>rebounding is noisy</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>no opponent shot-profile splits in team logs</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-012">
-<h2>Market Mirror Mia <span class="mono">NBA-012 v1.0.0</span>
+<h2>Market Mirror Mia <span class="mono">NBA-012 v1.1.0</span>
 <span class="pill">Cross-Market Divergence</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@MarketMirrorMia</b></p>
@@ -238,18 +271,21 @@
 <ul class="rules"><li>|kalshi_prob - devigged_ml_prob| &gt;= 0.04 at decision time</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>kalshi:markets</code> <code>kalshi:orderbooks</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> bounded by execution costs; measured net</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 calibration/tier policy. Note: no ESPN moneyline snapshot has been captured yet, so this cross-market rule has never been able to fire.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['both prices timestamped at decision time']</p>
 <details><summary>Failure modes</summary><ul><li>divergence = real information one venue has</li><li>fee drag</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>ESPN odds snapshots only exist from collection start forward</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-013">
-<h2>Quarter Quest <span class="mono">NBA-013 v1.1.0</span>
+<h2>Quarter Quest <span class="mono">NBA-013 v1.2.0</span>
 <span class="pill">Quarter / Half Markets</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@QuarterQuest</b></p>
@@ -258,18 +294,21 @@
 <ul class="rules"><li>game has a mapped KXNBA1H market with a live ask</li><li>|model_half_prob - market_prob| &gt;= 0.04</li></ul>
 <p><b>Markets.</b> <code>kalshi:1h</code>  <br><b>Data sources.</b> <code>kalshi:series-discovery</code> <code>kalshi:orderbooks</code> <code>espn:scoreboard (in-game quarters)</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.1.0</b> → v1.2.0 (2026-09-21): 2026-09-21 calibration/tier policy applied to 1H bets (the traded probability is now shrunk toward the market ask); rule text unchanged.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['model from strictly prior games; price = observed ask at decision; settlement only from observed half data']</p>
 <details><summary>Failure modes</summary><ul><li>1H markets thin/illiquid</li><li>half margin SD prior wrong</li><li>settlement data gaps (quarter snapshots depend on 6h cadence)</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>quarter scores only where in-game scoreboard snapshots were captured; 1H history starts at first listing</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-014">
-<h2>Blowout Blair <span class="mono">NBA-014 v1.0.0</span>
+<h2>Blowout Blair <span class="mono">NBA-014 v1.1.0</span>
 <span class="pill">Game Script / Garbage Time</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@BlowoutBlair</b></p>
@@ -278,18 +317,21 @@
 <ul class="rules"><li>|elo_margin| &gt;= 13</li><li>prop line listed for favorite's top-3 minutes players</li><li>rolling5 line gap &gt;= 1.0 toward under</li></ul>
 <p><b>Markets.</b> <code>kalshi:prop:points</code>  <br><b>Data sources.</b> <code>nba:playergamelogs</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 calibration/tier policy (forward-only).</li></ul></details>
 <p><b>Look-ahead controls.</b> ['props priced only from snapshots before decision']</p>
 <details><summary>Failure modes</summary><ul><li>blowouts by bench-heavy leads still run</li><li>coach rotation choices</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>requires prop series discovery</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-015">
-<h2>DefRtg Lena <span class="mono">NBA-015 v1.0.0</span>
+<h2>DefRtg Lena <span class="mono">NBA-015 v1.1.0</span>
 <span class="pill">Defensive Matchup</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@DefRtgLena</b></p>
@@ -298,18 +340,21 @@
 <ul class="rules"><li>home_team_rolling games &gt;= 10</li><li>away_team_rolling games &gt;= 10</li><li>home_DRtg &lt;= 110</li><li>away_ORtg &gt;= 115</li><li>model total &lt;= line - 4</li></ul>
 <p><b>Markets.</b> <code>kalshi:total</code> <code>total</code>  <br><b>Data sources.</b> <code>nba:teamgamelogs</code> <code>espn:scoreboard</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-weak'>weak</span> no rule firings recorded. <span class='muted'>evidence present but inconclusive (small sample or inside the noise band)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 calibration/tier policy + observed-price totals path.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['rolling windows strictly exclude the current game']</p>
 <details><summary>Failure modes</summary><ul><li>rate stats noisy early season</li><li>matchup effect already in price</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>DRtg/ORtg are estimated from team gamelogs (no opponent shot splits)</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-016">
-<h2>FoulTone Fern <span class="mono">NBA-016 v1.0.0</span>
+<h2>FoulTone Fern <span class="mono">NBA-016 v1.1.0</span>
 <span class="pill">Foul Rate / Free Throws</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@FoulToneFern</b></p>
@@ -318,18 +363,21 @@
 <ul class="rules"><li>both rolling-10 games &gt;= 5</li><li>(home_fta - away_opp_fta &gt;= 7) OR (away_fta - home_opp_fta &gt;= 7)</li><li>model total &lt;= line - 5</li></ul>
 <p><b>Markets.</b> <code>kalshi:total</code> <code>total</code>  <br><b>Data sources.</b> <code>nba:teamgamelogs</code> <code>espn:scoreboard</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 calibration/tier policy + observed-price totals path.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['rolling windows strictly exclude the current game']</p>
 <details><summary>Failure modes</summary><ul><li>referees swap trends across seasons</li><li>small samples</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>FT attempts only - free throw rate approximated</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-017">
-<h2>PaceMatch Quincy <span class="mono">NBA-017 v1.0.0</span>
+<h2>PaceMatch Quincy <span class="mono">NBA-017 v1.1.0</span>
 <span class="pill">Pace Mismatch</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@PaceMatchQuincy</b></p>
@@ -338,18 +386,21 @@
 <ul class="rules"><li>rolling-15 games &gt;= 5 each</li><li>abs(home_pace - away_pace) &gt;= 5</li><li>|model_total - line| &gt;= 5</li></ul>
 <p><b>Markets.</b> <code>kalshi:total</code> <code>total</code>  <br><b>Data sources.</b> <code>nba:teamgamelogs</code> <code>espn:scoreboard</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 calibration/tier policy + observed-price totals path.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['rolling windows strictly exclude the current game']</p>
 <details><summary>Failure modes</summary><ul><li>fast team forced into slow game by coach</li><li>small samples</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>no opponent-pace interaction in current rolling formulation</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-018">
-<h2>Overtone Olive <span class="mono">NBA-018 v1.0.0</span>
+<h2>Overtone Olive <span class="mono">NBA-018 v1.1.0</span>
 <span class="pill">Overtone Watcher</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@OvertoneOlive</b></p>
@@ -358,18 +409,21 @@
 <ul class="rules"><li>ot_period observed in box score</li></ul>
 <p><b>Markets.</b> <code>final-score watcher</code>  <br><b>Data sources.</b> <code>espn:summary</code> </p>
 <p><b>Sizing.</b> no stake (observer strategy; logged for future OT market discovery) · <b>Expected edge.</b> unknown - no OT market currently available</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 central probability calibration + tier gating applied to every placement path; rule text unchanged. Unproven: this rule has recorded no firings, so it trades only at the 'forward_only' (weak) stake scale.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['OT detection strictly after game status = final']</p>
 <details><summary>Failure modes</summary><ul><li>no executable signal</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>no Kalshi OT-specific market</li><li>regulation-only MML/total markets may settle differently</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-019">
-<h2>LineupSpot Larry <span class="mono">NBA-019 v1.0.0</span>
+<h2>LineupSpot Larry <span class="mono">NBA-019 v1.1.0</span>
 <span class="pill">Starting Lineup</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@LineupSpotLarry</b></p>
@@ -378,18 +432,21 @@
 <ul class="rules"><li>promoted-starter minutes-rolling &gt;= 22</li><li>edge vs market &gt;= 0.04</li><li>starting-lineup feed verifiable</li></ul>
 <p><b>Markets.</b> <code>1h (KXNBA1H) when available</code> <code>first-quarter</code>  <br><b>Data sources.</b> <code>nba:starters (status blocked in current env)</code> <code>espn:summary</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 Elo MOV correction + calibration/tier policy.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['only lineups published strictly before decision']</p>
 <details><summary>Failure modes</summary><ul><li>limited lineup historical archive</li><li>announcement timing</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>no free historical starting-lineup archive was found</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-020">
-<h2>Blowout Bounce <span class="mono">NBA-020 v1.0.0</span>
+<h2>Blowout Bounce <span class="mono">NBA-020 v1.1.0</span>
 <span class="pill">Game Script / Motivation</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@BlowoutBounce</b></p>
@@ -398,18 +455,21 @@
 <ul class="rules"><li>team lost previous game by &gt;= 18</li><li>(elo_prob + 0.02) - market_prob &gt;= 0.04</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>kalshi:markets</code> <code>kalshi:candles</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; the +2pp bounce is the hypothesis itself</p>
+<p><b>Verification status.</b> <span class='pill tier-failed'>failed</span> 40.6% hits vs 50.3% base rate on 976 firings (-9.7%). <span class='muted'>verified evidence contradicts the rule; parked, not hidden</span></p><p class='muted small'>Policy from this tier: NO bets (parked) · probability shrunk 100% toward the market · max credible edge 0% · stake scale 0.00x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 Elo MOV correction + calibration/tier policy. Evidence note: the rule's own sweep result is strongly NEGATIVE (41.0% hit on 1,043 firings vs a 49.9% base rate, z=-5.75), so it is PARKED by its own evidence (tier: failed).</li></ul></details>
 <p><b>Look-ahead controls.</b> ['previous game must be final before the decision; price at or before decision']</p>
 <details><summary>Failure modes</summary><ul><li>market already adjusts for blowout losses</li><li>one-off event (lockout, mass DNP)</li><li>small sample</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>'previous game' = chronological predecessor in the games table; no in-between-game events (trade deadline etc.)</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 396/976 · hit rate 40.6% vs base rate 50.3% (-9.7pp) · Brier 0.211 · avg model prob 44.8% · streaks 5 hit / 12 miss</td></tr><tr><td>2023-24</td><td>hits 123/298 · hit rate 41.3% vs base rate 50.2% (-8.9pp) · Brier 0.219 · avg model prob 47.8% · streaks 5 hit / 9 miss</td></tr><tr><td>2024-25</td><td>hits 131/337 · hit rate 38.9% vs base rate 50.1% (-11.2pp) · Brier 0.217 · avg model prob 43.1% · streaks 5 hit / 12 miss</td></tr><tr><td>2025-26</td><td>hits 142/341 · hit rate 41.6% vs base rate 50.5% (-8.9pp) · Brier 0.199 · avg model prob 43.9% · streaks 5 hit / 10 miss</td></tr></tbody></table></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-021">
-<h2>Streak Skeptic <span class="mono">NBA-021 v1.0.0</span>
+<h2>Streak Skeptic <span class="mono">NBA-021 v1.1.0</span>
 <span class="pill">Streak Persistence / Market Overreaction</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@StreakSkeptic</b></p>
@@ -418,18 +478,21 @@
 <ul class="rules"><li>|streak| &gt;= 4 games</li><li>sign-adjusted (elo_prob +/- 0.03) - market_prob &gt;= 0.04</li></ul>
 <p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>kalshi:markets</code> <code>kalshi:candles</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; the +/-3pp overreaction is the hypothesis</p>
+<p><b>Verification status.</b> <span class='pill tier-failed'>failed</span> 34.5% hits vs 49.9% base rate on 1455 firings (-15.4%). <span class='muted'>verified evidence contradicts the rule; parked, not hidden</span></p><p class='muted small'>Policy from this tier: NO bets (parked) · probability shrunk 100% toward the market · max credible edge 0% · stake scale 0.00x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 Elo MOV correction + calibration/tier policy. Evidence note: fading 4+ game streaks hit 37.8% on 777 firings vs a 49.8% base rate (z=-6.69); the rule is PARKED (tier: failed) and NBA-024 trades the measured opposite direction.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['streak from strictly prior finals; price at or before decision']</p>
 <details><summary>Failure modes</summary><ul><li>streaks are (near-)random by construction — the edge, if any, lives in the market's reaction, not the team</li><li>small sample</li><li>streak definition disputes (does an OT loss count? yes, final score only)</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>streak length limited to collected seasons</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 502/1455 · hit rate 34.5% vs base rate 49.9% (-15.4pp) · Brier 0.213 · avg model prob 40.7% · streaks 9 hit / 14 miss</td></tr><tr><td>2023-24</td><td>hits 153/446 · hit rate 34.3% vs base rate 50.1% (-15.8pp) · Brier 0.223 · avg model prob 43.1% · streaks 4 hit / 13 miss</td></tr><tr><td>2024-25</td><td>hits 180/493 · hit rate 36.5% vs base rate 49.8% (-13.3pp) · Brier 0.206 · avg model prob 40.8% · streaks 9 hit / 11 miss</td></tr><tr><td>2025-26</td><td>hits 169/516 · hit rate 32.8% vs base rate 49.9% (-17.1pp) · Brier 0.210 · avg model prob 38.6% · streaks 5 hit / 14 miss</td></tr></tbody></table></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
 <div class="strategy-card" id="NBA-022">
-<h2>Rest Rigidity <span class="mono">NBA-022 v1.0.0</span>
+<h2>Rest Rigidity <span class="mono">NBA-022 v1.1.0</span>
 <span class="pill">Rest &amp; Scheduling (Totals)</span>
 <span class="pill status">awaiting-opportunity</span></h2>
 <p class="username">plays as <b>@RestRigidity</b></p>
@@ -438,12 +501,61 @@
 <ul class="rules"><li>max rest &gt;= 3 and min rest &lt;= 1</li><li>rest_asymmetry_total_model - line &gt;= 6</li><li>observed total line exists</li></ul>
 <p><b>Markets.</b> <code>kalshi:total</code> <code>total</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>espn:scoreboard-odds</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%), capped at 3% of bankroll, min $5 · <b>Expected edge.</b> no assumed edge; the +4pt rest asymmetry is the hypothesis</p>
+<p><b>Verification status.</b> <span class='pill tier-failed'>failed</span> model MAE 18.06 is WORSE than the naive league-mean MAE 16.69 over 106 evaluated games. <span class='muted'>verified evidence contradicts the rule; parked, not hidden</span></p><p class='muted small'>Policy from this tier: NO bets (parked) · probability shrunk 100% toward the market · max credible edge 0% · stake scale 0.00x</p>
+<details><summary>Version history (1)</summary><ul><li><b>v1.0.0</b> → v1.1.0 (2026-09-21): 2026-09-21 rest-asymmetry adjustment changed from +4.0 to the MEASURED +1.82 points (n=289 asymmetric-rest games vs 3,318 symmetric, Welch t=1.38 — not statistically significant), plus observed-price totals pricing and calibration/tier policy.</li></ul></details>
 <p><b>Look-ahead controls.</b> ['rest from strictly prior games; line observed at or before decision; -110 fill labeled PRICED-ASSUMPTION']</p>
 <details><summary>Failure modes</summary><ul><li>charters erase the B2B cost</li><li>coaches slow the game in blowouts (garbage time)</li><li>small sample</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>rest measured in calendar days, not minutes of travel</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>n 0 · MAE 18.06 pts vs season-mean baseline 16.69</td></tr><tr><td>2024-25</td><td>n 0 · MAE 20.80 pts vs season-mean baseline 16.78</td></tr><tr><td>2025-26</td><td>n 0 · MAE 16.25 pts vs season-mean baseline 16.61</td></tr></tbody></table></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
+<details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
+<details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
+<details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
+</div>
+<div class="strategy-card" id="NBA-023">
+<h2>Playoff Grind <span class="mono">NBA-023 v1.0.0</span>
+<span class="pill">Season Phase / Totals</span>
+<span class="pill status">awaiting-opportunity</span></h2>
+<p class="username">plays as <b>@PlayoffGrindGus</b></p>
+<p><b>Thesis.</b> Postseason basketball is lower-scoring than the regular season (shorter rotations, half-court possessions, defensive game planning) and a model fitted on regular-season form overstates playoff totals.</p>
+<p><b>Rules.</b> MEASURED (verified results, 3 seasons, 469 games outside the regular-season window vs 3,704 inside): average total 219.0 vs 228.4 — a 9.4-point drop. Rule: in games the schedule labels postseason, take the UNDER when the model total minus 9.4 still sits below the observed line; price = observed ESPN over/under price when captured, else -110 labelled PRICED-ASSUMPTION. Refuses to fire on regular-season games and on unlabelled rows.</p>
+<ul class="rules"><li>game season_type == 'postseason' (observed label, never inferred)</li><li>rolling state fresh (&lt;= 14 days old, same season)</li><li>model_total - 9.4 &lt;= observed_line - 3.0</li></ul>
+<p><b>Markets.</b> <code>total</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>nba:teamgamelogs</code> </p>
+<p><b>Sizing.</b> Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll · <b>Expected edge.</b> measured -9.4 pts season-phase effect (in-sample); price edge UNKNOWN</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<p class='muted small'>No prior versions.</p>
+<p><b>Look-ahead controls.</b> ['rolling state excludes the current game and any other season', 'line and price observed at or before the decision timestamp']</p>
+<details><summary>Failure modes</summary><ul><li>the market already prices the playoff slowdown</li><li>playoff pace varies by series style</li><li>in-sample effect may not repeat</li></ul></details>
+<details><summary>Data limitations</summary><ul><li>season_type is NULL for games collected before 2026-09-21 (never guessed retroactively) so the historical sample is window-based, not label-based</li></ul></details>
+<div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
+<div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+<div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
+<details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
+<details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
+<details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
+</div>
+<div class="strategy-card" id="NBA-024">
+<h2>Momentum Witness <span class="mono">NBA-024 v1.0.0</span>
+<span class="pill">Streaks (counter-hypothesis to NBA-021)</span>
+<span class="pill status">awaiting-opportunity</span></h2>
+<p class="username">plays as <b>@MomentumWitness</b></p>
+<p><b>Thesis.</b> Streak information is NOT fully faded: teams on a 4+ game winning streak keep winning at a higher rate than the unconditional base rate, and teams on a 4+ game losing streak keep losing.</p>
+<p><b>Rules.</b> MEASURED on verified results: backing the team on a 4+ win streak hit 62.2% (fade of it hit 37.8%; z = -6.7 for the fade) and backing the OPPONENT of a 4+ game losing-streak team hit 67.6% (backing the cold team hit 32.4%, z = -10.2). This strategy trades the measured direction: back the streak. It is the explicit counter-hypothesis to NBA-021 StreakSkeptic, whose fade rule the same data contradicts.</p>
+<ul class="rules"><li>one team carries a 4+ game win streak OR the opponent carries a 4+ game losing streak (streaks from strictly prior finals, current season only)</li><li>fresh state</li><li>model edge &gt;= 0.04 after calibration</li></ul>
+<p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>kalshi:markets</code> </p>
+<p><b>Sizing.</b> Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll · <b>Expected edge.</b> measured hit-rate lift vs base rate; price edge UNKNOWN</p>
+<p><b>Verification status.</b> <span class='pill tier-outcome_validated'>outcome validated</span> 64.5% hits vs 50.1% base rate on 1531 firings (+14.4%). <span class='muted'>decision rule beat its base rate on verified results (outcome-only, no prices)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 50% toward the market · max credible edge 8% · stake scale 0.50x</p>
+<p class='muted small'>No prior versions.</p>
+<p><b>Look-ahead controls.</b> ['streaks computed from strictly prior games in the same season', 'prices timestamped at or before the decision']</p>
+<details><summary>Failure modes</summary><ul><li>streaks proxy team quality, which the market already prices</li><li>selection effects in the streak sample</li><li>no price-verified backtest is possible from free data</li></ul></details>
+<details><summary>Data limitations</summary><ul><li>no historical prices exist, so the measured hit rate is not a P&amp;L</li></ul></details>
+<div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
+<details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical NBA price series exists (verified: settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a price-taking backtest is impossible and would require fabricated prices. This section instead validates the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only). It is evidence about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 987/1531 · hit rate 64.5% vs base rate 50.1% (+14.4pp) · Brier 0.209 · avg model prob 63.5% · streaks 13 hit / 9 miss</td></tr><tr><td>2023-24</td><td>hits 301/465 · hit rate 64.7% vs base rate 50.0% (+14.8pp) · Brier 0.207 · avg model prob 62.9% · streaks 7 hit / 4 miss</td></tr><tr><td>2024-25</td><td>hits 329/526 · hit rate 62.5% vs base rate 50.1% (+12.4pp) · Brier 0.207 · avg model prob 63.0% · streaks 11 hit / 9 miss</td></tr><tr><td>2025-26</td><td>hits 357/540 · hit rate 66.1% vs base rate 50.2% (+15.9pp) · Brier 0.212 · avg model prob 64.5% · streaks 13 hit / 5 miss</td></tr></tbody></table></details>
+<div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation (no free historical prices for these markets), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>

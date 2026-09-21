@@ -17,9 +17,31 @@ import json
 from datetime import timedelta
 
 from . import db, engine, strategies as S, util
-from .backtest import (ELO_PER_POINT, EVALUATORS, _winner_probs, _total_setup,
-                       _season_3p, _split_net, margin_to_prob, team_streak)
+from .backtest import (ELO_PER_POINT, EVALUATORS, _field, _roll_state,
+                       _winner_probs, _total_setup, _season_3p, _split_net,
+                       margin_to_prob, team_streak, POSTSEASON_TOTAL_SHIFT,
+                       REST_ASYMMETRY_POINTS)
+from . import validation
 from .model import SD_TOTAL, EloModel, RollingTeamState, expected_total
+
+
+#: Per-strategy open-exposure ceiling as a fraction of the strategy bankroll.
+#: Enforced on the resulting exposure (not the pre-existing one) in every
+#: placement path since 2026-09-21.
+EXPOSURE_CAP_PCT = 0.25
+
+#: SQL predicate selecting bets that are still valid positions. Quarantined
+#: bets (see `quarantine_bets`) are excluded from exposure, available balance
+#: and competition P&L, but they are never deleted or hidden: the site lists
+#: them with their flag and their own settlement P&L.
+EFFECTIVE = ("AND bet_id NOT IN (SELECT bet_id FROM bet_flags "
+             "WHERE severity='critical')")
+
+#: Claimed edges above this are treated as evidence of a data/state defect
+#: rather than opportunity (a 25pt edge against a captured market line is not a
+#: market inefficiency, it is a broken input). Field observation 2026-09-21:
+#: the stale-state defect produced 12.4%–30.6% "edges" on the season openers.
+IMPLAUSIBLE_EDGE = 0.20
 
 
 def _bankroll(con, strategy_id: str) -> float:
@@ -33,7 +55,8 @@ def _bankroll(con, strategy_id: str) -> float:
 def _record_bankroll(con, strategy_id: str, current: float, reason: str):
     settled_open = con.execute(
         "SELECT COALESCE(SUM(stake_usd),0) s FROM bets WHERE strategy_id=? "
-        "AND kind='forward' AND result='pending' AND execution_status='simulated_fill'",
+        f"AND kind='forward' AND result='pending' AND execution_status='simulated_fill' "
+        f"{EFFECTIVE}",
         (strategy_id,)).fetchone()["s"]
     starting = S.STARTING_BANKROLL
     db.insert(con, "bankroll_events", {
@@ -63,9 +86,48 @@ def _available_to_stake(con, strategy_id: str, br: float) -> float:
     """
     open_exp = con.execute(
         "SELECT COALESCE(SUM(stake_usd),0) s FROM bets WHERE strategy_id=? "
-        "AND kind='forward' AND result='pending'",
+        f"AND kind='forward' AND result='pending' {EFFECTIVE}",
         (strategy_id,)).fetchone()["s"]
     return max(0.0, br - open_exp)
+
+
+def _total_price_for(con, ctx, sig) -> tuple[float, bool]:
+    """Observed american price for this total side, else the -110 assumption.
+
+    Wired to the same helper the backtester uses so a totals rule is priced
+    identically in both engines.
+    """
+    from .backtest import _observed_total_price
+    return _observed_total_price(con, ctx, sig, -110)
+
+
+def _open_exposure(con, strategy_id: str) -> float:
+    return float(con.execute(
+        "SELECT COALESCE(SUM(stake_usd),0) s FROM bets WHERE strategy_id=? "
+        f"AND kind='forward' AND result='pending' {EFFECTIVE}",
+        (strategy_id,)).fetchone()["s"] or 0.0)
+
+
+def _exposure_headroom(con, strategy_id: str, br: float,
+                       cap: float = EXPOSURE_CAP_PCT) -> float:
+    """Remaining staking room under the per-strategy open-exposure cap.
+
+    2026-09-21 defect: the old check only refused to *start* a bet once exposure
+    was already >= 25% of bankroll, so the bet that crossed the cap was still
+    placed (the audit then correctly flagged `exposure-cap-violated` three
+    times). The cap is now enforced on the resulting exposure, not on the
+    pre-existing one.
+    """
+    return max(0.0, br * cap - _open_exposure(con, strategy_id))
+
+
+def _apply_tier(con, sig: S.Signal) -> tuple[S.Signal | None, str | None]:
+    """Return (signal, None) if the tier allows it, else (None, reason)."""
+    info = validation.classify(con, sig.strategy_id)
+    kept = validation.apply_policy(con, [sig], tiers={sig.strategy_id: info})
+    if not kept:
+        return None, (f"tier={info['tier']} ({info['detail']})")
+    return kept[0], None
 
 
 def _sig_winner(ctx, sid, side, prob, mkt, price, trigger) -> S.Signal:
@@ -157,11 +219,21 @@ def generate_forward_bets(con) -> int:
         log_by_team.setdefault(r["team"], []).append(dict(r))
     log_pos = {t: 0 for t in log_by_team}
 
-    def advance(team, before):
+    def advance(team, before, season=None):
+        """Same-season, strictly-prior box scores only.
+
+        2026-09-21 defect: without the season filter the forward engine priced
+        the 2026-10-20 openers off box scores from December 2024 / January
+        2025 (the last rows in team_gamelogs) and produced 12-31 point
+        "edges". State older than MAX_STATE_AGE_DAYS is now refused outright
+        by _roll_state below.
+        """
         rows = log_by_team.get(team) or []
         i = log_pos.get(team, 0)
         while i < len(rows) and rows[i]["game_date_et"] < before:
-            rolling.add_game(rows[i])
+            r = rows[i]
+            if season is None or r.get("season") == season:
+                rolling.add_game(r)
             i += 1
         log_pos[team] = i
 
@@ -174,8 +246,8 @@ def generate_forward_bets(con) -> int:
         if (tip - util.parse_iso(now)) < timedelta(hours=1):
             continue  # execution latency guard
         gdate = g["game_date_et"]
-        advance(g["home_team"], gdate)
-        advance(g["away_team"], gdate)
+        advance(g["home_team"], gdate, _field(g, "season"))
+        advance(g["away_team"], gdate, _field(g, "season"))
         game_markets = by_game.get(g["game_id"], {})
         winner = game_markets.get("winner")
         h_hist = [r for r in sched.history.get(g["home_team"], [])
@@ -185,10 +257,11 @@ def generate_forward_bets(con) -> int:
         ctx = {
             "game": g, "decision": decision, "elo": elo,
             "home": g["home_team"], "away": g["away_team"],
-            "h_roll": rolling.team_rolling(g["home_team"]),
-            "a_roll": rolling.team_rolling(g["away_team"]),
-            "h_rest": sched.rest_and_travel(g["home_team"], gdate, True),
-            "a_rest": sched.rest_and_travel(g["away_team"], gdate, False),
+            **_roll_state(rolling, g["home_team"], g["away_team"], gdate),
+            "h_rest": sched.rest_and_travel(g["home_team"], gdate, True,
+                                            _field(g, "season")),
+            "a_rest": sched.rest_and_travel(g["away_team"], gdate, False,
+                                            _field(g, "season")),
             "h_prev": h_hist[-1] if h_hist else None,
             "a_prev": a_hist[-1] if a_hist else None,
             "h_streak": team_streak(h_hist),
@@ -243,7 +316,7 @@ def _winner_signals(con, ctx, live: engine.PricePoint) -> list[S.Signal]:
     # Run the same evaluators used by the backtest so rules are symmetric.
     # Evaluators return winner-market Signals only.
     for sid in ("NBA-001", "NBA-003", "NBA-004", "NBA-005", "NBA-006",
-                "NBA-007", "NBA-020", "NBA-021"):
+                "NBA-007", "NBA-020", "NBA-021", "NBA-024"):
         try:
             fn = EVALUATORS.get(sid)
             if not fn:
@@ -372,12 +445,26 @@ def _total_signals(con, ctx) -> list[S.Signal]:
                     source="espn:line|kalshi:strike",
                     trigger=f"OREB rates {ro:.3f}/{ao:.3f}; model {exp:.1f} vs {lineval:g}"))
 
-    # NBA-022: rest asymmetry (3+ rest days vs 1 day) raises the total +4
+    # NBA-023: postseason total shift (measured -9.4 pts vs regular season).
+    if (_field(ctx_local["game"], "season_type") or "").lower() == "postseason":
+        diff23 = (exp - POSTSEASON_TOTAL_SHIFT) - lineval
+        if diff23 <= -3.0:
+            p_under = 1.0 - util.norm_cdf(diff23 / SD_TOTAL)
+            if p_under - 0.524 >= 0.02:
+                sigs.append(_sig_total(
+                    ctx_local, "NBA-023", "under", lineval, p_under, 0.524,
+                    source="espn:line|kalshi:strike",
+                    trigger=(f"postseason shift -{POSTSEASON_TOTAL_SHIFT:g}: model "
+                             f"{exp:.1f} vs line {lineval:g} ({diff23:+.1f})")))
+
+    # NBA-022: rest asymmetry (3+ rest days vs 1 day) raises the total +1.82
+    # (measured; the earlier +4.0 was an unmeasured assumption). rest_days is
+    # None on a season opener — unknown rest must never be treated as "rested".
     hr, ar = ctx_local.get("h_rest"), ctx_local.get("a_rest")
-    if hr and ar:
-        rests = (float(hr.get("rest_days", 3.0)), float(ar.get("rest_days", 3.0)))
+    if hr and ar and hr.get("rest_days") is not None and ar.get("rest_days") is not None:
+        rests = (float(hr["rest_days"]), float(ar["rest_days"]))
         if max(rests) >= 3.0 and min(rests) <= 1.0:
-            diff = (exp + 4.0) - lineval
+            diff = (exp + REST_ASYMMETRY_POINTS) - lineval
             if diff >= 6.0:
                 p_side = util.norm_cdf(diff / SD_TOTAL)
                 if p_side - 0.524 >= 0.02:
@@ -385,7 +472,8 @@ def _total_signals(con, ctx) -> list[S.Signal]:
                         ctx_local, "NBA-022", "over", lineval, p_side, 0.524,
                         source="espn:line|kalshi:strike",
                         trigger=(f"rest asymmetry {rests[0]:.0f}/{rests[1]:.0f} "
-                                 f"days; model {exp:.1f}+4 vs {lineval:g} ({diff:+.1f})")))
+                                 f"days; model {exp:.1f}+{REST_ASYMMETRY_POINTS:g} vs "
+                                 f"{lineval:g} ({diff:+.1f})")))
 
     # One total bet per strategy per game: a strategy emitting both over and
     # under in the same game (e.g. NBA-010 with hot home AND cold away) would
@@ -453,15 +541,21 @@ def _half_hour_signals(con, ctx) -> int:
 def _place_1h_bet(con, ctx, sig: S.Signal, info: engine.KalshiMarketInfo,
                   live: engine.PricePoint) -> int:
     meta = S.STRATEGIES[sig.strategy_id]
-    br = _bankroll(con, sig.strategy_id)
-    open_exp = con.execute(
-        "SELECT COALESCE(SUM(stake_usd),0) s FROM bets WHERE strategy_id=? AND kind='forward' "
-        "AND result='pending'", (sig.strategy_id,)).fetchone()["s"]
-    if open_exp >= br * 0.25:
+    sid = sig.strategy_id
+    sig, why = _apply_tier(con, sig)
+    if sig is None:
+        db.log_anomaly(con, "info", "signal-gated-by-validation",
+                       {"strategy": sid, "game": ctx["game"]["game_id"],
+                        "reason": why})
         return 0
-    stake = S.stake_for(_available_to_stake(con, sig.strategy_id, br),
-                        sig.model_prob, 100.0 / sig.price)
-    if stake <= 0:
+    tier_scale = validation.classify(con, sig.strategy_id)["policy"]["stake_scale"]
+    br = _bankroll(con, sig.strategy_id)
+    headroom = _exposure_headroom(con, sig.strategy_id, br)
+    if headroom <= 0:
+        return 0
+    stake = min(S.stake_for(_available_to_stake(con, sig.strategy_id, br),
+                            sig.model_prob, 100.0 / sig.price) * tier_scale, headroom)
+    if stake <= 0 or stake < S.MIN_STAKE:
         return 0
     contracts, cost = engine.simulate_fill_kalshi(stake, sig.price)
     if contracts <= 0:
@@ -622,25 +716,31 @@ def _place_forward_bet(con, ctx, sig: S.Signal, winner,
                        live: engine.PricePoint) -> int:
     """Place a winner-market forward bet on Kalshi with paid-odds Kelly sizing."""
     meta = S.STRATEGIES[sig.strategy_id]
+    sid = sig.strategy_id
+    sig, why = _apply_tier(con, sig)
+    if sig is None:
+        db.log_anomaly(con, "info", "signal-gated-by-validation",
+                       {"strategy": sid, "game": ctx["game"]["game_id"],
+                        "reason": why})
+        return 0
+    tier_scale = validation.classify(con, sig.strategy_id)["policy"]["stake_scale"]
     br = _bankroll(con, sig.strategy_id)
-    open_exp = con.execute(
-        "SELECT COALESCE(SUM(stake_usd),0) s FROM bets WHERE strategy_id=? AND kind='forward' "
-        "AND result='pending'", (sig.strategy_id,)).fetchone()["s"]
-    if open_exp >= br * 0.25:
+    headroom = _exposure_headroom(con, sig.strategy_id, br)
+    if headroom <= 0:
         return 0
     prob = sig.model_prob
     price_cents = sig.price
     if sig.strategy_id == "NBA-004":
         # v1.1.0: directional move-follow — Kelly with model_prob = market
         # prob is identically zero; fixed 1% stake instead.
-        stake = round(br * S.LINE_MOVE_STAKE_PCT, 2)
+        stake = min(round(br * S.LINE_MOVE_STAKE_PCT * tier_scale, 2), headroom)
         if stake < S.MIN_STAKE:
             return 0
         prob = price_cents / 100.0 if sig.side == "home" else 1.0 - price_cents / 100.0
     else:
-        stake = S.stake_for(_available_to_stake(con, sig.strategy_id, br),
-                            prob, 100.0 / price_cents)
-        if stake <= 0:
+        stake = min(S.stake_for(_available_to_stake(con, sig.strategy_id, br),
+                                prob, 100.0 / price_cents) * tier_scale, headroom)
+        if stake <= 0 or stake < S.MIN_STAKE:
             return 0
     contracts, cost = engine.simulate_fill_kalshi(stake, price_cents)
     if contracts <= 0:
@@ -694,15 +794,25 @@ def _place_total_bet(con, ctx, sig: S.Signal, info) -> int:
     methodology and the bet row is labeled `PRICED-ASSUMPTION`.
     """
     meta = S.STRATEGIES[sig.strategy_id]
-    br = _bankroll(con, sig.strategy_id)
-    open_exp = con.execute(
-        "SELECT COALESCE(SUM(stake_usd),0) s FROM bets WHERE strategy_id=? AND kind='forward' "
-        "AND result='pending'", (sig.strategy_id,)).fetchone()["s"]
-    if open_exp >= br * 0.25:
+    sid = sig.strategy_id
+    sig, why = _apply_tier(con, sig)
+    if sig is None:
+        db.log_anomaly(con, "info", "signal-gated-by-validation",
+                       {"strategy": sid, "game": ctx["game"]["game_id"],
+                        "reason": why})
         return 0
-    stake = S.stake_for(_available_to_stake(con, sig.strategy_id, br),
-                        sig.model_prob, 1.909)  # -110
-    if stake <= 0:
+    tier_scale = validation.classify(con, sig.strategy_id)["policy"]["stake_scale"]
+    br = _bankroll(con, sig.strategy_id)
+    headroom = _exposure_headroom(con, sig.strategy_id, br)
+    if headroom <= 0:
+        return 0
+    # real observed over/under price when we captured one, else the documented
+    # -110 standard-bookie assumption (labelled PRICED-ASSUMPTION on the row)
+    tot_price, tot_priced_real = _total_price_for(con, ctx, sig)
+    dec = util.american_to_decimal(tot_price)
+    stake = min(S.stake_for(_available_to_stake(con, sig.strategy_id, br),
+                            sig.model_prob, dec) * tier_scale, headroom)
+    if stake <= 0 or stake < S.MIN_STAKE:
         return 0
     dup = con.execute(
         "SELECT 1 FROM bets WHERE strategy_id=? AND game_id=? AND market=? AND selection=? "
@@ -721,18 +831,24 @@ def _place_total_bet(con, ctx, sig: S.Signal, info) -> int:
         "game_id": ctx["game"]["game_id"], "game_label": sig.game_label,
         "tipoff_utc": ctx["game"]["tipoff_utc"], "market": sig.market,
         "selection": sig.selection, "side": sig.side,
-        "price": -110, "price_format": "american",
-        "source": "line: espn snapshot or kalshi strike",
+        "price": tot_price, "price_format": "american",
+        "source": ("price: espn over/under snapshot" if tot_priced_real
+                   else "line: espn snapshot or kalshi strike"),
         "source_url": ("https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
                         if sig.source and "espn" in sig.source else
                         "https://api.elections.kalshi.com/trade-api/v2/markets"),
         "source_ts": ctx["decision"], "model_prob": sig.model_prob,
-        "market_prob": 0.524, "edge": sig.model_prob - 0.524,
-        "stake_usd": stake, "to_win_usd": round(stake * 0.909, 2),
-        "ev_usd": round((sig.model_prob * stake * 0.909) - ((1.0 - sig.model_prob) * stake), 2),
-        "execution_status": "simulated_fill", "fill_price": -110, "fee_usd": 0,
+        "market_prob": round(util.american_to_prob(tot_price), 4),
+        "edge": sig.model_prob - util.american_to_prob(tot_price),
+        "stake_usd": stake,
+        "to_win_usd": round(stake * (dec - 1.0), 2),
+        "ev_usd": round((sig.model_prob * stake * (dec - 1.0))
+                        - ((1.0 - sig.model_prob) * stake), 2),
+        "execution_status": "simulated_fill", "fill_price": tot_price, "fee_usd": 0,
         "contracts": 0, "result": "pending",
-        "verification": ("PRICED-ASSUMPTION: no free historical totals price source; "
+        "verification": ("observed ESPN over/under price captured at decision time"
+                         if tot_priced_real else
+                         "PRICED-ASSUMPTION: no free historical totals price source; "
                          "simulated at standard -110. Labeled, not hidden."),
         "notes": sig.trigger[:500]})
     _record_bankroll(con, sig.strategy_id, br, f"bet-placed-total:{bet_id}")
@@ -744,16 +860,22 @@ def _place_total_bet(con, ctx, sig: S.Signal, info) -> int:
 def _place_prop_bet(con, ctx, sig: S.Signal) -> int:
     """Place a Kalshi player-prop bet (KXNBAREBS / KXNBAASTS / KXNBAPTS)."""
     meta = S.STRATEGIES[sig.strategy_id]
+    sid = sig.strategy_id
+    sig, why = _apply_tier(con, sig)
+    if sig is None:
+        db.log_anomaly(con, "info", "signal-gated-by-validation",
+                       {"strategy": sid, "game": ctx["game"]["game_id"],
+                        "reason": why})
+        return 0
+    tier_scale = validation.classify(con, sig.strategy_id)["policy"]["stake_scale"]
     br = _bankroll(con, sig.strategy_id)
-    open_exp = con.execute(
-        "SELECT COALESCE(SUM(stake_usd),0) s FROM bets WHERE strategy_id=? AND kind='forward' "
-        "AND result='pending'", (sig.strategy_id,)).fetchone()["s"]
-    if open_exp >= br * 0.25:
+    headroom = _exposure_headroom(con, sig.strategy_id, br)
+    if headroom <= 0:
         return 0
     price_cents = sig.price
-    stake = S.stake_for(_available_to_stake(con, sig.strategy_id, br),
-                        sig.model_prob, 100.0 / price_cents)
-    if stake <= 0:
+    stake = min(S.stake_for(_available_to_stake(con, sig.strategy_id, br),
+                            sig.model_prob, 100.0 / price_cents) * tier_scale, headroom)
+    if stake <= 0 or stake < S.MIN_STAKE:
         return 0
     contracts, cost = engine.simulate_fill_kalshi(stake, price_cents)
     if contracts <= 0:
@@ -851,7 +973,9 @@ def settle_finished(con) -> int:
         if result not in ("win", "loss", "push", "void"):
             continue  # not resolvable yet (box score / quarter data pending)
         if b["market"] == "total":
-            pnl = engine.american_pnl(b["stake_usd"], -110, result)
+            # settle at the price frozen on the bet row (an observed ESPN
+            # over/under price where one was captured, else -110)
+            pnl = engine.american_pnl(b["stake_usd"], b["price"] or -110, result)
         elif b["market"].startswith(("kalshi:winner", "kalshi:1h", "kalshi:prop")):
             pnl = (0.0 if result in ("push", "void")
                    else engine.kalshi_bet_pnl(b["contracts"] or 0,
@@ -860,11 +984,20 @@ def settle_finished(con) -> int:
             continue
         closing = None
         try:
-            info = by_game.get(gid)
-            if info:
-                pp = book.kalshi_price_at(info.ticker, util.utcnow_iso())
+            # CLV: prefer the last orderbook ask observed BEFORE today (our own
+            # timestamped snapshots are as-of safe), then the last closed
+            # candle. Never a post-settlement observation.
+            if b["market"].startswith("kalshi:") and b.get("market_ticker"):
+                tick = b["market_ticker"]
+            else:
+                info = by_game.get(gid)
+                tick = info.ticker if info else None
+            if tick:
+                asof = b["tipoff_utc"] or CUR
+                pp = book.kalshi_ask_at(tick, asof) or book.kalshi_price_at(tick, asof)
                 if pp and pp.ts_utc:
-                    closing = pp.price_cents
+                    closing = (pp.price_cents if b.get("side") in ("yes", "over", "home", None)
+                               else 100.0 - pp.price_cents)
         except Exception:
             closing = None
         update_args = [result, CUR, src, round(pnl, 2),
@@ -877,9 +1010,12 @@ def settle_finished(con) -> int:
         update_sql += " WHERE bet_id=?"
         update_args.append(b["bet_id"])
         con.execute(update_sql, update_args)
+        clv = (round(closing - (b["fill_price"] or 0), 2)
+               if closing is not None and b["market"].startswith("kalshi:") else None)
         db.log_audit(con, "paper-engine", "bet-settled", b["bet_id"], {
             "result": result, "pnl": round(pnl, 2),
-            "market": b["market"], "closing_price": closing, "source": src})
+            "market": b["market"], "closing_price": closing,
+            "clv_cents": clv, "source": src})
         _record_bankroll(con, b["strategy_id"],
                          _bankroll(con, b["strategy_id"]) + pnl,
                          f"settle:{b['bet_id']}")
@@ -902,6 +1038,15 @@ def _settle_one(con, b: dict, by_game: dict, markets_by_ticker: dict, g: dict,
     (the caller skips the bet); 'void' is a terminal NO-P&L outcome used
     ONLY when settlement data is unattainable (stale=True) — never a guess.
     """
+    ok, why = engine.bet_shape(b)
+    if not ok:
+        # An impossible row can never be settled honestly: flag it (critical:
+        # it leaves exposure and the ranking) and leave it pending-flagged
+        # rather than inventing a win or a loss for it.
+        flag_bet(con, b["bet_id"], b["strategy_id"], "invalid-bet-shape",
+                 "critical", {"detail": why},
+                 run_id=(b["run_id"] if "run_id" in b.keys() else None))
+        return "pending", f"refused: {why}"
     if b["market"] == "total":
         line = _strike_from_selection(b["selection"])
         r = engine.settle_score_based("total", g["home_score"], g["away_score"],
@@ -1016,6 +1161,109 @@ def _strike_from_selection(sel: str) -> float | None:
         return float(sel.split()[-1])
     except (ValueError, IndexError):
         return None
+
+
+# --------------------------------------------------------- quarantine
+
+def flag_bet(con, bet_id: str, strategy_id: str, flag: str, severity: str,
+             detail: dict, run_id: str | None = None) -> bool:
+    """Record a defect flag on an existing bet (append-only, idempotent).
+
+    Bets can never be edited or deleted, so a bet that turns out to have been
+    placed on invalid state gets a durable flag instead. Critical flags remove
+    the bet from exposure and from the ranking P&L; every flag stays visible in
+    the ledgers.
+    """
+    if con.execute("SELECT 1 FROM bet_flags WHERE bet_id=? AND flag=?",
+                   (bet_id, flag)).fetchone():
+        return False  # already flagged by an earlier pass; never re-logged
+    db.insert(con, "bet_flags", {
+        "bet_id": bet_id, "strategy_id": strategy_id, "flag": flag,
+        "severity": severity, "detail_json": json.dumps(detail, sort_keys=True),
+        "flagged_utc": util.utcnow_iso(), "run_id": run_id})
+    db.log_anomaly(con, severity, f"bet-quarantined-{flag}",
+                   {"bet_id": bet_id, "strategy": strategy_id, **detail})
+    return True
+
+
+def quarantine_bets(con, run_id: str | None = None) -> dict:
+    """Flag forward bets whose decision state is provably invalid.
+
+    Settled bets are checked too: a bet placed on broken state corrupts the
+    ranking whether or not it has already been graded.
+
+    Checks (all evidence-based, never a guess about intent):
+      * stale-state-at-decision  — the game is priced off team state older than
+        MAX_STATE_AGE_DAYS (critical: the claimed edge is an artifact).
+      * implausible-edge         — claimed edge > IMPLAUSIBLE_EDGE (critical).
+      * price-not-observed       — the bet is priced at an assumed -110 because
+        no free historical totals price exists (info: disclosed, not excluded).
+      * strategy-parked          — the strategy's own validation evidence now
+        forbids betting (warn: placed under an earlier version, kept visible).
+
+    Returns counts by flag. Idempotent: a (bet_id, flag) pair is only ever
+    written once.
+    """
+    from .model import MAX_STATE_AGE_DAYS
+    from datetime import date as _date
+    counts: dict[str, int] = {}
+    bets = con.execute(
+        "SELECT b.*, g.home_team, g.away_team, g.game_date_et FROM bets b "
+        "LEFT JOIN games g ON g.game_id=b.game_id "
+        "WHERE b.kind='forward'").fetchall()
+    tiers = validation.all_tiers(con)
+    for b in bets:
+        d = dict(b)
+        if d.get("game_date_et"):
+            for team in (d["home_team"], d["away_team"]):
+                last = con.execute(
+                    "SELECT MAX(game_date_et) m FROM team_gamelogs WHERE team=? "
+                    "AND game_date_et < ?", (team, d["game_date_et"])).fetchone()
+                if not (last and last["m"]):
+                    age = None
+                else:
+                    age = (_date.fromisoformat(d["game_date_et"])
+                           - _date.fromisoformat(last["m"])).days
+                if age is None:
+                    continue
+                if age > MAX_STATE_AGE_DAYS:
+                    if flag_bet(con, d["bet_id"], d["strategy_id"],
+                                "stale-state-at-decision", "critical",
+                                {"team": team, "state_age_days": age,
+                                 "max_state_age_days": MAX_STATE_AGE_DAYS,
+                                 "claimed_edge": d.get("edge"),
+                                 "game": d["game_date_et"]}, run_id):
+                        counts["stale-state-at-decision"] = counts.get(
+                            "stale-state-at-decision", 0) + 1
+        if d.get("edge") is not None and abs(d["edge"]) > IMPLAUSIBLE_EDGE:
+            if flag_bet(con, d["bet_id"], d["strategy_id"], "implausible-edge",
+                        "critical",
+                        {"claimed_edge": round(d["edge"], 4),
+                         "threshold": IMPLAUSIBLE_EDGE,
+                         "detail": "an edge this large against a captured "
+                                   "market line indicates a defective input, "
+                                   "not a market inefficiency"}, run_id):
+                counts["implausible-edge"] = counts.get("implausible-edge", 0) + 1
+        if (d.get("verification") or "").startswith("PRICED-ASSUMPTION"):
+            if flag_bet(con, d["bet_id"], d["strategy_id"], "price-not-observed",
+                        "info",
+                        {"price": d.get("price"),
+                         "detail": "no free historical totals price source "
+                                   "exists; the bet is simulated at the "
+                                   "standard -110 and labeled, not excluded"},
+                        run_id):
+                counts["price-not-observed"] = counts.get("price-not-observed", 0) + 1
+        info = tiers.get(d["strategy_id"])
+        if info and not info["policy"]["allow_bets"]:
+            if flag_bet(con, d["bet_id"], d["strategy_id"], "strategy-parked",
+                        "warn",
+                        {"tier": info["tier"], "evidence": info["detail"],
+                         "detail": "bet was placed under an earlier version; "
+                                   "the strategy is now parked by its own "
+                                   "measured evidence and will place no more"},
+                        run_id):
+                counts["strategy-parked"] = counts.get("strategy-parked", 0) + 1
+    return counts
 
 
 # --------------------------------------------------------- elo build

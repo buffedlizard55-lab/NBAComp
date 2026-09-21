@@ -591,10 +591,27 @@ def test_audit_run_checks_handles_empty_db(con):
 
 # ---------------------------------------------------------------- forward engine extensions
 
+def _promote_to_price_verified(con, strategy_id="NBA-002"):
+    """Seed one settled price-verified backtest bet so the strategy's tier is
+    `price_verified` (full stake scale). Tiering itself is tested separately in
+    tests/test_integrity_v2.py; here it just removes the tier from the equation
+    so the placement/settlement mechanics are what is measured."""
+    _seed_game(con, game_id="espn:tier", tipoff="2026-01-01T00:00:00Z", status="final")
+    db.insert(con, "bets", {
+        "bet_id": f"bt-tier-{strategy_id}", "run_id": "bt-tier", "kind": "backtest",
+        "strategy_id": strategy_id, "strategy_version": "1.0.0", "username": "x",
+        "decision_utc": "2025-12-31T20:00:00Z", "game_id": "espn:tier",
+        "game_label": "t", "tipoff_utc": "2026-01-01T00:00:00Z", "market": "ml",
+        "selection": "over 220.5", "side": "over", "price": -110,
+        "price_format": "american", "source": "t", "stake_usd": 10.0,
+        "execution_status": "simulated_fill", "result": "win", "verification": "t"})
+
+
 def test_paper_total_signal_placement_and_settlement(con, tmp_path):
     """Totals bets must be placed, persist, settle correctly, label as priced-assumption."""
     from nbacomp import paper
     _seed_game(con, game_id="espn:tot", tipoff="2026-02-10T01:00:00Z", status="scheduled")
+    _promote_to_price_verified(con)
     db.insert(con, "odds_snapshots", {
         "game_id": "espn:tot", "captured_utc": "2026-02-09T20:00:00Z",
         "source": "espn:consensus", "market": "total", "selection": "line 220.5",

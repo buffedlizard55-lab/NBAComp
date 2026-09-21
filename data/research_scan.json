@@ -1,0 +1,323 @@
+{
+  "generated_utc": "2026-09-21T22:55:54Z",
+  "source": "games table (ESPN + Basketball-Reference cross-verified subset)",
+  "n_finals_all": 4173,
+  "n_finals_regular_season": 3704,
+  "regular_season_bounds": {
+    "2023-24": [
+      "2023-10-24",
+      "2024-04-14"
+    ],
+    "2024-25": [
+      "2024-10-22",
+      "2025-04-13"
+    ],
+    "2025-26": [
+      "2025-10-21",
+      "2026-04-12"
+    ],
+    "2026-27": [
+      "2026-10-20",
+      "2027-04-11"
+    ]
+  },
+  "note": "Outcome-only measurements. No odds, no prices, no P&L. Regular-season windows are the published NBA calendars; preseason and playoff games are excluded from these windows.",
+  "regular_season_baseline": {
+    "n": 3704,
+    "avg_total": 228.405,
+    "sd_total": 23.577,
+    "avg_home_margin": 1.834,
+    "sd_margin": 15.953,
+    "home_win_pct": 0.546
+  },
+  "H1_opening_week_low_scoring": {
+    "definition": "first 6 days from the published season start vs the rest of the regular season",
+    "per_season": {
+      "2023-24": {
+        "n_early": 51,
+        "avg_early": 223.431,
+        "n_rest": 1182,
+        "avg_rest": 228.255
+      },
+      "2024-25": {
+        "n_early": 52,
+        "avg_early": 226.481,
+        "n_rest": 1184,
+        "avg_rest": 226.698
+      },
+      "2025-26": {
+        "n_early": 53,
+        "avg_early": 236.642,
+        "n_rest": 1182,
+        "avg_rest": 230.195
+      }
+    },
+    "pooled_early": {
+      "n": 156,
+      "avg_total": 228.936
+    },
+    "pooled_rest": {
+      "n": 3548,
+      "avg_total": 228.382
+    },
+    "difference_early_minus_rest": 0.554,
+    "welch_t": 0.365
+  },
+  "H2_back_to_back": {
+    "definition": "team-games with 0 rest days (played previous calendar day) vs all others",
+    "b2b": {
+      "n": 1321,
+      "avg_pts": 113.233,
+      "avg_net": -1.734
+    },
+    "non_b2b": {
+      "n": 6057,
+      "avg_pts": 114.424,
+      "avg_net": 0.378
+    },
+    "net_point_cost_of_b2b": -2.112,
+    "welch_t_net": -4.242
+  },
+  "H3_rest_asymmetry_totals": {
+    "definition": "|rest_home - rest_away| >= 2 days vs < 2 days (both teams 0-6 rest days)",
+    "asymmetric": {
+      "n": 289,
+      "avg_total": 230.048
+    },
+    "symmetric": {
+      "n": 3318,
+      "avg_total": 228.231
+    },
+    "difference": 1.817,
+    "welch_t": 1.384
+  },
+  "H4_month_scoring": {
+    "2023-10": {
+      "n": 54,
+      "avg_total": 223.037
+    },
+    "2023-11": {
+      "n": 219,
+      "avg_total": 229.616
+    },
+    "2023-12": {
+      "n": 208,
+      "avg_total": 234.404
+    },
+    "2024-01": {
+      "n": 233,
+      "avg_total": 229.442
+    },
+    "2024-02": {
+      "n": 174,
+      "avg_total": 227.914
+    },
+    "2024-03": {
+      "n": 230,
+      "avg_total": 222.561
+    },
+    "2024-04": {
+      "n": 115,
+      "avg_total": 224.348
+    },
+    "2024-10": {
+      "n": 71,
+      "avg_total": 226.592
+    },
+    "2024-11": {
+      "n": 222,
+      "avg_total": 225.586
+    },
+    "2024-12": {
+      "n": 192,
+      "avg_total": 225.812
+    },
+    "2025-01": {
+      "n": 232,
+      "avg_total": 221.806
+    },
+    "2025-02": {
+      "n": 176,
+      "avg_total": 229.966
+    },
+    "2025-03": {
+      "n": 238,
+      "avg_total": 229.815
+    },
+    "2025-04": {
+      "n": 105,
+      "avg_total": 228.905
+    },
+    "2025-10": {
+      "n": 80,
+      "avg_total": 234.875
+    },
+    "2025-11": {
+      "n": 219,
+      "avg_total": 233.059
+    },
+    "2025-12": {
+      "n": 198,
+      "avg_total": 233.641
+    },
+    "2026-01": {
+      "n": 237,
+      "avg_total": 222.684
+    },
+    "2026-02": {
+      "n": 166,
+      "avg_total": 228.771
+    },
+    "2026-03": {
+      "n": 239,
+      "avg_total": 230.753
+    },
+    "2026-04": {
+      "n": 96,
+      "avg_total": 235.823
+    }
+  },
+  "H5_home_dog_record_proxy": {
+    "definition": "home team whose prior-season-record win% is lower than the visitor's (>=5 games each) vs the opposite; record proxy is NOT a spread and is used only to test direction",
+    "home_dog_n": 1799,
+    "home_dog_avg_margin": -2.821,
+    "home_fav_n": 1824,
+    "home_fav_avg_margin": 6.375,
+    "welch_t": -18.071
+  },
+  "H6_long_vs_short_rest_net": {
+    "long_rest_3plus": {
+      "n": 406,
+      "avg_net": 0.446
+    },
+    "short_rest_0_1": {
+      "n": 5933,
+      "avg_net": -0.175
+    },
+    "welch_t": 0.777
+  },
+  "H7_playoff_vs_regular_scoring": {
+    "playoffs_or_preseason_n": 469,
+    "avg_total_outside_regular_window": 219.004,
+    "avg_total_regular": 228.405,
+    "difference": -9.401
+  },
+  "factor_sweep": {
+    "R1_away_b2b_back_home": {
+      "n": 117,
+      "hit_rate": 0.6325,
+      "baseline_rate": 0.5485,
+      "z_vs_baseline": 1.82,
+      "avg_margin_for_pick": 5.607,
+      "usable_sample": true,
+      "examples": [
+        "DET@DAL 2023-10-20",
+        "MEM@WAS 2023-10-28",
+        "NYK@NOP 2023-10-28"
+      ]
+    },
+    "R2_home_b2b_back_away": {
+      "n": 103,
+      "hit_rate": 0.5534,
+      "baseline_rate": 0.4515,
+      "z_vs_baseline": 2.08,
+      "avg_margin_for_pick": 1.524,
+      "usable_sample": true,
+      "examples": [
+        "WAS@NYK 2023-10-18",
+        "UTA@SAC 2023-10-19",
+        "IND@CLE 2023-10-28"
+      ]
+    },
+    "R3_fade_3in4_away": {
+      "n": 2,
+      "hit_rate": 0.0,
+      "baseline_rate": 0.5485,
+      "z_vs_baseline": -1.56,
+      "avg_margin_for_pick": -14.5,
+      "usable_sample": false,
+      "examples": [
+        "MIN@DAL 2026-01-28",
+        "GSW@UTA 2026-01-28"
+      ]
+    },
+    "R4_back_team_after_blowout_loss": {
+      "n": 1043,
+      "hit_rate": 0.4104,
+      "baseline_rate": 0.4993,
+      "z_vs_baseline": -5.75,
+      "avg_margin_for_pick": -3.161,
+      "usable_sample": true,
+      "examples": [
+        "NOP@ATL 2023-10-14",
+        "ATL@IND 2023-10-16",
+        "MEM@MIL 2023-10-20"
+      ]
+    },
+    "R5_fade_win_streak": {
+      "n": 777,
+      "hit_rate": 0.3784,
+      "baseline_rate": 0.4984,
+      "z_vs_baseline": -6.69,
+      "avg_margin_for_pick": -4.906,
+      "usable_sample": true,
+      "examples": [
+        "SAS@GSW 2023-10-20",
+        "MIN@TOR 2023-10-25",
+        "PHX@LAL 2023-10-26"
+      ]
+    },
+    "R6_back_loss_streak": {
+      "n": 837,
+      "hit_rate": 0.3238,
+      "baseline_rate": 0.4998,
+      "z_vs_baseline": -10.19,
+      "avg_margin_for_pick": -6.114,
+      "usable_sample": true,
+      "examples": [
+        "UTA@SAC 2023-10-19",
+        "PHX@LAL 2023-10-26",
+        "DEN@MEM 2023-10-27"
+      ]
+    },
+    "R7_road_trip_finale_back_home": {
+      "n": 76,
+      "hit_rate": 0.6184,
+      "baseline_rate": 0.5485,
+      "z_vs_baseline": 1.22,
+      "avg_margin_for_pick": 5.092,
+      "usable_sample": true,
+      "examples": [
+        "SAC@MIN 2023-11-24",
+        "IND@MIN 2023-12-16",
+        "CHA@CHI 2024-01-05"
+      ]
+    },
+    "R8_elo_fade_home": {
+      "n": 462,
+      "hit_rate": 0.6667,
+      "baseline_rate": 0.5263,
+      "z_vs_baseline": 6.04,
+      "avg_margin_for_pick": 5.929,
+      "usable_sample": true,
+      "examples": [
+        "BKN@ORL 2024-10-25",
+        "PHI@TOR 2024-10-25",
+        "CHA@ATL 2024-10-25"
+      ]
+    },
+    "R9_model_total_extreme": {
+      "n": 535,
+      "hit_rate": 0.4916,
+      "baseline_rate": 0.5,
+      "z_vs_baseline": -0.39,
+      "avg_margin_for_pick": 16.226,
+      "usable_sample": true,
+      "examples": [
+        "IND@ORL 2024-10-28",
+        "CHI@MEM 2024-10-28",
+        "DEN@BKN 2024-10-29"
+      ]
+    }
+  }
+}
