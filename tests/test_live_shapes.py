@@ -206,6 +206,34 @@ def test_snapshot_stores_best_bid_not_first_level(tmp_path, monkeypatch):
         assert b["yes_ask"] == 55  # 100 - best no-bid 45
 
 
+def test_snapshot_fills_series_and_skips_identity_less_rows(tmp_path, monkeypatch):
+    no_series = dict(SAS_MARKET)
+    no_series["series_ticker"] = None
+    no_event = dict(SAS_MARKET)
+    no_event["ticker"] = "KXNBAGAME-NOEVENT"
+    no_event["event_ticker"] = None
+
+    class FakeBook:
+        ok = True
+        json = SAS_BOOK
+
+    monkeypatch.setattr(kalshi, "get_markets",
+                        lambda s, status=None, max_pages=10: [no_series, no_event])
+    monkeypatch.setattr(kalshi, "get_orderbook", lambda t: FakeBook())
+    with db.get_db(str(tmp_path / "i.db")) as con:
+        import json as _json
+        db.insert(con, "meta", {"key": "kalshi_series_discovery",
+                                "value": _json.dumps({"KXNBAGAME": {"exists": True}}),
+                                "updated_utc": util.utcnow_iso()}, replace=True)
+        collect.kalshi_snapshot(con)  # must not raise IntegrityError
+        rows = con.execute("SELECT ticker, series_ticker FROM kalshi_markets").fetchall()
+        assert [(r["ticker"], r["series_ticker"]) for r in rows] == [
+            ("KXNBAGAME-26OCT20OKCSAS-SAS", "KXNBAGAME")]
+        anom = con.execute("SELECT COUNT(*) c FROM anomalies WHERE "
+                           "check_name='kalshi-market-missing-identity'").fetchone()["c"]
+        assert anom == 1
+
+
 def test_market_team_suffix_text_and_ambiguous():
     assert engine.market_team("KXNBAGAME-26OCT20OKCSAS-SAS", "San Antonio wins",
                               "San Antonio") == "SAS"

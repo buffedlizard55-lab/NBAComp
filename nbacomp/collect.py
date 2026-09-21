@@ -251,6 +251,16 @@ def kalshi_snapshot(con) -> int:
                 db.log_anomaly(con, "warn", "kalshi-market-parse-error",
                                {"ticker": m.get("ticker"), "err": str(e)[:200]})
                 continue
+            # series_ticker is NOT NULL: fill from the queried series (known
+            # ground truth, not a guess). Ticker/event gaps can't be filled
+            # honestly -> skip with an anomaly instead of crashing the run.
+            row["series_ticker"] = row["series_ticker"] or s
+            if not row["ticker"] or not row["event_ticker"]:
+                db.log_anomaly(con, "warn", "kalshi-market-missing-identity",
+                               {"series": s, "ticker": row["ticker"],
+                                "event_ticker": row["event_ticker"],
+                                "title": (row["title"] or "")[:120]})
+                continue
             db.insert(con, "kalshi_markets", row, replace=True)
             n += 1
             if s in ("KXNBAGAME", "KXNBASPREAD", "KXNBATOTAL", "KXNBA1H", "KXNBAQ1"):
