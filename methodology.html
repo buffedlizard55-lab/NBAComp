@@ -85,7 +85,20 @@ the version that produced it.</p>
 <h2>What this site is not</h2>
 <p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
 point is to find out, with real verified data, which hypotheses survive.</p>
-<h2>Deployment verification</h2><p class="muted">No deployed-site verification recorded yet. Each collection run ends with an independent check (<span class='mono'>tools/verify_deployed.py</span>) that fetches every published page and requires it to be byte-identical to the committed file; its output is committed as <span class='mono'>data/live_verify.json</span>.</p></main>
+
+<h2>Deployment verification</h2>
+<p>Last independent live check: <b class="ok">OK</b> —
+10/10 published files fetched from
+<a href="https://buffedlizard55-lab.github.io/NBAComp/" rel="noopener">https://buffedlizard55-lab.github.io/NBAComp/</a>
+were <b>byte-identical</b> to the files committed at
+<span class="mono">3fe6796d848b</span>
+(checked 2026-09-22T00:30:58Z, Pages build status
+<span class="mono">built</span>). Nothing here is asserted: the
+comparison is the committed SHA-256 of each fetched response against the committed blob, and the
+result is stored in <span class="mono">data/live_verify.json</span>.</p>
+
+<div class='twrap'><table class=''><thead><tr><th>File</th><th>HTTP</th><th>Live bytes</th><th>Live sha256</th><th>Verdict</th></tr></thead><tbody><tr><td>history.html</td><td>200</td><td>14,221</td><td>4f1905b2c17e</td><td><span class='ok'>OK</span></td></tr><tr><td>index.html</td><td>200</td><td>11,524</td><td>9bc92dbb0830</td><td><span class='ok'>OK</span></td></tr><tr><td>leaderboard.html</td><td>200</td><td>32,171</td><td>ed1f8173c1e6</td><td><span class='ok'>OK</span></td></tr><tr><td>methodology.html</td><td>200</td><td>7,826</td><td>de0559b80569</td><td><span class='ok'>OK</span></td></tr><tr><td>positions.html</td><td>200</td><td>23,923</td><td>18ecdec59230</td><td><span class='ok'>OK</span></td></tr><tr><td>research.html</td><td>200</td><td>52,421</td><td>bbe35bf52076</td><td><span class='ok'>OK</span></td></tr><tr><td>sources.html</td><td>200</td><td>16,319</td><td>389d4c0f3f7e</td><td><span class='ok'>OK</span></td></tr><tr><td>strategies.html</td><td>200</td><td>90,272</td><td>3139f4a9cf19</td><td><span class='ok'>OK</span></td></tr><tr><td>style.css</td><td>200</td><td>5,527</td><td>c34609a12a51</td><td><span class='ok'>OK</span></td></tr><tr><td>upcoming.html</td><td>200</td><td>6,577</td><td>1a3c6c66db8c</td><td><span class='ok'>OK</span></td></tr></tbody></table></div>
+</main>
 <footer>Simulated paper trading only. No real money. Data: ESPN, NBA.com/stats, Kalshi public API —
 see <a href="sources.html">Data Sources</a>. Every number on this site is traceable to a logged,
 timestamped source; unverified data is labeled as such.</footer>
