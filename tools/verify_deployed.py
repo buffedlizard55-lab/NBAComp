@@ -12,6 +12,11 @@ It writes ``data/live_verify.json`` (machine-readable evidence: ref, commit,
 per-page HTTP status/bytes/sha256, verdict) and exits non-zero on any FAIL or
 MISMATCH unless ``--no-fail`` is given.
 
+It must be pointed at the branch Pages actually serves (``main`` here): on a
+feature branch the live site is a different commit by definition, and comparing
+bytes there would report a mismatch for the wrong reason. The workflow gates the
+step on ``github.ref_name == 'main'`` for exactly that reason.
+
 Network access is required, so this runs in GitHub Actions, not in the offline
 unit test suite; the classification logic is tested with an injected fetcher
 (``tests/test_verify_deployed.py``).

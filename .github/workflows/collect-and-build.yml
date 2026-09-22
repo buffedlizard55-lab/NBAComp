@@ -259,7 +259,11 @@ jobs:
           fi
 
       - name: Verify the DEPLOYED site against this commit
-        if: steps.skip.outputs.skip != 'true'
+        # Pages publishes main only. On a feature-branch push the live site is
+        # legitimately a different commit, so comparing bytes there would report
+        # a mismatch for the wrong reason. The check belongs where it can mean
+        # something: the branch Pages actually serves.
+        if: steps.skip.outputs.skip != 'true' && github.ref_name == 'main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -272,7 +276,7 @@ jobs:
             --wait 900 --retry-wait 20 --out data/live_verify.json
 
       - name: Commit deployment verification
-        if: steps.skip.outputs.skip != 'true' && always()
+        if: steps.skip.outputs.skip != 'true' && github.ref_name == 'main' && always()
         run: |
           # The verification step fails the run on a mismatch; this step still
           # commits whatever evidence it produced so the failure is inspectable.
