@@ -23,11 +23,36 @@ import sys
 sys.path.insert(0, ".")
 from nbacomp import db  # noqa: E402
 
-TABLES = ["games", "odds_snapshots", "injuries", "team_gamelogs", "player_gamelogs",
-          "team_season_stats", "kalshi_markets", "kalshi_candles", "kalshi_orderbooks",
-          "hist_odds", "hist_backtests", "line_backtests", "signal_backtests",
-          "strategies", "bets", "bet_flags", "bankroll_events", "verifications",
-          "anomalies", "audit_log", "research_log", "source_status", "collection_log"]
+#: Report order for the tables the project cares about most. This is a display
+#: preference only -- it is NOT the set of tables reported. A hardcoded list was
+#: the bug: `game_aliases`, `meta`, `player_season_stats`, `quarter_scores` and
+#: `signal_backtest_summary` all existed in the schema and were silently absent
+#: from this report, so two genuinely empty tables (`player_season_stats`,
+#: `quarter_scores`) never appeared in the "empty tables" line that exists to
+#: catch exactly that. Every table in sqlite_master is now reported.
+TABLE_ORDER = ["games", "odds_snapshots", "injuries", "team_gamelogs", "player_gamelogs",
+               "player_season_stats", "team_season_stats", "quarter_scores",
+               "kalshi_markets", "kalshi_candles", "kalshi_orderbooks",
+               "hist_odds", "hist_backtests", "line_backtests", "signal_backtests",
+               "signal_backtest_summary", "strategies", "bets", "bet_flags",
+               "bankroll_events", "verifications", "anomalies", "audit_log",
+               "research_log", "source_status", "collection_log", "game_aliases",
+               "meta"]
+
+
+def all_tables(con) -> list[str]:
+    """Every real table, preferred ones first, alphabetically afterwards.
+
+    sqlite_sequence is excluded (SQLite's own AUTOINCREMENT bookkeeping, not
+    project data). Anything added to the schema later is picked up here
+    automatically, which is the whole point: the report cannot drift from the
+    schema again.
+    """
+    present = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    ordered = [t for t in TABLE_ORDER if t in present]
+    ordered += sorted(present - set(ordered))
+    return ordered
 
 
 def main(argv: list[str]) -> int:
@@ -35,9 +60,10 @@ def main(argv: list[str]) -> int:
     if "--since" in argv:
         since = argv[argv.index("--since") + 1]
     con = db.connect()
-    print("=== table row counts ===")
+    tables = all_tables(con)
+    print(f"=== table row counts ({len(tables)} tables) ===")
     empty = []
-    for t in TABLES:
+    for t in tables:
         try:
             n = con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
         except Exception as e:  # schema drift should be loud, not silent

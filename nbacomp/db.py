@@ -381,6 +381,9 @@ CREATE TABLE IF NOT EXISTS hist_odds (
   source TEXT NOT NULL DEFAULT 'sbr',
   source_url TEXT NOT NULL,
   source_row_hash TEXT,                  -- detects later edits at the source
+  parser_version TEXT,                   -- parser that produced this row; a hash
+                                         -- change across versions is OUR edit,
+                                         -- not the archive's (see sbr-row-changed)
   spread_printed_row TEXT,               -- which row (away|home) printed the spread
   spread_sign_from_ml INTEGER,           -- 1 when the moneyline made home the favourite
   cross_checked INTEGER NOT NULL DEFAULT 0,
@@ -578,10 +581,18 @@ def _migrate(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE games ADD COLUMN season_type TEXT")
     hcols = {r[1] for r in con.execute("PRAGMA table_info(hist_odds)")}
     for col, ddl in (("spread_printed_row", "TEXT"),
-                     ("spread_sign_from_ml", "INTEGER")):
+                     ("spread_sign_from_ml", "INTEGER"),
+                     ("parser_version", "TEXT")):
         if col not in hcols:
             # 2026-09-21: recorded when the archive's spread sign could not be
             # trusted and the sign was taken from the moneyline instead.
+            # 2026-09-22 (parser_version): source_row_hash hashes the parsed
+            # row, so when the parser started emitting two new fields every
+            # stored row's hash changed at once and the run logged 1,277
+            # "the archive's values differ" warnings. The archive had not been
+            # edited — our parser had. Storing the parser version that produced
+            # a row lets the two be told apart. Existing rows keep NULL, which
+            # means "written by an unknown (pre-2) parser".
             con.execute(f"ALTER TABLE hist_odds ADD COLUMN {col} {ddl}")
     scols = {r[1] for r in con.execute("PRAGMA table_info(strategies)")}
     if "version_history" not in scols:

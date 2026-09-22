@@ -68,7 +68,7 @@ every pipeline run, and it fails the CI job when a collector crashed.
 
 <!-- facts:headline -->
 - strategies registered: **27** — `nbacomp/strategies.py` is the only source of this number, and the table below is generated from it
-- offline test suite: **242 tests** collected by pytest in 16 files (237 test functions; parametrized cases expand)
+- offline test suite: **263 tests** collected by pytest in 17 files (258 test functions; parametrized cases expand)
 - live database row counts are **not quoted here**: read `data/db_report.txt`, which every pipeline run regenerates
 <!-- /facts:headline -->
 
@@ -84,6 +84,34 @@ Quarantine state, stated precisely because it changed in this pass:
   original flag row is still there (`bet_flags` is append-only at the database level);
   only its power to exclude the bet is withdrawn. NBA-026 itself is now parked, so those
   bets carry `strategy-parked` (warn) and place no more.
+
+Integrity corrections made in the 2026-09-22 pass, each found by reading the committed
+database rather than the code:
+
+- **1,277 `sbr-row-changed` warnings were not source edits.** They are 88% of every
+  `warn` ever recorded, and all of them were written in one run
+  (`2026-09-21T23:27:17..23Z`) when the SBR parser went v1 → v2. `source_row_hash`
+  hashes the whole parsed row, so our own parser emitting two new fields was
+  indistinguishable from the archive editing a value — and the anomaly text claimed the
+  archive had changed. It had not. Rows now carry the `parser_version` that produced
+  them: a hash change under an unchanged version raises `sbr-row-changed` (a real source
+  edit), a hash change across versions raises `sbr-row-reparsed` (our edit). The 1,277
+  rows are **still in the table** — it is append-only — with one appended
+  `sbr-row-changed-reclassified` record stating what they actually were.
+- **`data/db_report.txt` was hiding two empty tables.** Its table list was hardcoded and
+  five tables in the schema were absent from it, including `quarter_scores` and
+  `player_season_stats`, both empty. `quarter_scores` is the *only* settlement path for
+  NBA-013's quarter/half market, so its emptiness is a live limitation, not trivia. The
+  list is now derived from `sqlite_master`, so a table cannot go unreported again.
+- **Open positions now carry a mark.** The spec requires a current price; nothing
+  computed one, and `positions.html` claimed marks came from orderbook snapshots while
+  rendering no mark column. It now shows current price, current line, observed line move
+  since the decision timestamp, and unrealized P&L — and where no price was ever
+  observed it says **UNAVAILABLE** instead of inventing one. All 14 open positions are
+  `line-only`, because ESPN's free feed publishes lines without side prices
+  (`price_format='line'`, `price=0.0`); treating that 0.0 as a price would be
+  fabrication, so it is excluded. Real observed line moves are shown, e.g. MIN @ MIA
+  total 242.5 → 243.5.
 
 ## The competition
 
@@ -199,7 +227,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 ```
 
 <!-- facts:suite -->
-`python -m pytest tests` collects **242 tests** across 16 files (offline, no network needed). 237 of those are test functions; the difference is parametrized cases:
+`python -m pytest tests` collects **263 tests** across 17 files (offline, no network needed). 258 of those are test functions; the difference is parametrized cases:
 
 - `tests/test_adversarial.py` — 24 tests
 - `tests/test_audit_summary.py` — 3 tests
@@ -211,6 +239,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 - `tests/test_line_backtest.py` — 16 tests
 - `tests/test_live_shapes.py` — 18 tests
 - `tests/test_new_markets.py` — 7 tests
+- `tests/test_pass4_integrity.py` — 21 tests
 - `tests/test_pipeline_fixes.py` — 33 tests
 - `tests/test_quarantine_scope.py` — 13 tests
 - `tests/test_run_scope.py` — 11 tests
