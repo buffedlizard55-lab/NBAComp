@@ -56,18 +56,23 @@ Read this before reading any result. Three things are true at once:
    evidence. (Full table in `PROJECT_REPORT.md`.)
 3. **Everything else is forward-looking and labeled as such.**
 
+Counts below were read out of `data/nbacomp.db` at **2026-09-22T00:55Z**. The
+append-only tables (`anomalies`, `collection_log`, `audit_log`, `signal_backtests`)
+grow on every run, so they will be higher by the time you read this — the point is
+what they show, not the exact figure.
+
 | table | rows | note |
 |-------|------|------|
 | `games` | 4,346 | 4,173 finals (2023-10 → 2026-04) + 173 scheduled 2026-27; 5 cross-verified ESPN↔BRef |
 | `hist_odds` | 4,043 | SBR archive, validated rows only (2013-14..2022-23); rejected rows are logged, never stored |
 | `hist_backtests` | 63 | priced replay output: 6 rules × 10 seasons + `ALL` + the MARKET baseline |
-| `signal_backtests` | 11,384 | outcome-only validation rows (no prices) |
-| `team_gamelogs` / `player_gamelogs` | 2,940 / 40,366 | box-score walk (ESPN primary, BRef verification) |
-| `odds_snapshots` | 672 | all **forward**: ESPN keeps no odds for past dates |
-| `kalshi_markets` / `kalshi_candles` / `kalshi_orderbooks` | 59 / 530 / 102 | live NBA series + captured books; settled NBA markets expose no candles (probed, recorded) |
+| `signal_backtests` | 11,417 | outcome-only validation rows (no prices) |
+| `team_gamelogs` / `player_gamelogs` | 3,249 / 44,416 | box-score walk (ESPN primary, BRef verification) |
+| `odds_snapshots` | 720 | all **forward**: ESPN keeps no odds for past dates |
+| `kalshi_markets` / `kalshi_candles` / `kalshi_orderbooks` | 59 / 530 / 108 | live NBA series + captured books; settled NBA markets expose no candles (probed, recorded) |
 | `bets` / `bet_flags` | 10 / 33 | the 10 quarantined forward bets and why |
 | `strategies` | 24 | 9 `failed`, 4 `weak`, 11 `forward_only` |
-| `anomalies` / `collection_log` / `audit_log` | 1,684 / 1,975 / 2,797 | append-only; the dashboard quotes the latest audit pass *and* the cumulative log separately |
+| `anomalies` / `collection_log` / `audit_log` | 1,696 / 2,056 / 2,810 | append-only; the dashboard quotes the latest audit pass *and* the cumulative log separately |
 
 The last pipeline pass reported **0 critical / 3 warn / 8 info** anomalies of its own
 (the three warnings are the intentional quarantine disclosures), while the cumulative
@@ -145,6 +150,7 @@ tests/              pytest suite (odds math, settlement, pushes, look-ahead guar
                     engine math, SBR parser, run scope, deployed-site check, site)
 .github/workflows/  collect-and-build (cron), tests
 data/nbacomp.db     collected + derived state (SQLite, committed each run)
+data/live_verify.json  last byte-level check of the deployed Pages site
 index.html …        generated site (GitHub Pages serves main:/)
 ```
 
