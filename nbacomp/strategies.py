@@ -150,7 +150,7 @@ register("NBA-001", version="1.0.0", name="Rest Edge Raven", username="RestEdgeR
          historical_window="seasons with collected Kalshi price history",
          expected_edge="Literature prior: B2B cost ~1.5-3.0 pts; exploiting only when market gap >= 4pp",
          failure_modes=["market already prices B2B", "small sample", "rest policies change by team"],
-         data_limitations=["historical prices only where Kalshi candles exist"],
+         data_limitations=["priced evidence exists only for the SBR archive window (Oct-Dec of 2013-14..2022-23, moneylines only; see research.html)", "Kalshi candles cover only the forward window"],
          lookahead_controls=["rest computed only from games strictly before decision date",
                              "price must be timestamped at or before decision"])
 
@@ -670,7 +670,7 @@ register("NBA-024", version="1.0.0", name="Momentum Witness", username="Momentum
          failure_modes=["streaks proxy team quality, which the market already prices",
                         "selection effects in the streak sample",
                         "no price-verified backtest is possible from free data"],
-         data_limitations=["no historical prices exist, so the measured hit rate is not a P&L"],
+         data_limitations=["moneylines are priced from the SBR archive (Oct-Dec of each season); the measured hit rate alone is not a P&L — the priced simulation on research.html is"],
          lookahead_controls=["streaks computed from strictly prior games in the same season",
                              "prices timestamped at or before the decision"])
 

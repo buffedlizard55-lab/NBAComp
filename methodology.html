@@ -25,6 +25,17 @@ closing prices, and game results are never used at decision time.</li>
 absorbed into the model only after its bets are placed. Settlement uses Kalshi's own recorded result when
 available, cross-checked against the cross-verified final score; disagreements raise anomalies instead of
 silent choices.</p>
+<p><b>Two tracks, never mixed.</b> (1) <i>Signal replay</i>: the decision rule is scored against verified
+final results, strictly prior data only. This measures whether the rule picks winners, <b>not</b> whether it
+makes money. (2) <i>Priced replay</i>: the same rules are simulated at real historical moneylines from the
+free SBR archive (4,043 validated games, 2013-14..2022-23, October-December of each season), with model
+probabilities shrunk (0.5) and edges capped at 8% before a bet is allowed. Every priced run also simulates a
+<i>MARKET baseline</i> — the home side at the archive's own price on every game — because a rule that beats
+the market must first beat that number. All six moneyline rules currently in the priced replay lose money,
+and the baseline loses too (-5.3% ROI), so the published conclusion is that these signals do not survive
+real prices; the priced result tiers each rule <span class="mono">failed</span> regardless of its signal
+hit rate. Totals, spreads and props remain unbacktestable at real prices (no free per-side history) and are
+forward-tested instead; no price is ever invented.</p>
 <h2>Forward testing &amp; paper trading</h2>
 <p>When historical prices don't exist (player props, sportsbook lines pre-2026-27), strategies are
 forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
@@ -74,7 +85,7 @@ the version that produced it.</p>
 <h2>What this site is not</h2>
 <p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
 point is to find out, with real verified data, which hypotheses survive.</p>
-</main>
+<h2>Deployment verification</h2><p class="muted">No deployed-site verification recorded yet. Each collection run ends with an independent check (<span class='mono'>tools/verify_deployed.py</span>) that fetches every published page and requires it to be byte-identical to the committed file; its output is committed as <span class='mono'>data/live_verify.json</span>.</p></main>
 <footer>Simulated paper trading only. No real money. Data: ESPN, NBA.com/stats, Kalshi public API —
 see <a href="sources.html">Data Sources</a>. Every number on this site is traceable to a logged,
 timestamped source; unverified data is labeled as such.</footer>

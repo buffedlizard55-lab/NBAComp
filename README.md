@@ -24,89 +24,65 @@ RESEARCH → DISCOVER → VERIFY → MODEL → BACKTEST → FORWARD TEST → PAP
 3. **Model**: chronological Elo (MOV-adjusted, season carryover), rolling pace/efficiency
    totals, rest/B2B/road-trip/time-zone features — built strictly from games before the
    decision date (look-ahead-proof by construction, tested).
-4. **Backtest** where verified price history exists (Kalshi candlesticks for NBA winner
-   markets), with Kalshi fee schedule and 1-tick slippage. **Forward-test** where it
-   doesn't (props, totals lines pre-2026-27) — labeled assumptions never passed off as
-   observed prices. Because **no free historical price series exists at all**, the
-   decision rules are additionally validated **outcome-only** against verified final
-   results (`signal_backtest.py`), and those results are published as *signal quality,
-   not P&L* — never mixed with backtest or forward records.
-5. **Paper-trade**: 22 strategies, $1,000 each, 25%-Kelly capped at 3% per bet, settled from
+4. **Backtest on real prices, then on outcomes — as two separate tracks.** The *priced*
+   track (`hist_backtest.py`) replays 4,043 validated games from the free SBR archive
+   (2013-14..2022-23, October-December of each season, moneylines only) at the archive's
+   own prices, with a MARKET baseline (home side on every game) for comparison; model
+   probabilities are shrunk and edges capped before a bet is allowed. The *signal* track
+   (`signal_backtest.py`) scores each rule against verified final results strictly
+   chronologically (4,173 finals) and is published as signal quality, **not** P&L — the
+   two are never mixed. Totals, spreads and props have no free per-side price history, so
+   those rules are forward-tested only; assumption prices are always labeled as such.
+5. **Paper-trade**: 24 strategies, $1,000 each, 25%-Kelly capped at 3% per bet, settled from
    verified results. Backtest / forward records are always kept separate.
 6. **Publish**: static site rebuilt each run — dashboard, leaderboard, per-strategy pages,
    upcoming bets, open positions, full trade history, source registry, research log,
    methodology. The dashboard also publishes the pipeline's own open anomalies: an empty
    database is presented as a failure, never as a clean run.
 
-## Current state (verified 2026-09-21, after the fix run)
+## Current state (verified 2026-09-22, read from `data/nbacomp.db`)
 
-Read this before reading any result on the site. The competition has **no settled
-results yet** — 9 forward bets are open (all NBA-002, all `pending`, the 2026-27
-season has not tipped off), zero are settled, so no P&L, ROI or edge is claimed
-anywhere.
+Read this before reading any result. Three things are true at once:
 
-What the database actually holds after the auto-run of commit `8be85b1`
-(2026-09-21T03:15:27Z) and the pipeline run of 2026-09-21T04:34Z that
-placed the competition's first bets, read out of `data/nbacomp.db`:
+1. **The competition has no settled bets.** 10 forward bets are open (all NBA-002
+   totals, all `pending`, priced at an assumed −110 because no observed price existed
+   at decision time), zero settled, so no forward P&L, ROI or edge is claimed anywhere.
+   Those 10 bets carry `price-not-observed`, `stale-state-at-decision` and
+   `strategy-parked` quarantine flags: they are excluded from exposure and ranking and
+   published on `positions.html#quarantined` rather than deleted.
+2. **The priced historical backtest is done and it is negative.** 4,043 real games,
+   six moneyline rules, all six lose money; the MARKET baseline loses −5.3% over the
+   same games. Six strategies are therefore tiered `failed` by their own price
+   evidence. (Full table in `PROJECT_REPORT.md`.)
+3. **Everything else is forward-looking and labeled as such.**
 
 | table | rows | note |
 |-------|------|------|
-| `games` | 2,961 | 2,788 finals (2024-10 → 2026-04) + 173 scheduled 2026-27 (incl. the 2026-10-20 openers), one canonical row per game; 0 cross-verified so far |
-| `kalshi_markets` | 59 | 6 `KXNBAGAME` (the 2026-10-20 openers) + 53 `KXNBAMVP`, all live/active |
-| `kalshi_candles` | 412 | hourly OHLCV for those 6 openers, accumulating since 2026-09-18 |
-| `kalshi_orderbooks` | 48 | real quotes, e.g. `KXNBAGAME-26OCT20OKCSAS-SAS` bid 53 / ask 54 |
-| `odds_snapshots` | 240 | all **forward**: ESPN keeps no odds for past dates, so these are the first lines ever captured |
-| `injuries` | 0 | ESPN injury board is empty in the offseason |
-| `team_gamelogs` / `player_gamelogs` | 182 / 3,158 | box-score walk in progress (~2,697 ESPN finals still lack team box scores; the incremental ESPN walk is the channel — BallDon'tLie was evaluated for deep history and excluded: its keyless API is retired, it now requires a registered key — CI-verified 2026-09-21) |
-| `quarter_scores` | 0 | KXNBA1H settlement fallback; starts filling as in-game scores are captured |
-| `bets` | 9 | all **open** (NBA-002 UNDER on 2026-27 preseason/opening-week lines, `PRICED-ASSUMPTION` at −110); none settled — the season has not tipped off |
-| `verifications` | 0 | cross-verification runs once ESPN and BRef rows overlap |
+| `games` | 4,346 | 4,173 finals (2023-10 → 2026-04) + 173 scheduled 2026-27; 5 cross-verified ESPN↔BRef |
+| `hist_odds` | 4,043 | SBR archive, validated rows only (2013-14..2022-23); rejected rows are logged, never stored |
+| `hist_backtests` | 63 | priced replay output: 6 rules × 10 seasons + `ALL` + the MARKET baseline |
+| `signal_backtests` | 11,384 | outcome-only validation rows (no prices) |
+| `team_gamelogs` / `player_gamelogs` | 2,940 / 40,366 | box-score walk (ESPN primary, BRef verification) |
+| `odds_snapshots` | 672 | all **forward**: ESPN keeps no odds for past dates |
+| `kalshi_markets` / `kalshi_candles` / `kalshi_orderbooks` | 59 / 530 / 102 | live NBA series + captured books; settled NBA markets expose no candles (probed, recorded) |
+| `bets` / `bet_flags` | 10 / 33 | the 10 quarantined forward bets and why |
+| `strategies` | 24 | 9 `failed`, 4 `weak`, 11 `forward_only` |
+| `anomalies` / `collection_log` / `audit_log` | 1,684 / 1,975 / 2,797 | append-only; the dashboard quotes the latest audit pass *and* the cumulative log separately |
 
-Three facts this establishes rather than assumes:
-
-1. **Settled Kalshi NBA markets expose no price history at all.** 480 constructed tickers
-   were probed for candlesticks and 4 for the trade tape: 0 candles, 0 trades (HTTP 200).
-   Price history can therefore only accumulate forward from 2026-09-18.
-2. **Basketball-Reference alone yields a complete two-season schedule with finals and
-   tipoff times** (2,643/2,643 rows have `tipoff_utc`) — enough for schedule- and
-   result-based modelling, not enough to price a bet.
-3. **The 2026-27 season has not tipped off**, so the only live NBA markets are the three
-   opening-night games and season-long futures.
-4. **Team vocabulary had to be unified before anything could be joined.** ESPN abbreviates
-   six franchises differently from BRef and from Kalshi's event tickers
-   (`NY/GS/SA/UTAH/WSH/NO` vs `NYK/GSW/SAS/UTA/WAS/NOP`), which stored 497 duplicate games
-   and made **zero** Kalshi markets joinable to a game. ESPN's NBA scoreboard also lists
-   preseason exhibitions against non-NBA clubs (`STARS`, `STRIPES`, `WORLD`, `GUANGZHOU`,
-   `HAPOEL`, `LON`, `MEL`), which had been stored as NBA games. Both are fixed, repaired in
-   place, and now raised as audit findings if they recur.
-5. **No free historical NBA price series exists.** probe7 (`data/diagnostics.txt`, run
-   `35554330261`) found past ESPN scoreboards return games with **no odds at all** (20260115:
-   9 events / 0 odds; 20260613: 1/0; 20250115: 11/0; 20241022: 2/0), BRef publishes no odds,
-   and ESPN's summary endpoint rejects BRef boxscore IDs (HTTP 400). With settled Kalshi
-   markets exposing neither candles nor tape, **price-taking backtests are impossible** and
-   every strategy has to be forward-tested. BRef's schedule + finals + tipoffs support
-   modelling and settlement, not pricing.
-
-Before that run, `games`, `kalshi_markets`, `kalshi_candles`, `bets` and `anomalies` were
-all **0** while every workflow reported success. Three defects caused it, all fixed and all
-pinned by `tests/test_pipeline_fixes.py` (research-log entries 9 and 10):
-
-1. `kalshi_snapshot` crashed on live market rows that omit `series_ticker`, so **no Kalshi
-   price was ever stored**;
-2. the two-season history backfill was gated behind a manual `workflow_dispatch` input the
-   6-hourly cron never sets, so `games` stayed at 0 and every backtest logged
-   *"no games in window"*;
-3. the daily Basketball-Reference task requested the current month, which does not exist in
-   the offseason, logging a 404 "failure" every run.
+The last pipeline pass reported **0 critical / 3 warn / 8 info** anomalies of its own
+(the three warnings are the intentional quarantine disclosures), while the cumulative
+log holds every past finding — including one open critical *kind*
+(`bet-quarantined-stale-state-at-decision`, the standing disclosure that those 10 bets
+were priced wrong at decision time).
 
 ## The competition
 
-- Window: **2026-09-20 → 2027-09-19** · 22 strategies · primary objective: **total return**
+- Window: **2026-09-20 → 2027-09-19** · 24 strategies · primary objective: **total return**
 - Risk stats (drawdown, win rate, volatility) tracked and shown, not used for ranking
 - Losing strategies are never hidden; every strategy page carries an auto-generated
   "why it worked / failed" analysis that is sample-size aware
 
-## Strategy families (22 registered; most v1.0.0, three revised)
+## Strategy families (24 registered; most v1.0.0, five revised)
 
 IDs, usernames and categories below are generated from `nbacomp/strategies.py` — the same
 registry that populates the database and the site, so this table cannot drift from them.
@@ -149,13 +125,24 @@ limitations and look-ahead controls; the full text is on the site's strategy pag
 - Nothing is invented: no odds, no stats, no fills, no liquidity, no results. If something
   can't be verified it is marked **unverified** and worked around.
 - Historical price availability is probed at runtime and recorded — never assumed.
+  Concretely: the SBR archive is real, free and in the database (4,043 validated
+  games), and the six moneyline rules simulated on it **all lose money**; totals,
+  spreads and props have no free per-side price history, so they are forward-tested
+  and never assigned a simulated profit.
+- A rule's tier is decided by its own evidence: price-based ROI when a priced
+  simulation exists (with the MARKET baseline quoted next to it), otherwise the
+  outcome-only hit rate against the base rate. Losing rules stay on the site, named
+  and explained.
 
 ## Repo layout
 
 ```
-nbacomp/            core package (db, sources, engine, backtest, paper, audit, sitegen)
-tools/              pipeline entrypoints (collect, run_pipeline, seed_research)
-tests/              pytest suite (odds math, settlement, pushes, look-ahead guards, site)
+nbacomp/            core package (db, sources, engine, backtest, hist_backtest,
+                    signal_backtest, paper, validation, audit, sitegen)
+tools/              pipeline entrypoints (run_pipeline, seed_research, db_report,
+                    hist_backtest, probe_*, run_scope, verify_deployed)
+tests/              pytest suite (odds math, settlement, pushes, look-ahead guards,
+                    engine math, SBR parser, run scope, deployed-site check, site)
 .github/workflows/  collect-and-build (cron), tests
 data/nbacomp.db     collected + derived state (SQLite, committed each run)
 index.html …        generated site (GitHub Pages serves main:/)
@@ -167,10 +154,13 @@ The sandbox/dev image has no pytest and a PEP-668-managed system Python, so use 
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pytest
-.venv/bin/python -m pytest tests          # offline suite, no network needed (131 tests)
-.venv/bin/python -m nbacomp.collect daily  # needs open internet (runs automatically in CI)
-.venv/bin/python tools/run_pipeline.py     # strategies + engines + audit + site build
-.venv/bin/python tools/db_report.py        # row counts + collection health (CI gate)
+.venv/bin/python -m pytest tests            # offline suite, no network needed (200 tests)
+.venv/bin/python -m nbacomp.collect daily    # needs open internet (runs automatically in CI)
+.venv/bin/python tools/run_pipeline.py       # strategies + engines + audit + site build
+.venv/bin/python tools/db_report.py          # row counts + collection health (CI gate)
+.venv/bin/python tools/hist_backtest.py      # priced replay over the SBR archive -> hist_backtests
+.venv/bin/python tools/run_scope.py --event schedule --message "[auto] x"   # who may skip?
+.venv/bin/python tools/verify_deployed.py    # live Pages site vs committed bytes (CI; needs egress)
 ```
 
 Collection tasks (`python -m nbacomp.collect <task>`):

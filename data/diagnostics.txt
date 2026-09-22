@@ -76,7 +76,7 @@ probe7 2026-09-21T23:50:34Z
   espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
 probe7 done
 
-probe7 2026-09-21T23:54:49Z
+probe7 2026-09-22T00:01:14Z
   espn 20260115: http=200 events=9 state=post events_with_odds=0
   espn 20260613: http=200 events=1 state=post events_with_odds=0
   espn 20250115: http=200 events=11 state=post events_with_odds=0

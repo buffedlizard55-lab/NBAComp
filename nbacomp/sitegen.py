@@ -329,13 +329,15 @@ def index(con, out_dir):
                        f"<div class='k'>Pipeline health: {len(latest_critical)} critical "
                        f"anomal{'y' if len(latest_critical) == 1 else 'ies'} open</div>"
                        f"<ul class='small'>{items}</ul>"
+                       f"<p class='muted small'>{_run_counts_note(con)}</p>"
                        f"<p class='muted small'>Full audit trail on the "
                        f"<a href='sources.html'>data sources</a> page. The site publishes its own "
                        f"failures rather than presenting an empty database as a clean run.</p></div>")
     else:
         health_html = ("<div class='card' style='border-left:4px solid #27ae60'>"
                        "<div class='k'>Pipeline health</div>"
-                       "<div class='v'>no critical anomalies</div></div>")
+                       "<div class='v'>no critical anomalies</div>"
+                       f"<p class='muted small'>{_run_counts_note(con)}</p></div>")
 
     qrows = con.execute(
         "SELECT f.flag, MIN(f.severity) sev, COUNT(*) c FROM bet_flags f GROUP BY f.flag").fetchall()
@@ -710,7 +712,17 @@ def strategies_page(con, out_dir):
     for sid, m in S.STRATEGIES.items():
         perf_f = strategy_performance(con, sid, "forward")
         perf_b = strategy_performance(con, sid, "backtest")
-        why = _why_analysis(perf_b, perf_f)
+        hist_row = con.execute(
+            "SELECT * FROM hist_backtests WHERE strategy_id=? AND UPPER(season)='ALL' "
+            "AND run_id=(SELECT run_id FROM hist_backtests ORDER BY generated_utc "
+            "DESC LIMIT 1)", (sid,)).fetchone()
+        base_row = con.execute(
+            "SELECT roi FROM hist_backtests WHERE strategy_id='MARKET' "
+            "AND UPPER(season)='ALL' AND run_id=(SELECT run_id FROM hist_backtests "
+            "ORDER BY generated_utc DESC LIMIT 1)").fetchone()
+        why = _why_analysis(perf_b, perf_f,
+                            hist=dict(hist_row) if hist_row else None,
+                            baseline_roi=base_row["roi"] if base_row else None)
         srcs = "".join(f"<code>{_esc(s)}</code> " for s in m["data_sources"])
         markets = "".join(f"<code>{_esc(x)}</code> " for x in m["market_types"])
         rules = "".join(f"<li>{_esc(r)}</li>" for r in m["entry_rules"])
@@ -878,15 +890,31 @@ def signal_validation_html(con, sid: str) -> str:
         else:
             core = "n/a"
         trs.append(f"<tr><td>{_esc(r['season'])}</td><td>{core}</td></tr>")
+    hist = con.execute(
+        "SELECT bets, roi, pnl, win_rate FROM hist_backtests WHERE strategy_id=? "
+        "AND UPPER(season)='ALL' AND run_id=(SELECT run_id FROM hist_backtests "
+        "ORDER BY generated_utc DESC LIMIT 1)", (sid,)).fetchone()
+    if hist:
+        priced_note = (
+            f"<b>Priced evidence for this rule exists:</b> {hist['bets']} simulated bets at "
+            f"real archive moneylines returned {fmt_money(hist['pnl'])} "
+            f"({fmt_pct(hist['roi'])} ROI) on a "
+            f"{(hist['win_rate'] or 0) * 100:.1f}% win rate — full detail, per season, on the "
+            f"<a href='research.html'>research page</a>. The outcome table below measures the "
+            f"SIGNAL only and is not P&amp;L; where the two disagree, the priced simulation is "
+            f"the one that matters.")
+    else:
+        priced_note = (
+            "No free historical price series exists for THIS market (settled Kalshi markets "
+            "expose no candles/tape; ESPN keeps no past odds; the SBR archive covers moneylines "
+            "only), so a price-taking backtest is impossible and would require fabricated "
+            "prices. The outcome table below measures the strategy's <i>decision rule</i> "
+            "against verified final results, chronologically (strictly prior data only) — "
+            "evidence about the signal, <b>not</b> betting P&amp;L, ROI or edge.")
     return (
         "<details open><summary><b>Signal validation</b> — decision rule vs verified "
         "outcomes (NO market prices; not P&amp;L)</summary>"
-        "<p class='muted small'>No free historical NBA price series exists (verified: "
-        "settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a "
-        "price-taking backtest is impossible and would require fabricated prices. This "
-        "section instead validates the strategy's <i>decision rule</i> against verified "
-        "final results, chronologically (strictly prior data only). It is evidence "
-        "about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league "
+        "<p class='muted small'>" + priced_note + " Baseline = league "
         "base rate of the picked side (winner rules) / in-sample season-mean total "
         "(total rules).</p>"
         "<table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody>"
@@ -904,7 +932,8 @@ def _profit_breakdown_html(by: dict, dim: str) -> str:
             "</th><th>Bets</th><th>Wins</th><th>P&L</th></tr></thead><tbody>" + rows + "</tbody></table>")
 
 
-def _why_analysis(bt: dict, fwd: dict) -> str:
+def _why_analysis(bt: dict, fwd: dict, hist: dict | None = None,
+                  baseline_roi: float | None = None) -> str:
     parts = []
     if bt.get("bets"):
         if (bt.get("pnl") or 0) > 0 and bt.get("win_rate", 0) > 0.5:
@@ -919,9 +948,22 @@ def _why_analysis(bt: dict, fwd: dict) -> str:
         parts.append(f"<b>Sample:</b> {bt['bets']} backtest bets. "
                      + ("Small sample — treat as suggestive, not established." if bt["bets"] < 100
                         else "Sample size is non-trivial but season-level."))
+    elif hist and hist.get("bets"):
+        roi = hist.get("roi") or 0.0
+        vs_base = (f" (market baseline {fmt_pct(baseline_roi)})"
+                   if baseline_roi is not None else "")
+        parts.append(
+            f"<b>Why it fails at real prices:</b> simulated on {hist['bets']} games at the "
+            f"archive's own moneylines it returned {fmt_money(hist['pnl'])} "
+            f"({fmt_pct(roi)} ROI){vs_base}. "
+            + ("The rule may still select good teams; it simply does not select them more "
+               "cheaply than the price already does."
+               if (hist.get('win_rate') or 0) > 0.5 else
+               "It also lost more often than it won, so there is no supporting signal."))
     else:
-        parts.append("<b>No backtest observations.</b> This is an explicit data limitation (no free "
-                     "historical prices for these markets), not evidence either way.")
+        parts.append("<b>No backtest observations.</b> This is an explicit data limitation for "
+                     "this market (no free historical per-side prices for totals/spreads, no free "
+                     "prop or injury archives), not evidence either way.")
     if fwd.get("bets"):
         parts.append(f"<b>Forward so far:</b> {fwd['bets']} settled / {fwd.get('pending', 0)} pending.")
     else:
@@ -1266,6 +1308,55 @@ decided — so research is auditable and never silently duplicated.</p>
     _write(out_dir, "research.html", page("Research", body, "research.html"))
 
 
+def live_verify_html(out_dir: str = ".") -> str:
+    """Deployed-site verification block, from data/live_verify.json (real evidence).
+
+    The acceptance criterion is "verify the GitHub deployment and the live site",
+    so the site reports what that check actually observed -- or says plainly that
+    it has not run yet -- instead of asserting that deployment works.
+    """
+    cand = os.path.join(out_dir or ".", "data", "live_verify.json")
+    path = cand if os.path.exists(cand) else os.path.join("data", "live_verify.json")
+    if not os.path.exists(path):
+        return ("<h2>Deployment verification</h2><p class=\"muted\">No deployed-site "
+                "verification recorded yet. Each collection run ends with an independent "
+                "check (<span class='mono'>tools/verify_deployed.py</span>) that fetches every "
+                "published page and requires it to be byte-identical to the committed file; "
+                "its output is committed as <span class='mono'>data/live_verify.json</span>.</p>")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rep = json.load(fh)
+    except Exception as e:  # corrupt artifact must not crash the build
+        return ("<h2>Deployment verification</h2><p class=\"bad\">Could not read "
+                f"data/live_verify.json ({_esc(e)}).</p>")
+    ok = rep.get("verdict") == "ok"
+    cls = "ok" if ok else "bad"
+    rows = [[_esc(r["path"]), r["http_status"], f"{r['live_bytes']:,}",
+             _esc(r["live_sha256"][:12]), f"<span class='{ 'ok' if r['verdict']=='OK' else 'bad'}'>"
+             f"{_esc(r['verdict'])}</span>"] for r in rep.get("pages", [])]
+    build = rep.get("pages_build") or {}
+    note = ""
+    if build.get("matched") is False:
+        note = (f"<p class='muted small'>The Pages build reported commit "
+                f"<span class='mono'>{_esc((build.get('commit') or '?')[:8])}</span> "
+                f"status <span class='mono'>{_esc(build.get('status') or 'unknown')}</span> "
+                f"({_esc(build.get('note') or '')}); byte comparison above is authoritative.</p>")
+    return f"""
+<h2>Deployment verification</h2>
+<p>Last independent live check: <b class="{cls}">{_esc(rep.get('verdict','unknown')).upper()}</b> —
+{rep.get('pages_ok', 0)}/{rep.get('pages_checked', 0)} published files fetched from
+<a href="{_esc(rep.get('base_url',''))}" rel="noopener">{_esc(rep.get('base_url',''))}</a>
+were <b>byte-identical</b> to the files committed at
+<span class="mono">{_esc((rep.get('commit') or '?')[:12])}</span>
+(checked {_esc(rep.get('generated_utc','?'))}, Pages build status
+<span class="mono">{_esc((build.get('status') or 'unknown'))}</span>). Nothing here is asserted: the
+comparison is the committed SHA-256 of each fetched response against the committed blob, and the
+result is stored in <span class="mono">data/live_verify.json</span>.</p>
+{note}
+{table(["File", "HTTP", "Live bytes", "Live sha256", "Verdict"], rows)}
+"""
+
+
 def methodology(out_dir):
     body = """
 <h1>Methodology</h1>
@@ -1285,6 +1376,17 @@ closing prices, and game results are never used at decision time.</li>
 absorbed into the model only after its bets are placed. Settlement uses Kalshi's own recorded result when
 available, cross-checked against the cross-verified final score; disagreements raise anomalies instead of
 silent choices.</p>
+<p><b>Two tracks, never mixed.</b> (1) <i>Signal replay</i>: the decision rule is scored against verified
+final results, strictly prior data only. This measures whether the rule picks winners, <b>not</b> whether it
+makes money. (2) <i>Priced replay</i>: the same rules are simulated at real historical moneylines from the
+free SBR archive (4,043 validated games, 2013-14..2022-23, October-December of each season), with model
+probabilities shrunk (0.5) and edges capped at 8% before a bet is allowed. Every priced run also simulates a
+<i>MARKET baseline</i> — the home side at the archive's own price on every game — because a rule that beats
+the market must first beat that number. All six moneyline rules currently in the priced replay lose money,
+and the baseline loses too (-5.3% ROI), so the published conclusion is that these signals do not survive
+real prices; the priced result tiers each rule <span class="mono">failed</span> regardless of its signal
+hit rate. Totals, spreads and props remain unbacktestable at real prices (no free per-side history) and are
+forward-tested instead; no price is ever invented.</p>
 <h2>Forward testing &amp; paper trading</h2>
 <p>When historical prices don't exist (player props, sportsbook lines pre-2026-27), strategies are
 forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
@@ -1334,7 +1436,7 @@ the version that produced it.</p>
 <h2>What this site is not</h2>
 <p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
 point is to find out, with real verified data, which hypotheses survive.</p>
-"""
+""" + live_verify_html(out_dir)
     _write(out_dir, "methodology.html", page("Methodology", body, "methodology.html"))
 
 
@@ -1421,10 +1523,55 @@ th.sortable:hover { color:var(--accent); }
     _write(out_dir, "style.css", css)
 
 
+def _run_counts_note(con) -> str:
+    """One sentence separating the latest audit pass from the append-only log."""
+    stamp = con.execute("SELECT value FROM meta WHERE key='audit_last_pass'").fetchone()
+    last_utc = con.execute("SELECT MAX(detected_utc) m FROM anomalies").fetchone()["m"]
+    if not stamp and not last_utc:
+        return "No anomalies recorded yet."
+    rows = json.loads(stamp["value"]) if stamp else {"critical": 0, "warn": 0, "info": 0}
+    when = rows.get("finished_utc") or last_utc
+    total = con.execute("SELECT COUNT(*) c FROM anomalies").fetchone()["c"]
+    return (f"Latest audit pass ({_esc(when)}) recorded {rows.get('critical', 0)} critical / "
+            f"{rows.get('warn', 0)} warn / {rows.get('info', 0)} info. The counters above are "
+            f"cumulative kinds across the whole append-only log ({total:,} entries, never pruned), "
+            f"which is why they exceed a single pass.")
+
+
 def _audit_summary(con) -> dict:
-    rows = con.execute(
-        "SELECT severity, COUNT(*) c FROM anomalies GROUP BY severity").fetchall()
-    return {r["severity"]: r["c"] for r in rows}
+    """Audit counts, with the run/cumulative distinction made explicit.
+
+    ``anomalies`` is an append-only log: nothing is ever deleted, and most checks
+    fire again on every run, so its totals grow monotonically. Publishing those
+    totals under bare severity keys invited the (wrong) reading that the latest
+    pass found 25 critical defects, while the pipeline printed "0 critical" for
+    the same pass. Both numbers are kept, each labelled for what it is.
+    """
+    cum = {r["severity"]: r["c"] for r in con.execute(
+        "SELECT severity, COUNT(*) c FROM anomalies GROUP BY severity").fetchall()}
+    last_utc = con.execute("SELECT MAX(detected_utc) m FROM anomalies").fetchone()["m"]
+    stamp = con.execute(
+        "SELECT value FROM meta WHERE key='audit_last_pass'").fetchone()
+    if stamp:
+        # The audit pass stamps its own counts, so these are the same numbers the
+        # pipeline prints -- not a guess based on the newest timestamp.
+        latest = json.loads(stamp["value"])
+    else:
+        latest = {r["severity"]: r["c"] for r in con.execute(
+            "SELECT severity, COUNT(*) c FROM anomalies WHERE detected_utc=?",
+            (last_utc,)).fetchall()} if last_utc else {}
+    crit = [dict(r) for r in con.execute(
+        "SELECT check_name, COUNT(*) n, MIN(detected_utc) first_utc, MAX(detected_utc) last_utc "
+        "FROM anomalies WHERE severity='critical' GROUP BY check_name ORDER BY n DESC, "
+        "check_name").fetchall()]
+    out = dict(cum)
+    out.update({
+        "scope": "cumulative: the anomalies table is append-only and is never pruned",
+        "latest_run_utc": latest.get("finished_utc") or last_utc,
+        "latest_run_counts": {k: latest[k] for k in ("critical", "warn", "info") if k in latest},
+        "critical_checks_ever_recorded": crit,
+    })
+    return out
 
 
 def _write(out_dir, name, content):
