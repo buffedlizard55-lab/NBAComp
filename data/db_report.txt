@@ -1,13 +1,13 @@
 === table row counts ===
 games                  4346
-odds_snapshots         1056
+odds_snapshots         1104
 injuries               0
-team_gamelogs          5389
+team_gamelogs          5431
 player_gamelogs        72356
 team_season_stats      0
 kalshi_markets         59
-kalshi_candles         590
-kalshi_orderbooks      150
+kalshi_candles         623
+kalshi_orderbooks      156
 hist_odds              4043
 hist_backtests         67
 line_backtests         99
@@ -17,37 +17,37 @@ bets                   14
 bet_flags              49
 bankroll_events        14
 verifications          10
-anomalies              1956
-audit_log              2898
+anomalies              2009
+audit_log              2910
 research_log           13
 source_status          39
-collection_log         2611
+collection_log         2688
 empty tables: injuries, team_season_stats
 games span: 2023-10-05 .. 2026-11-02 finals=4173 verified=5
 === collection log (last 25) ===
-2026-09-22T11:53:14Z signal-backtest        engine                   ok       rows=10412  sigbt-2026-09-21: games=4173 signals=10412 (outcome-only validation; no prices used)
-2026-09-22T11:53:12Z backtest               engine                   ok       rows=0      bt-2026-09-20: bets=0
-2026-09-22T11:53:09Z bref-backfill          basketball-reference     skipped  rows=0      2026-september: offseason, no monthly page exists
-2026-09-22T11:53:09Z boxscores              espn                     ok       rows=0      2026-09-21
-2026-09-22T11:53:09Z kalshi-settled-history kalshi:KXNBAGAME         empty    rows=0      games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
-2026-09-22T11:53:09Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-YES ok       rows=0      http=200 trades=0
-2026-09-22T11:53:09Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NYK ok       rows=0      http=200 trades=0
-2026-09-22T11:53:08Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NO ok       rows=0      http=200 trades=0
-2026-09-22T11:53:08Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-ATL ok       rows=0      http=200 trades=0
-2026-09-22T11:52:59Z kalshi-backfill        kalshi                   empty    rows=0      settled markets not exposed by public API (verified 2026-09-21); forward candle accumulation is the history source
-2026-09-22T11:52:59Z kalshi-backfill        kalshi:KXNBAPRA          ok       rows=0      events=0 skipped=0 markets_total=0
-2026-09-22T11:52:59Z kalshi-backfill        kalshi:KXNBABLK          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-22T11:52:57Z kalshi-backfill        kalshi:KXNBASTL          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-22T11:52:56Z kalshi-backfill        kalshi:KXNBAAST          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-22T11:52:54Z kalshi-backfill        kalshi:KXNBAREB          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-22T11:52:52Z kalshi-backfill        kalshi:KXNBAPTS          ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-22T11:52:50Z kalshi-backfill        kalshi:KXNBAMVP          ok       rows=1      events=1 skipped=0 markets_total=0
-2026-09-22T11:52:50Z kalshi-backfill        kalshi:KXNBA1H           ok       rows=0      events=0 skipped=0 markets_total=0
-2026-09-22T11:52:49Z kalshi-backfill        kalshi:KXNBATOTAL        ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-22T11:52:48Z kalshi-backfill        kalshi:KXNBASPREAD       ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-22T11:52:46Z kalshi-backfill        kalshi:KXNBAGAME         ok       rows=3      events=3 skipped=397 markets_total=0
-2026-09-22T11:52:44Z kalshi-candles-forward kalshi                   ok       rows=405    tickers=6 candles=405 window=2026-09-19T11:52:44Z..2026-09-22T11:52:44Z
-2026-09-22T11:52:44Z kalshi-snapshot        kalshi                   ok       rows=59     open_markets=59 books=6 rejected=0
-2026-09-22T11:52:41Z kalshi-snapshot        kalshi:KXNBAPRA          ok       rows=0      open_markets=0
-2026-09-22T11:52:41Z kalshi-snapshot        kalshi:KXNBABLK          ok       rows=0      open_markets=0
-=== collector crashes recorded (since 2026-09-22T11:49:36Z): 0 ===
+2026-09-22T17:04:59Z signal-backtest        engine                   ok       rows=10473  sigbt-2026-09-21: games=4173 signals=10473 (outcome-only validation; no prices used)
+2026-09-22T17:04:56Z backtest               engine                   ok       rows=0      bt-2026-09-20: bets=0
+2026-09-22T17:04:54Z bref-backfill          basketball-reference     skipped  rows=0      2026-september: offseason, no monthly page exists
+2026-09-22T17:04:54Z boxscores              espn                     ok       rows=0      2026-09-21
+2026-09-22T17:04:54Z kalshi-settled-history kalshi:KXNBAGAME         empty    rows=0      games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
+2026-09-22T17:04:53Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-YES ok       rows=0      http=200 trades=0
+2026-09-22T17:04:53Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NYK ok       rows=0      http=200 trades=0
+2026-09-22T17:04:53Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NO ok       rows=0      http=200 trades=0
+2026-09-22T17:04:52Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-ATL ok       rows=0      http=200 trades=0
+2026-09-22T17:04:44Z kalshi-backfill        kalshi                   empty    rows=0      settled markets not exposed by public API (verified 2026-09-21); forward candle accumulation is the history source
+2026-09-22T17:04:44Z kalshi-backfill        kalshi:KXNBAPRA          ok       rows=0      events=0 skipped=0 markets_total=0
+2026-09-22T17:04:43Z kalshi-backfill        kalshi:KXNBABLK          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-22T17:04:42Z kalshi-backfill        kalshi:KXNBASTL          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-22T17:04:40Z kalshi-backfill        kalshi:KXNBAAST          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-22T17:04:38Z kalshi-backfill        kalshi:KXNBAREB          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-22T17:04:36Z kalshi-backfill        kalshi:KXNBAPTS          ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-22T17:04:34Z kalshi-backfill        kalshi:KXNBAMVP          ok       rows=1      events=1 skipped=0 markets_total=0
+2026-09-22T17:04:34Z kalshi-backfill        kalshi:KXNBA1H           ok       rows=0      events=0 skipped=0 markets_total=0
+2026-09-22T17:04:33Z kalshi-backfill        kalshi:KXNBATOTAL        ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-22T17:04:32Z kalshi-backfill        kalshi:KXNBASPREAD       ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-22T17:04:30Z kalshi-backfill        kalshi:KXNBAGAME         ok       rows=3      events=3 skipped=397 markets_total=0
+2026-09-22T17:04:28Z kalshi-candles-forward kalshi                   ok       rows=408    tickers=6 candles=408 window=2026-09-19T17:04:28Z..2026-09-22T17:04:28Z
+2026-09-22T17:04:28Z kalshi-snapshot        kalshi                   ok       rows=59     open_markets=59 books=6 rejected=0
+2026-09-22T17:04:25Z kalshi-snapshot        kalshi:KXNBAPRA          ok       rows=0      open_markets=0
+2026-09-22T17:04:25Z kalshi-snapshot        kalshi:KXNBABLK          ok       rows=0      open_markets=0
+=== collector crashes recorded (since 2026-09-22T17:03:03Z): 0 ===
