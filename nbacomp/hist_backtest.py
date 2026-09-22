@@ -271,7 +271,6 @@ def _agg(rows: list[dict]) -> dict:
         peak = max(peak, cur)
         mdd = max(mdd, peak - cur)
     return {"bets": n, "wins": wins, "win_rate": (wins / decided) if decided else None,
-            "means": None,
             "pnl": round(pnl, 2), "staked": round(staked, 2),
             "roi": round(pnl / staked, 4) if staked else None,
             "max_dd": round(mdd, 2),

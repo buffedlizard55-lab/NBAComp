@@ -465,4 +465,15 @@ def run_checks(con) -> dict:
     for r in bad_alias:
         record("warn", "alias-target-missing", dict(r))
 
+    # Stamp this pass's own counts. The anomalies table is append-only, so its
+    # totals grow monotonically and cannot answer "how did the latest pass go?";
+    # data/audit_summary.json reads this stamp to answer exactly that, and the
+    # console line prints the same numbers.
+    from . import db as _db
+    summary["finished_utc"] = util.utcnow_iso()
+    _db.insert(con, "meta", {
+        "key": "audit_last_pass",
+        "value": json.dumps({"critical": summary["critical"], "warn": summary["warn"],
+                             "info": summary["info"], "finished_utc": summary["finished_utc"]}),
+        "updated_utc": summary["finished_utc"]}, replace=True)
     return summary

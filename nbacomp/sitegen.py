@@ -329,13 +329,15 @@ def index(con, out_dir):
                        f"<div class='k'>Pipeline health: {len(latest_critical)} critical "
                        f"anomal{'y' if len(latest_critical) == 1 else 'ies'} open</div>"
                        f"<ul class='small'>{items}</ul>"
+                       f"<p class='muted small'>{_run_counts_note(con)}</p>"
                        f"<p class='muted small'>Full audit trail on the "
                        f"<a href='sources.html'>data sources</a> page. The site publishes its own "
                        f"failures rather than presenting an empty database as a clean run.</p></div>")
     else:
         health_html = ("<div class='card' style='border-left:4px solid #27ae60'>"
                        "<div class='k'>Pipeline health</div>"
-                       "<div class='v'>no critical anomalies</div></div>")
+                       "<div class='v'>no critical anomalies</div>"
+                       f"<p class='muted small'>{_run_counts_note(con)}</p></div>")
 
     qrows = con.execute(
         "SELECT f.flag, MIN(f.severity) sev, COUNT(*) c FROM bet_flags f GROUP BY f.flag").fetchall()
@@ -1521,10 +1523,55 @@ th.sortable:hover { color:var(--accent); }
     _write(out_dir, "style.css", css)
 
 
+def _run_counts_note(con) -> str:
+    """One sentence separating the latest audit pass from the append-only log."""
+    stamp = con.execute("SELECT value FROM meta WHERE key='audit_last_pass'").fetchone()
+    last_utc = con.execute("SELECT MAX(detected_utc) m FROM anomalies").fetchone()["m"]
+    if not stamp and not last_utc:
+        return "No anomalies recorded yet."
+    rows = json.loads(stamp["value"]) if stamp else {"critical": 0, "warn": 0, "info": 0}
+    when = rows.get("finished_utc") or last_utc
+    total = con.execute("SELECT COUNT(*) c FROM anomalies").fetchone()["c"]
+    return (f"Latest audit pass ({_esc(when)}) recorded {rows.get('critical', 0)} critical / "
+            f"{rows.get('warn', 0)} warn / {rows.get('info', 0)} info. The counters above are "
+            f"cumulative kinds across the whole append-only log ({total:,} entries, never pruned), "
+            f"which is why they exceed a single pass.")
+
+
 def _audit_summary(con) -> dict:
-    rows = con.execute(
-        "SELECT severity, COUNT(*) c FROM anomalies GROUP BY severity").fetchall()
-    return {r["severity"]: r["c"] for r in rows}
+    """Audit counts, with the run/cumulative distinction made explicit.
+
+    ``anomalies`` is an append-only log: nothing is ever deleted, and most checks
+    fire again on every run, so its totals grow monotonically. Publishing those
+    totals under bare severity keys invited the (wrong) reading that the latest
+    pass found 25 critical defects, while the pipeline printed "0 critical" for
+    the same pass. Both numbers are kept, each labelled for what it is.
+    """
+    cum = {r["severity"]: r["c"] for r in con.execute(
+        "SELECT severity, COUNT(*) c FROM anomalies GROUP BY severity").fetchall()}
+    last_utc = con.execute("SELECT MAX(detected_utc) m FROM anomalies").fetchone()["m"]
+    stamp = con.execute(
+        "SELECT value FROM meta WHERE key='audit_last_pass'").fetchone()
+    if stamp:
+        # The audit pass stamps its own counts, so these are the same numbers the
+        # pipeline prints -- not a guess based on the newest timestamp.
+        latest = json.loads(stamp["value"])
+    else:
+        latest = {r["severity"]: r["c"] for r in con.execute(
+            "SELECT severity, COUNT(*) c FROM anomalies WHERE detected_utc=?",
+            (last_utc,)).fetchall()} if last_utc else {}
+    crit = [dict(r) for r in con.execute(
+        "SELECT check_name, COUNT(*) n, MIN(detected_utc) first_utc, MAX(detected_utc) last_utc "
+        "FROM anomalies WHERE severity='critical' GROUP BY check_name ORDER BY n DESC, "
+        "check_name").fetchall()]
+    out = dict(cum)
+    out.update({
+        "scope": "cumulative: the anomalies table is append-only and is never pruned",
+        "latest_run_utc": latest.get("finished_utc") or last_utc,
+        "latest_run_counts": {k: latest[k] for k in ("critical", "warn", "info") if k in latest},
+        "critical_checks_ever_recorded": crit,
+    })
+    return out
 
 
 def _write(out_dir, name, content):

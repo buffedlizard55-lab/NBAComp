@@ -95,7 +95,7 @@ def main():
 
         # 3) audit
         summary = audit.run_checks(con)
-        print(f"audit: {summary['critical']} critical / {summary['warn']} warn / "
+        print(f"audit (this pass): {summary['critical']} critical / {summary['warn']} warn / "
               f"{summary['info']} info")
 
         # 4) site

@@ -71,7 +71,7 @@ publishes the entire pipeline as a static GitHub Pages site.
 > offseason), no box scores (cursor `20241028`), and **no bets of any kind** — so still
 > **0 backtested strategies, 0 forward-tested strategies, $0 P&L**.
 
-## Strategies discovered (22; most v1.0.0, three revised this pass)
+## Strategies discovered (24 registered; most v1.0.0, five revised)
 
 | ID | Username | Category | Win condition |
 |----|----------|----------|--------------|
@@ -107,34 +107,45 @@ the old version — no history is rewritten.
 
 ## Strategies backtested (chronologically, no look-ahead)
 
-Implementations in `nbacomp/backtest.py`. The same evaluator set runs in the
-forward paper engine so a backtested rule is exactly the rule traded in the
-competition.
+Two tracks exist and are never mixed. Full numbers live on the leaderboard,
+each strategy page and the research page; the artifacts are
+`data/hist_backtest.json` and the `hist_backtests` table.
 
-- **Result to date: 0 backtest bets.** Every `backtest` row in
-  `collection_log` reads `status='empty'`, `detail='no games in window'`
-  (8 rows at `53465b8`) because `games` was empty. The engine is implemented
-  and unit-tested, but it has never had verified prices to run on, so no
-  backtest number is reported anywhere.
-- **Backtest universe**: Kalshi NBA winner markets where hourly candlestick
-  history exists; settled events are walked via the `event_ticker` encoding
-  (KXNBAGAME-YYMMDDTEAM1TEAM2 → date + team pair). Whether settled markets
-  still expose candlesticks is probed every run by
-  `collect.kalshi_settled_history` and recorded in
-  `meta:kalshi_settled_availability:KXNBAGAME` — it is not assumed.
-- **Prices**: last fully-closed hourly candle strictly before decision, +1
-  tick slippage; depth unobservable, labeled.
-- **Totals/spread**: priced at standard −110 by default; every such bet row
-  is labeled `PRICED-ASSUMPTION` (free historical sportsbook closing lines
-  do not exist; this is documented, not hidden).
-- **Cross-validation**: ESPN finals cross-checked vs Basketball-Reference
-  monthly results; mismatches logged into `verifications` with anomaly status.
-- **Settlement**: Kalshi's own `result` field is ground truth for Kalshi
-  markets; for non-Kalshi markets the verified final score decides; conflicts
-  raise anomalies rather than silent resolution.
-- **Look-ahead guards**: enforced in code (PriceBook, append-only DB trigger,
-no bet inside 1h of tipoff) and tested (38 regression tests cover candle
-closure, side awareness, no-lookahead, dedup, append-only).
+**Track 1 — signal replay (outcome only, no prices).** `nbacomp/signal_backtest.py`
+walks 4,173 final games chronologically and scores each decision rule against the
+verified winner/total. It answers "does the rule pick winners?" and cannot answer
+"does it make money?". Results are shown as hit rate versus the league base rate
+of the picked side, with the sample size and a no-look-ahead guarantee (a test
+proves that changing a game's final score cannot change any earlier decision).
+
+**Track 2 — priced replay (real prices, real P&L).** `nbacomp/hist_backtest.py`
+replays the free SBR archive: 4,043 validated games (2013-14..2022-23, October
+through December of each season — the archive pages carry no more), flat $10
+stakes on a $1,000 bankroll, model probabilities shrunk (0.5) and edges capped at
+8% before any bet is allowed. Every run also simulates a **MARKET baseline**: the
+home side at the archive's own price on all 4,043 games.
+
+| Rule | Bets | Win rate | P&L | ROI |
+|------|------|----------|-----|-----|
+| NBA-001 RestEdgeRaven | 94 | 29.8% | −$176.61 | −18.8% |
+| NBA-003 EloOracle | 410 | 44.6% | −$282.59 | −6.9% |
+| NBA-006 VenueForm | 158 | 32.3% | −$358.23 | −22.7% |
+| NBA-007 RoadTripFinale | 66 | 21.2% | −$197.53 | −29.9% |
+| NBA-021 StreakFade | 213 | 21.6% | −$385.00 | −18.1% |
+| NBA-024 LossStreakBack | 220 | 22.7% | −$161.86 | −7.4% |
+| MARKET baseline | 4,043 | 58.3% | −$2,143.07 | −5.3% |
+
+All six rules lose money at real prices, and two of them lose more than the
+baseline loss caused by the vig alone. Six strategies are therefore tiered
+`failed` **by their own price evidence** (their `meta['tier:<id>']` records quote
+the baseline next to the result), and the site says so on each strategy page.
+Season-level ROIs are noisy and are published as such (NBA-024 +91.8% in 2015-16
+on 17 bets, −74.8% in 2018-19; NBA-003 swings from +15.6% to −24.0%).
+
+**Totals, spreads and props remain unbacktestable at real prices** — the archive
+prints no per-side prices for those markets and no free prop/injury history
+exists — so those rules are forward-tested instead. No price is ever invented,
+and no rule is marked `failed` on the strength of a simulated assumption price.
 
 ## Signal validation (outcome-only — no prices, not P&L)
 
@@ -347,22 +358,43 @@ paid archives and the policy decision to exclude them.
 - Fee schedule `ceil(0.07 · C · P · (1−P))` is implemented in
   `util.kalshi_fees_dollars` and pinned by a formula-level unit test.
 
-## MasterSite findings
+## MasterSite findings (inspected 2026-09-22, not assumed)
 
-Reviewed the sibling-site directory `https://buffedlizard55-lab.github.io/MasterSite/`
-(44 verified sites). Adoptions:
+`buffedlizard55-lab/MasterSite` was read directly through the GitHub API this pass
+(`AGENTS.md`, `README.md`, `VERIFICATION.md`, `data/sites.js`, `tools/`), not taken
+on faith from the site's own summary.
 
-- **NBAInjuryReport** — ESPN injury endpoint audit + 403 fingerprint
-  episode; methodology and source-verification format reused.
-- **PriceKalshiHistorical** — Kalshi collector (markets / orderbooks /
-  candles) pattern and rate-limit discipline; SQLite + parquet storage.
-- **KalshiPaperSim** — paper-trading ledger discipline (audit trails,
-  append-only history).
-- **Commodities** — Actions collector committing fills on a schedule.
-- **SFWeather** — no-invention audit culture.
-
-Not reused: SF local guides, elections, drugs, GEMSDOE — either
-out-of-scope or rely on paid feeds.
+- **This project is listed, and the entry is stale.** `data/sites.js` carries a
+  `NBAComp` entry verified at commit `66ab488` (this branch's base) describing
+  "22 system-generated strategies", "131 tests", and backtests that all read
+  `no historical data`. All three were true at that commit and are false now: 24
+  strategies, 200 tests, and 63 priced-backtest rows with six rules tiered
+  `failed`. MasterSite's own convention is to record superseded figures in a
+  `flags[]` array ("Strategy count corrected 14 -> 22 ... the previous entry's '14
+  system-generated strategies' was accurate at commit 01b6334 and is superseded"),
+  so the stale numbers are a re-audit gap, not a contradiction. It will correct
+  itself when its owner next regenerates the directory; nothing in this repository
+  can or should push that. Recorded here so our own report does not inherit the
+  stale figures.
+- **Reused (verified useful):** the independent-verifier pattern —
+  `tools/verify_live.py` re-reads every published field from the live source and
+  classifies each as OK / MISMATCH / FAIL, storing
+  `tools/last_live_verify.json` as the artifact. NBAComp now does the same thing
+  for its own site (`tools/verify_deployed.py` → `data/live_verify.json`), with
+  byte-level SHA-256 comparison instead of field comparison, and the run fails on a
+  mismatch. Adopted, not copied: no MasterSite code is imported or vendored.
+- **Reused (verified useful, cheaper):** the "withheld, not deleted" discipline —
+  `counts.unlisted[]` plus an assertion that
+  `len(sites) + len(unlisted) == pagesSites`, and a frozen `unreachable[]` array
+  with reasons. This project already keeps failures in the open (append-only
+  `anomalies`, `collection_log`, `bet_flags`), and the same principle is now
+  applied to the audit summary: per-pass counts and cumulative log totals are
+  labelled separately instead of being published as one ambiguous number.
+- **Not reused:** the directory/overlay tooling itself (it audits GitHub repos,
+  not NBA data), the ProjX-exclusion rule (project-specific), and the site's
+  prose claims about other repositories — those describe *their* projects and are
+  not evidence for anything here. No NBA data source was adopted from MasterSite;
+  every source in this project was verified by fetching it.
 
 ## Website status
 
@@ -373,7 +405,7 @@ Built and committed in repo root; GitHub Pages serves `main:/`. Pages:
 - `leaderboard.html` — Full forward leaderboard with risk metrics
   (volatility, longest streaks, largest W/L) + profit-by-month and
   profit-by-category tables + backtest section.
-- `strategies.html` — 19 strategy cards with thesis, rules, sources,
+- `strategies.html` — 24 strategy cards with thesis, rules, sources,
   market types, sizing, look-ahead controls, failure modes, data
   limitations, performance block (both kinds), forward breakdowns
   (market / team / month), auto-analysis, and recent bets.
@@ -387,49 +419,82 @@ Built and committed in repo root; GitHub Pages serves `main:/`. Pages:
   documented failure-handling protocol.
 - `research.html` — Research log entries (R-001..R-008) + anomaly
   register (latest 50).
-- `methodology.html` — Decision-time integrity, backtesting, forward
+- `methodology.html` — Decision-time integrity, the two backtest tracks
+  (signal replay vs priced replay, with the MARKET baseline), forward
   testing, closing-line capture, **live betting scope gap**, **OT
-  handling**, execution realism, P&L/sizing, data verification,
-  strategy versioning.
+  handling**, execution realism, P&L/sizing, data verification, strategy
+  versioning, and the **deployment-verification table** read from
+  `data/live_verify.json`.
 
 The site is intentionally **clean, fast, mobile-friendly, search-
 and filterable, and renders no fabricated data** — every empty
-section is plainly labeled.
+section is plainly labeled. Losing results are published with the same
+prominence as winning ones, six strategies are shown as `failed` with the
+price evidence that failed them, and the dashboard contradicts its own
+numbers where necessary rather than reconciling them silently.
 
-## GitHub status (verified 2026-09-21 with `gh`)
+## GitHub status (verified 2026-09-22 with `gh`)
 
-- Repository: `buffedlizard55-lab/NBAComp`
-- Session branch: `arena/01a0c1af-nbacomp`, cut from `main` at `53465b8c757b66b368deee268d3deb136b766089`
-  (`[auto] collect + pipeline + site build 2026-09-21T00:37:13Z`).
-- `main` HEAD at the time of this correction: `53465b8…` — i.e. `main` and this
-  session's starting point are the same commit.
-- Workflows present: `collect-and-build` (cron `23 */6 * * *`, plus push and
-  `workflow_dispatch`) and `tests` (push + PR). Recent runs on 2026-09-21 are
-  green for `tests`; the `collect-and-build` runs were "successful" while the
-  database they committed was empty — which is exactly what the new
-  `tools/db_report.py` gate now prevents.
-- Open PRs at the time of writing: **#4** from another session branch
-  (`arena/01a0c12e-nbacomp`, "Live-shape fixes…"), still open; **#3**, **#2**,
-  **#1** merged. This pass's work goes out on `arena/01a0c1af-nbacomp`.
+- Repository: `buffedlizard55-lab/NBAComp`, default branch `main`,
+  Pages served from `main:/`.
+- Session branch: `arena/01a0c628-nbacomp` (the branch Arena tracks for this
+  session; all work is committed and pushed there, PRs are opened from it).
+- Merged this session, each from `arena/01a0c628-nbacomp` into `main` after a
+  green `pytest` check: **#7** `99ab706a` (evidence-driven validation, bet
+  quarantine, first price-based backtest), **#8** `d884b8be` (audit crash-window,
+  SBR registry entry, honest site copy), **#9** `de737e98` (research-page
+  corrections). A stale PR **#4** was closed with a superseding comment after
+  verifying its fix had already landed on `main`; nothing in it was lost.
+- This pass's PR adds the strategy-page truth fix, the workflow scope fix, the
+  deployed-site verifier and the audit-summary split, with the tests listed in
+  **Test summary**.
+- `gh workflow run` is not available to this session's token (`HTTP 403 —
+  Resource not accessible by integration`), so runs are triggered by pushing;
+  `gh pr list`, `gh pr checks`, `gh api` and `git push` all work.
+- Workflow note: `collect-and-build` publishes on every push outside the
+  generated paths, on the 6-hourly cron, and on `workflow_dispatch` with
+  `backfill=true` / `sbr=true` inputs. As of this pass, a scheduled or manual run
+  can no longer be silently skipped (see **Known bugs**), and a run that performs
+  no work fails instead of reporting success.
 
-## Deployment status (verified 2026-09-21)
+## Deployment status (verified 2026-09-22)
 
-- GitHub Pages **is enabled and built**: `gh api repos/buffedlizard55-lab/NBAComp/pages`
+- GitHub Pages is enabled and building: `gh api repos/buffedlizard55-lab/NBAComp/pages`
   returns `status: "built"`, `source: {branch: main, path: /}`,
   `html_url: https://buffedlizard55-lab.github.io/NBAComp/`, `https_enforced: true`.
-- The deployed dashboard was fetched and read in this pass; its cards show
-  `Games in database 0 (0 cross-verified)`, `Kalshi NBA series live 0`, forward
-  P&L `+$0.00`, `Strategies with live bets 0/19`, and a 19-row leaderboard of
-  $1,000 / 0-bet strategies. So the site is genuinely live, and genuinely empty.
-- `curl` to the Pages host from this sandbox returns `000` (network egress is
-  limited to `pypi.org` / `api.github.com` here); the page content above was
-  read through the workspace's page-fetch tool, not curl.
-- The site is regenerated from the database on every `collect-and-build` run and
-  committed to `main`, so deployment does not depend on a manual step.
+  The Pages workflow (`pages-build-deployment`) runs on every push to `main`; the
+  last runs observed in this pass finished `success` (build + deploy + status report).
+- The deployed pages were read in this pass (dashboard, research, positions,
+  strategies, sources) and were consistent with the committed HTML — which is how
+  the stale "no free historical NBA price series exists" sentences on the strategy
+  pages were caught, even though the repository data already contradicted them.
+- That check is now automated instead of eyeballed: `tools/verify_deployed.py`
+  fetches every published file from the Pages URL, requires it to be
+  **byte-identical** to the file committed at the verified commit, waits for the
+  Pages build of that commit first, and writes `data/live_verify.json`
+  (per-file HTTP status, byte count, SHA-256, verdict). It runs at the end of every
+  collection run and **fails the run** on any mismatch. The methodology page
+  renders the latest result, including its timestamp and commit, or states plainly
+  that no verification has been recorded yet.
+- Sandbox egress note: this environment cannot open `*.github.io` over TLS
+  (`SSL_ERROR_SYSCALL`) and `curl` returns `000`; the in-repo verifier therefore
+  runs inside Actions, and page content during this pass was read through the
+  workspace's page-fetch tool.
 
 ## Known bugs
 
-### Fixed in this pass (2026-09-21)
+### Fixed in this pass (2026-09-22, the deployed-site audit)
+
+| Defect | Evidence (quoted, not asserted) | Fix |
+|--------|--------------------------------|-----|
+| The scheduled system was silently idle: every run that started after one of its own pipeline commits skipped **all** work and still reported `success` | Actions jobs API, runs `35660560504` (06:23Z cron), `35602774751` (12:23Z cron) and `35563392118` (05:07Z cron): steps 1–5 ran, steps 6–21 (`Daily collection`, `Pipeline`, `Commit`) all `skipped`, conclusion `success`. Cause: the scope step read the head commit's subject, which was the bot's own `[auto] collect + pipeline + site build …`. A run that skips every step has nothing left to fail | `tools/run_scope.py` (unit-tested): only a `push` may skip, and only its own `[auto]`/`[probe]` echo; `schedule` and `workflow_dispatch` always work. A new `Fail the run if it did no work` step runs even when the work steps were skipped and exits 1 on any impossible scope |
+| Strategy pages still claimed "No free historical NBA price series exists … a price-taking backtest is impossible", on the same pages as the price-based results that disprove it | the deployed `strategies.html` at `2204e84` | `signal_validation_html` and `_why_analysis` now state each rule's priced result inline (bets, P&L, ROI, win rate, market baseline) and say that where signal and price evidence disagree, the priced result is what counts; rules with no priced market name exactly which data is missing |
+| A test that encodes a 48-hour rule with a hard-coded timestamp stopped testing the rule and started testing the calendar | `tests/test_wave2.py::test_settle_1h_pending_when_recent` failed at 2026-09-22T00:00Z, exactly 48h after its fixed `2026-09-20T00:00:00Z` tipoff: it asserted that a settlement which must stay pending was voided | the timestamp is derived from `utcnow()` (the test still asserts the same rule) |
+| `data/audit_summary.json` published bare severity totals from an append-only table (`critical: 25`) while the pipeline printed `audit: 0 critical` for the same pass — two true numbers that read as a contradiction | `data/audit_summary.json` vs the pipeline log, same run | `audit.run_checks()` stamps `meta['audit_last_pass']` with its own counts; the JSON now carries `scope`, `latest_run_utc`, `latest_run_counts` and `critical_checks_ever_recorded`, the dashboard says which pass it is quoting, and the console line reads `audit (this pass)` |
+| `data/hist_backtest.json` carried a stray `"means": null` in all 63 summary rows (leftover from an early draft of `_agg`) | the committed artifact | key removed in `nbacomp/hist_backtest.py`; artifact regenerated (row-for-row identical: NBA-001 94 bets / −$176.61 / −18.79% before and after) |
+
+### Fixed in the earlier passes (2026-09-21)
+
 
 | Defect | Evidence | Fix |
 |--------|----------|-----|
@@ -545,13 +610,20 @@ Run in this pass, in a fresh venv (`python3 -m venv .venv && .venv/bin/pip
 install pytest`), on `arena/01a0c1af-nbacomp`:
 
 ```
-.venv/bin/python -m pytest tests   ->  131 passed
+.venv/bin/python -m pytest tests   ->  200 passed   (2026-09-22)
 
+tests/test_adversarial.py           22 tests
+tests/test_audit_summary.py          3 tests   (new)
 tests/test_collect_and_backtest.py   9 tests
 tests/test_core.py                  45 tests
+tests/test_hist_backtest.py          4 tests   (new)
+tests/test_integrity_v2.py          13 tests
 tests/test_live_shapes.py           18 tests
 tests/test_pipeline_fixes.py        33 tests
-tests/test_wave2.py                 26 tests   (new this pass)
+tests/test_run_scope.py             11 tests   (new)
+tests/test_sbr_odds.py               7 tests   (new)
+tests/test_verify_deployed.py        7 tests   (new)
+tests/test_wave2.py                 26 tests
 ```
 
 The new file pins every defect above: snapshot stores markets that omit
