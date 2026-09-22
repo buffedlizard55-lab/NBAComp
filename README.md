@@ -68,7 +68,7 @@ every pipeline run, and it fails the CI job when a collector crashed.
 
 <!-- facts:headline -->
 - strategies registered: **27** — `nbacomp/strategies.py` is the only source of this number, and the table below is generated from it
-- offline test suite: **263 tests** collected by pytest in 17 files (258 test functions; parametrized cases expand)
+- offline test suite: **266 tests** collected by pytest in 17 files (261 test functions; parametrized cases expand)
 - live database row counts are **not quoted here**: read `data/db_report.txt`, which every pipeline run regenerates
 <!-- /facts:headline -->
 
@@ -227,7 +227,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 ```
 
 <!-- facts:suite -->
-`python -m pytest tests` collects **263 tests** across 17 files (offline, no network needed). 258 of those are test functions; the difference is parametrized cases:
+`python -m pytest tests` collects **266 tests** across 17 files (offline, no network needed). 261 of those are test functions; the difference is parametrized cases:
 
 - `tests/test_adversarial.py` — 24 tests
 - `tests/test_audit_summary.py` — 3 tests
@@ -239,7 +239,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 - `tests/test_line_backtest.py` — 16 tests
 - `tests/test_live_shapes.py` — 18 tests
 - `tests/test_new_markets.py` — 7 tests
-- `tests/test_pass4_integrity.py` — 21 tests
+- `tests/test_pass4_integrity.py` — 24 tests
 - `tests/test_pipeline_fixes.py` — 33 tests
 - `tests/test_quarantine_scope.py` — 13 tests
 - `tests/test_run_scope.py` — 11 tests

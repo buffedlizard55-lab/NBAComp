@@ -440,6 +440,94 @@ def test_positions_page_offers_no_search_when_the_book_is_empty(tmp_path):
     c.close()
 
 
+# --------------------------------------------------------------------------
+# 5. workflow: untrusted text must never reach the shell through ${{ }}
+# --------------------------------------------------------------------------
+
+WORKFLOW = os.path.join(REPO, ".github", "workflows", "collect-and-build.yml")
+
+#: Contexts whose content comes from outside the repository's own control, or
+#: from data the pipeline itself wrote. Interpolating one of these into a `run:`
+#: script with ${{ }} lets it execute as shell.
+UNTRUSTED_CONTEXTS = ("github.event.head_commit.message", "github.event.issue",
+                      "github.event.comment", "github.event.pull_request",
+                      "github.head_ref", "github.event.pages")
+
+
+def _run_blocks(text: str) -> list[str]:
+    """Crude but dependency-free extraction of every `run: |` block."""
+    out, cur, indent = [], None, None
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("run: |") or stripped.startswith("run: >"):
+            indent = len(line) - len(stripped)
+            cur = []
+            continue
+        if cur is not None:
+            if not line.strip():
+                cur.append(line)
+                continue
+            if len(line) - len(stripped) > indent:
+                cur.append(line)
+                continue
+            out.append("\n".join(cur))
+            cur = None
+    if cur is not None:
+        out.append("\n".join(cur))
+    return out
+
+
+def test_no_untrusted_context_is_interpolated_into_a_shell_script():
+    """${{ }} is substituted before bash runs, so it must not carry free text.
+
+    This is the defect that failed run 35765860793: `--message "${{
+    github.event.head_commit.message }}"` put a commit body containing backticks
+    straight into the shell. bash tried to execute `sbr-row-changed` as a
+    command, argparse then received the message split across arguments, and the
+    step exited 2. The same step holds a GITHUB_TOKEN with contents:write, so
+    the failure mode available to a crafted message is code execution.
+    """
+    text = open(WORKFLOW).read()
+    blocks = _run_blocks(text)
+    assert blocks, "no run blocks found -- the extractor broke, not the workflow"
+    offenders = []
+    for b in blocks:
+        for ctx in UNTRUSTED_CONTEXTS:
+            if "${{ " + ctx in b or "${{" + ctx in b:
+                offenders.append(ctx)
+    assert offenders == [], f"untrusted context(s) interpolated into a run script: {offenders}"
+
+
+def test_scope_step_passes_the_commit_message_through_env():
+    """The safe pattern: the context lands in `env:`, the script reads $VAR."""
+    text = open(WORKFLOW).read()
+    assert "HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}" in text
+    assert '--message "$HEAD_COMMIT_MESSAGE"' in text
+    assert 'env:\n          EVENT_NAME: ${{ github.event_name }}' in text
+
+
+def test_run_scope_accepts_a_hostile_commit_message(tmp_path):
+    """The exact shape that broke CI must parse cleanly, not exit 2."""
+    sys.path.insert(0, os.path.join(REPO, "tools"))
+    import importlib
+
+    import run_scope
+    importlib.reload(run_scope)
+    hostile = ("Integrity pass\n\n1. 1,277 `sbr-row-changed` warnings (88%) claimed\n"
+               '   "every table" but hardcoded 23 of the schema\'s 28.\n'
+               "   $(whoami) and \"quotes\" and `backticks` and $100 -110\n")
+    out = tmp_path / "gh_output"
+    out.write_text("")
+    rc = run_scope.main(["--event", "push", "--message", hostile, "--out", str(out)])
+    assert rc == 0
+    written = out.read_text()
+    assert "skip=false" in written and "probe=false" in written
+    # the hostile text must not change the decision
+    assert run_scope.decide("push", hostile) == {"skip": False, "probe": False}
+    assert run_scope.decide("push", "[auto] collect") == {"skip": True, "probe": False}
+    assert run_scope.decide("schedule", "[auto] collect") == {"skip": False, "probe": False}
+
+
 def test_strategies_page_filters_are_populated_from_the_registry(tmp_path):
     """Facets come from the live registry and the evidence-based tiers."""
     if not os.path.exists(DB_PATH):
