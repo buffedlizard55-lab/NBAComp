@@ -118,6 +118,62 @@ _UPGRADES: dict[str, tuple[str, str]] = {
 }
 
 
+#: Which stored table a strategy's DECISION reads for rolling model state.
+#: An empty tuple means the decision reads no rolling box-score state at all —
+#: it is priced from Elo, the schedule, observed market lines or live market
+#: prices only.
+#:
+#: 2026-09-22: `paper.quarantine_bets` applied the stale-state check to EVERY
+#: forward bet by measuring `team_gamelogs` age for both teams, so the four
+#: NBA-026 spread bets — a rule that reads only Elo plus the observed spread —
+#: were flagged `stale-state-at-decision` (critical) and therefore dropped out
+#: of exposure and ranking for a defect their decision does not have. The check
+#: is now scoped to the tables the decision actually reads; the declaration
+#: lives here, next to each rule's documented data sources, and a test derives
+#: it from the evaluator source so it cannot drift.
+STATE_INPUTS: dict[str, tuple[str, ...]] = {
+    # pace / efficiency / venue-form / team-total rules read team box scores
+    "NBA-002": ("team_gamelogs",),
+    "NBA-006": ("team_gamelogs",),
+    "NBA-010": ("team_gamelogs",),
+    "NBA-011": ("team_gamelogs",),
+    "NBA-022": ("team_gamelogs",),
+    "NBA-023": ("team_gamelogs",),
+    "NBA-027": ("team_gamelogs",),
+    # declared from the documented rule; no executable evaluator ships yet
+    # (see each registry entry's data_limitations)
+    "NBA-015": ("team_gamelogs",),
+    "NBA-016": ("team_gamelogs",),
+    "NBA-017": ("team_gamelogs",),
+    # injury + player-prop rules read player box scores, not team box scores
+    "NBA-005": ("player_gamelogs",),
+    "NBA-008": ("player_gamelogs",),
+    "NBA-009": ("player_gamelogs",),
+    "NBA-014": ("player_gamelogs",),
+    "NBA-019": ("player_gamelogs",),
+    # Elo / schedule / observed line / live price only
+    "NBA-001": (), "NBA-003": (), "NBA-004": (), "NBA-007": (), "NBA-012": (),
+    "NBA-013": (), "NBA-018": (), "NBA-020": (), "NBA-021": (), "NBA-024": (),
+    "NBA-025": (), "NBA-026": (),
+}
+
+
+def state_inputs(strategy_id: str) -> tuple[str, ...]:
+    """Rolling-state tables a strategy's decision reads.
+
+    Unknown ids return an empty tuple *and* are reported by
+    `undeclared_state_inputs()` so a new strategy cannot silently escape the
+    declaration (the quarantine treats an undeclared rule conservatively: it is
+    checked, never skipped).
+    """
+    return STATE_INPUTS.get(strategy_id, ())
+
+
+def undeclared_state_inputs() -> list[str]:
+    """Registered strategies missing a STATE_INPUTS entry (must stay empty)."""
+    return sorted(sid for sid in STRATEGIES if sid not in STATE_INPUTS)
+
+
 def _apply_version_history():
     """Append the previous version + reason to each strategy's history list."""
     for sid, (new_version, note) in _UPGRADES.items():

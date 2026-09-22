@@ -105,19 +105,48 @@ def _hist_run(con) -> str | None:
     return row["run_id"] if row else None
 
 
+def _line_run(con) -> str | None:
+    from . import line_backtest
+    return line_backtest.latest_run(con)
+
+
+#: Rules whose TRADED market is the market the line-based track measures, and
+#: which may therefore be tiered by it. NBA-026 trades spreads against an
+#: observed line, which is exactly what `line_backtests` measures. NBA-004's
+#: spread-move result is published as evidence for its momentum hypothesis but
+#: does NOT tier it: the live rule trades Kalshi winner-market moves in cents,
+#: a market with no history, so the spread analogue is suggestive, not verdict.
+TIERED_BY_LINE = {"NBA-026"}
+
+
 def evidence_for(con, strategy_id: str) -> dict:
     """Raw validation evidence for one strategy.
 
-    Three independent evidence streams, kept separate on purpose:
+    Four independent evidence streams, kept separate on purpose:
       * `summary` — outcome-only signal backtest (no prices exist for that rule)
       * `backtest_bets` — bets priced from observed market data
       * `hist` — the price-based simulation over the SBR archive (real moneylines)
+      * `line` — the rule measured against the archive's OBSERVED closing lines
+        (cover rate; no per-side price exists for those markets, so no P&L)
     """
     run_id = _latest_run(con)
     hist_run = _hist_run(con)
+    line_run = _line_run(con)
     ev: dict = {"run_id": run_id, "summary": None, "backtest_bets": 0,
                 "backtest_settled": 0, "hist_run": hist_run, "hist": None,
-                "hist_all": None}
+                "hist_all": None, "line_run": line_run, "line": None,
+                "line_baseline": None}
+    if line_run:
+        row = con.execute(
+            "SELECT * FROM line_backtests WHERE run_id=? AND rule_id=? "
+            "AND metric='cover_rate' AND season='ALL'", (line_run, strategy_id)).fetchone()
+        if row:
+            ev["line"] = dict(row)
+        base = con.execute(
+            "SELECT * FROM line_backtests WHERE run_id=? AND rule_id='MARKET' "
+            "AND metric='home_ats_cover_rate' AND season='ALL'", (line_run,)).fetchone()
+        if base:
+            ev["line_baseline"] = dict(base)
     if hist_run:
         row = con.execute(
             "SELECT * FROM hist_backtests WHERE run_id=? AND strategy_id=? "
@@ -173,6 +202,36 @@ def classify(con, strategy_id: str, ev: dict | None = None) -> dict:
             f"{ev['backtest_bets']} price-verified backtest bets "
             f"({ev['backtest_settled']} settled) from observed market data")
         return {**out, "tier": tier, "policy": POLICY[tier], "reason": REASON[tier],
+                "detail": detail}
+
+    line = ev.get("line")
+    if line and strategy_id in TIERED_BY_LINE and (line.get("n") or 0) >= MIN_N_OUTCOME:
+        # Measured against the archive's own closing lines: a cover rate, not a
+        # P&L. The economic bar is the break-even frequency at standard -110
+        # juice, quoted as a reference because no per-side price exists.
+        rate, be = line["value"], line["breakeven"]
+        base = (ev.get("line_baseline") or {}).get("value")
+        cmp_txt = (f"; market baseline (home ATS every game) {base:.2%}"
+                   if base is not None else "")
+        if rate >= be + WINNER_HIT_MARGIN:
+            tier, detail = "outcome_validated", (
+                f"covered {rate:.2%} of {line['n']} firings at the archive's own "
+                f"closing lines vs the {be:.2%} standard-juice break-even"
+                f"{cmp_txt}")
+        elif rate <= be - 0.02:
+            tier, detail = "failed", (
+                f"covered {rate:.2%} of {line['n']} firings at the archive's own "
+                f"closing lines, BELOW the {be:.2%} standard-juice break-even"
+                f"{cmp_txt} — no cover edge, so the rule is parked by its own "
+                f"line evidence (no P&L is claimed either way)")
+        else:
+            tier, detail = "weak", (
+                f"covered {rate:.2%} of {line['n']} firings vs the {be:.2%} "
+                f"break-even{cmp_txt}: inside the noise band")
+        return {**out, "tier": tier, "policy": POLICY[tier],
+                "reason": ("decision rule measured against observed historical "
+                           "lines (cover rate vs standard-juice break-even; "
+                           "no per-side prices exist, so no P&L)"),
                 "detail": detail}
 
     n = summary.get("n_signals") or 0

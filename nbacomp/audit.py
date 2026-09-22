@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from . import engine, util
+from . import db, engine, paper, util
 
 
 def run_checks(con) -> dict:
@@ -218,24 +218,24 @@ def run_checks(con) -> dict:
                         "WHERE game_id=?", (b["game_id"],)).fetchone()
         if not g:
             continue
-        for team in (g["home_team"], g["away_team"]):
-            last = con.execute(
-                "SELECT MAX(game_date_et) d FROM team_gamelogs WHERE team=? "
-                "AND game_date_et < ?", (team, g["game_date_et"])).fetchone()
-            if last and last["d"]:
-                from datetime import date as _date
-                age = (_date.fromisoformat(g["game_date_et"])
-                       - _date.fromisoformat(last["d"])).days
-                if age > 14:
-                    stale_bets.append({"bet_id": b["bet_id"],
-                                       "strategy": b["strategy_id"], "team": team,
-                                       "state_age_days": age,
-                                       "game": g["game_date_et"], "claimed_edge": b["edge"]})
+        # Scoped to the rolling state the rule actually reads, exactly like
+        # paper.quarantine_bets: NBA-026 prices off Elo + the observed spread,
+        # so measuring team_gamelogs age for it is a false positive
+        # (2026-09-22: it flagged every spread bet on the season openers).
+        row = dict(b)
+        row.update({"home_team": g["home_team"], "away_team": g["away_team"],
+                    "game_date_et": g["game_date_et"]})
+        for ev in paper._stale_state_evidence(con, row):
+            stale_bets.append({"bet_id": b["bet_id"],
+                               "strategy": b["strategy_id"], "team": ev["team"],
+                               "state_table": ev["state_table"],
+                               "state_age_days": ev["state_age_days"],
+                               "game": g["game_date_et"], "claimed_edge": b["edge"]})
     if stale_bets:
         record("critical", "stale-model-state-at-decision",
                {"count": len(stale_bets), "examples": stale_bets[:5],
-                "detail": "the bet's decision used team state older than "
-                          "MAX_STATE_AGE_DAYS=14; the claimed edge is an artifact"})
+                "detail": "the bet's decision read rolling state older than "
+                          "MAX_STATE_AGE_DAYS; the claimed edge is an artifact"})
 
     # --- bets placed by strategies whose verified evidence contradicts them
     from . import validation
@@ -244,8 +244,8 @@ def run_checks(con) -> dict:
             continue
         n = con.execute(
             "SELECT COUNT(*) c FROM bets WHERE strategy_id=? AND kind='forward' "
-            "AND result='pending' AND bet_id NOT IN "
-            "(SELECT bet_id FROM bet_flags WHERE severity='critical')",
+            "AND result='pending' "
+            f"AND bet_id NOT IN {db.QUARANTINED_BET_IDS}",
             (info["strategy_id"],)).fetchone()["c"]
         if n:
             record("warn", "unvalidated-strategy-holds-bets",
@@ -381,7 +381,7 @@ def run_checks(con) -> dict:
         "JOIN (SELECT strategy_id, current FROM bankroll_events "
         "       GROUP BY strategy_id HAVING as_of_utc=MAX(as_of_utc)) br "
         "ON br.strategy_id=b.strategy_id WHERE b.kind='forward' AND b.result='pending' "
-        "AND b.bet_id NOT IN (SELECT bet_id FROM bet_flags WHERE severity='critical') "
+        "AND b.bet_id NOT IN " + db.QUARANTINED_BET_IDS + " "
         "GROUP BY b.strategy_id").fetchall()
     for r in exp_rows:
         if r["current"] and r["s"] > 0.25 * r["current"] + 0.01:

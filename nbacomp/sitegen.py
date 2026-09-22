@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import strategies as S, validation
+from . import db, strategies as S, validation
 from .sources_registry import REGISTRY
 
 NAV = [
@@ -79,8 +79,7 @@ def strategy_performance(con, strategy_id: str, kind: str) -> dict:
     shown in their own ledger, because a bet priced off a broken input is not a
     measurement of the strategy. Nothing is deleted or hidden.
     """
-    valid = ("AND bet_id NOT IN (SELECT bet_id FROM bet_flags "
-             "WHERE severity='critical')")
+    valid = f"AND bet_id NOT IN {db.QUARANTINED_BET_IDS}"
     rows = con.execute(
         f"SELECT * FROM bets WHERE strategy_id=? AND kind=? "
         f"AND result IN ('win','loss','push','void') {valid}",
@@ -153,8 +152,8 @@ def strategy_performance(con, strategy_id: str, kind: str) -> dict:
 def quarantine_stats(con, strategy_id: str, kind: str) -> dict:
     """Counts + settled P&L of quarantined bets (critical defect flags)."""
     q = con.execute(
-        "SELECT * FROM bets b WHERE b.strategy_id=? AND b.kind=? AND b.bet_id IN "
-        "(SELECT bet_id FROM bet_flags WHERE severity='critical')",
+        "SELECT * FROM bets b WHERE b.strategy_id=? AND b.kind=? "
+        f"AND b.bet_id IN {db.QUARANTINED_BET_IDS}",
         (strategy_id, kind)).fetchall()
     if not q:
         return {"quarantined": 0, "quarantine_pnl": 0.0, "quarantine_open": 0}
@@ -174,7 +173,13 @@ def flagged_bet_ids(con) -> dict[str, list[str]]:
 
 
 def quarantine_section_html(con, limit: int = 50) -> str:
-    """Ledger of quarantined bets — published, never hidden."""
+    """Ledger of flagged bets — published, never hidden.
+
+    Shows EVERY flag row (including retractions), but the "in force" column and
+    the summary figures are computed from the same predicate the engines use, so
+    the page can never claim a bet is excluded from the ranking while the
+    engine is still counting it (or the reverse).
+    """
     rows = con.execute(
         "SELECT b.*, f.flag, f.severity, f.detail_json, f.flagged_utc FROM bets b "
         "JOIN bet_flags f ON f.bet_id=b.bet_id ORDER BY "
@@ -182,37 +187,60 @@ def quarantine_section_html(con, limit: int = 50) -> str:
         "b.decision_utc DESC LIMIT ?", (limit,)).fetchall()
     if not rows:
         return ""
+    retracted = {r[0] for r in con.execute(
+        "SELECT bet_id FROM bet_flags WHERE flag LIKE ?",
+        (f"%{db.RETRACTION_SUFFIX}",))}
+
+    def _status(r) -> str:
+        if r["severity"] != "critical":
+            return f"<span class='muted'>{_esc(r['severity'])} — disclosed, not excluded</span>"
+        if r["bet_id"] in retracted:
+            return ("<span class='muted'>critical — <b>retracted</b>: the bet counts "
+                    "toward exposure and ranking again</span>")
+        return "<span class='bad'>critical — IN FORCE, excluded from ranking</span>"
+
     flagged_ids = {r["bet_id"] for r in rows}
-    ph = ",".join("?" for _ in flagged_ids)
+    quarantined = {r["bet_id"] for r in con.execute(
+        f"SELECT DISTINCT bet_id FROM bets WHERE bet_id IN {db.QUARANTINED_BET_IDS}")
+                   if r["bet_id"] in flagged_ids}
+    ph = ",".join("?" for _ in quarantined) or "''"
     pnl = con.execute(
         f"SELECT COALESCE(SUM(pnl_usd),0) s, COUNT(*) c FROM bets WHERE bet_id IN ({ph}) "
-        f"AND result IN ('win','loss','push','void')", tuple(flagged_ids)).fetchone()
+        f"AND result IN ('win','loss','push','void')", tuple(quarantined)).fetchone()
     open_n = con.execute(
         f"SELECT COUNT(*) c, COALESCE(SUM(stake_usd),0) s FROM bets WHERE bet_id IN ({ph}) "
-        f"AND result='pending'", tuple(flagged_ids)).fetchone()
+        f"AND result='pending'", tuple(quarantined)).fetchone()
     tbl = table(
-        ["Bet", "Strategy", "When flagged", "Flag", "Severity", "Game", "Pick", "Price",
-         "Model p", "Stake", "Result", "P&L", "Evidence"],
+        ["Bet", "Strategy", "When flagged", "Flag", "Severity", "In force?", "Game", "Pick",
+         "Price", "Model p", "Stake", "Result", "P&L", "Evidence"],
         [[f"<span class='mono small'>{_esc(r['bet_id'])}</span>",
           _esc(r["strategy_id"]), _esc(r["flagged_utc"]),
           f"<code>{_esc(r['flag'])}</code>",
           f"<span class='{'bad' if r['severity'] == 'critical' else 'muted'}'>{_esc(r['severity'])}</span>",
+          _status(r),
           _esc(r["game_label"]), _esc(f"{r['market']} {r['selection']}"),
           f"{r['price']} {_esc(r['price_format'])}",
           f"{r['model_prob']:.3f}" if r["model_prob"] is not None else "—",
           fmt_money(r["stake_usd"]), _esc(r["result"]), fmt_money(r["pnl_usd"]),
           f"<code class='small'>{_esc(r['detail_json'][:220])}</code>"] for r in rows])
     return f"""
-<h2>Quarantined bets <span class="muted">(kept, flagged, excluded from ranking)</span></h2>
-<p class="muted">A bet is quarantined when it was placed on a decision state that is
-provably invalid — team state older than the 14-day freshness limit, or a claimed edge above
-{int(0.20 * 100)}% that indicates a broken input rather than an edge. Quarantined bets are never deleted and their
-settlement is still recorded here. They are excluded from the competition's exposure, P&amp;L and ranking,
-because a bet priced off a broken input is not a measurement of the strategy. Their own figures:
+<h2>Flagged and quarantined bets <span class="muted">(kept, published, never hidden)</span></h2>
+<p class="muted">A bet is <b>quarantined</b> while it carries a critical defect flag that is
+in force — a decision that read rolling state older than the freshness limit, or a claimed
+edge above {int(0.20 * 100)}% that indicates a broken input rather than an edge. Quarantined
+bets are never deleted; they are excluded from the competition's exposure, P&amp;L and
+ranking, because a bet priced off a broken input is not a measurement of the strategy.
+Currently excluded: <b>{len(quarantined)}</b> of the {len(flagged_ids)} flagged bets —
 settled <b>{pnl['c']}</b> bets / P&amp;L <b>{fmt_money(pnl['s'])}</b>, open
-<b>{open_n['c']}</b> (${open_n['s']:,.2f} stake).
-This is the honest treatment of the 2026-09-21 stale-state defect: the losing record of the affected bets
-stays on this page, it just does not masquerade as a strategy result.</p>
+<b>{open_n['c']}</b> (${open_n['s']:,.2f} stake).</p>
+<p class="muted">A flag can also be <b>retracted</b>: when a check turns out to have
+described a defect the decision did not have, a second row
+(<code>&lt;flag&gt;-retracted</code>) is appended and the bet counts again. The original
+row is never edited or deleted — <code>bet_flags</code> is append-only at the database
+level, with triggers that abort <code>UPDATE</code> and <code>DELETE</code> — so both the
+mistake and its correction stay on this page. On 2026-09-22 four NBA-026 spread bets were
+released this way: the stale-state check had measured <code>team_gamelogs</code> age for a
+rule that reads only Elo and the observed spread.</p>
 {tbl}
 """
 
@@ -804,6 +832,7 @@ def strategies_page(con, out_dir):
 <details><summary>Data limitations</summary><ul>{lims}</ul></details>
 {perf_html(perf_b, 'Backtest (historical simulation)')}
 {signal_validation_html(con, sid)}
+{line_evidence_html(con, sid)}
 {perf_html(perf_f, 'Forward (live paper competition)')}
 {qline(perf_f)}
 <details><summary>Forward breakdowns (market / team / month)</summary>{fwd_breakdowns or "<p class='empty'>No forward bets yet.</p>"}</details>
@@ -919,6 +948,45 @@ def signal_validation_html(con, sid: str) -> str:
         "(total rules).</p>"
         "<table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody>"
         + "".join(trs) + "</tbody></table></details>")
+
+
+def line_evidence_html(con, sid: str) -> str:
+    """One strategy's line-based evidence: observed lines, cover rate, no P&L."""
+    from . import line_backtest
+    run_id = line_backtest.latest_run(con)
+    if not run_id:
+        return ""
+    row = con.execute(
+        "SELECT * FROM line_backtests WHERE run_id=? AND rule_id=? "
+        "AND metric='cover_rate' AND season='ALL'", (run_id, sid)).fetchone()
+    if not row:
+        return ""
+    base = con.execute(
+        "SELECT value, n FROM line_backtests WHERE run_id=? AND rule_id='MARKET' "
+        "AND metric='home_ats_cover_rate' AND season='ALL'", (run_id,)).fetchone()
+    rate, be = row["value"], row["breakeven"]
+    if rate >= be:
+        verdict = ("covers often enough to clear the standard-juice break-even — the only "
+                   "line-based result in this repository that does")
+    else:
+        verdict = (f"<b>{(be - rate) * 100:.2f} percentage points short of the "
+                   f"break-even a standard −110 price requires</b>, so the rule has "
+                   f"no cover edge on this evidence")
+    tiers_note = ("" if sid in validation.TIERED_BY_LINE else
+                  " This result is published as evidence for the rule's hypothesis but does "
+                  "<b>not</b> tier the strategy: the market it trades live is not the market "
+                  "measured here, and the measured market is the only one with history.")
+    return (
+        "<details open><summary>Line-based validation (observed lines — cover rate, "
+        "<b>not</b> P&amp;L)</summary>"
+        f"<p>The archive's own closing line for every game this rule fired on "
+        f"({row['n']:,} decided firings, {run_id}): <b>{rate * 100:.2f}%</b> covered, "
+        f"against a break-even frequency of <b>{be * 100:.2f}%</b> at standard −110 juice"
+        + (f" and a market baseline (home ATS every game) of {base['value'] * 100:.2f}% "
+           f"on {base['n']:,} games" if base else "")
+        + f" (z = {row['z']:+.2f} vs break-even). {verdict}. No per-side price exists for "
+          f"spread or total markets, so <b>no P&amp;L is simulated or claimed</b> — this is "
+          f"a frequency, not a profit.{tiers_note}</p></details>")
 
 
 def _profit_breakdown_html(by: dict, dim: str) -> str:
@@ -1186,9 +1254,75 @@ the price, and edges above 8% rejected as model error. <b>Every pre-registered m
 real prices</b>, and the honest comparison is the market baseline: backing the home team every game at the same
 prices returns {fmt_pct(baseline['roi']) if baseline else '—'}. The outcome-only hit rates published above
 (e.g. 64.5% on 1,531 firings) do not survive contact with prices, which is exactly the difference between a
-real edge and a rule that merely correlates with good teams. Totals and spreads are excluded: the archive
-prints lines but no per-side prices, and a simulated -110 would be an assumption, not evidence.</p>
+real edge and a rule that merely correlates with good teams. Totals and spreads are excluded here: the archive
+prints lines but no per-side prices, and a simulated -110 would be an assumption, not evidence — those rules
+are measured against the observed lines in the next section instead.</p>
 {tbl}
+"""
+
+
+def line_backtest_html(con) -> str:
+    """Line-based historical validation: observed lines, cover rates, no P&L."""
+    run_id = None
+    row = con.execute("SELECT run_id FROM line_backtests ORDER BY generated_utc DESC, "
+                      "run_id DESC LIMIT 1").fetchone()
+    if row:
+        run_id = row["run_id"]
+    if not run_id:
+        return ""
+    rows = con.execute("SELECT * FROM line_backtests WHERE run_id=? ORDER BY "
+                       "CASE season WHEN 'ALL' THEN 1 ELSE 0 END, rule_id, season, metric",
+                       (run_id,)).fetchall()
+    pooled = [r for r in rows if r["season"] == "ALL"]
+    per_season = [r for r in rows if r["season"] != "ALL"
+                  and r["metric"] == "cover_rate"]
+    games = con.execute("SELECT COUNT(*) c FROM hist_odds").fetchone()["c"]
+    def _rule_label(r) -> str:
+        if r["rule_id"] == "MARKET":
+            return ("<b>MARKET baseline</b> (home ATS every game)"
+                    if r["metric"] == "home_ats_cover_rate"
+                    else "MARKET (the lines' own accuracy)")
+        return f"<a href='strategies.html#{r['rule_id']}'>{r['rule_id']}</a>"
+
+    def _compared(r) -> str:
+        if r["baseline"] is None:
+            return "—"
+        if r["metric"].endswith("cover_rate"):
+            return f"{r['baseline'] * 100:.2f}% (home ATS)"
+        return "0 pts = opening and closing equally accurate"
+
+    cov = table(
+        ["Rule", "Metric", "n", "Value", "Compared with", "Break-even", "z / t", "Reading"],
+        [[_rule_label(r), f"<code>{_esc(r['metric'])}</code>", r["n"],
+          (f"{r['value'] * 100:.2f}%" if r["metric"].endswith("cover_rate")
+           else f"{r['value']:+.3f} pts"),
+          _compared(r),
+          (f"{r['breakeven'] * 100:.2f}%" if r["breakeven"] else "—"),
+          f"{r['z']:+.2f}" if r["z"] is not None else "—",
+          f"<span class='small'>{_esc(r['detail'])}</span>"] for r in pooled])
+    by = {(r["season"], r["rule_id"]): r for r in per_season}
+    season_rows = []
+    for s_ in sorted({r["season"] for r in per_season}):
+        cells = [s_]
+        for rid in ("NBA-026", "NBA-004", "MARKET"):
+            r = by.get((s_, rid))
+            cells += [f"{r['value'] * 100:.1f}%" if r else "—", r["n"] if r else "—"]
+        season_rows.append(cells)
+    seasons = table(["Season", "NBA-026 cover", "n", "NBA-004 cover", "n",
+                     "Home ATS (baseline)", "n"], season_rows)
+    return f"""
+<h2>Line-based historical validation <span class="muted">(observed lines, no per-side prices, no P&amp;L)</span></h2>
+<p class="muted">The same archive prints <b>opening and closing spreads and totals</b> for all
+{games:,} validated games, but no per-side price for those markets — so no P&amp;L is simulated here and
+none is claimed. What an observed line does allow is the measurement a spread or totals rule actually lives or
+dies on: <b>does the model's expected margin beat the market's own closing spread?</b> Cover rates below are
+the fraction of firings where the picked side covered the observed line, quoted next to the break-even
+frequency that standard −110 juice requires (a reference derived from the standard price, not a simulated
+fill). The same track also publishes each line's own accuracy (mean absolute error against the verified
+result), which is the evidence behind the shrink-toward-the-market policy every engine applies.</p>
+{cov}
+<h3>Cover rate by season <span class="muted">(small samples; published as-is)</span></h3>
+{seasons}
 """
 
 
@@ -1300,6 +1434,7 @@ def research_page(con, out_dir):
 decided — so research is auditable and never silently duplicated.</p>
 {research_scan_html()}
 {hist_backtest_html(con)}
+{line_backtest_html(con)}
 {items or "<p class='empty'>No research entries.</p>"}
 <h2>Anomaly register (latest 50)</h2>
 <p class="muted">Automated checks run on every pipeline pass. Flags are shown, never silently fixed.</p>
@@ -1376,7 +1511,7 @@ closing prices, and game results are never used at decision time.</li>
 absorbed into the model only after its bets are placed. Settlement uses Kalshi's own recorded result when
 available, cross-checked against the cross-verified final score; disagreements raise anomalies instead of
 silent choices.</p>
-<p><b>Two tracks, never mixed.</b> (1) <i>Signal replay</i>: the decision rule is scored against verified
+<p><b>Three tracks, never mixed.</b> (1) <i>Signal replay</i>: the decision rule is scored against verified
 final results, strictly prior data only. This measures whether the rule picks winners, <b>not</b> whether it
 makes money. (2) <i>Priced replay</i>: the same rules are simulated at real historical moneylines from the
 free SBR archive (4,043 validated games, 2013-14..2022-23, October-December of each season), with model
@@ -1385,8 +1520,14 @@ probabilities shrunk (0.5) and edges capped at 8% before a bet is allowed. Every
 the market must first beat that number. All six moneyline rules currently in the priced replay lose money,
 and the baseline loses too (-5.3% ROI), so the published conclusion is that these signals do not survive
 real prices; the priced result tiers each rule <span class="mono">failed</span> regardless of its signal
-hit rate. Totals, spreads and props remain unbacktestable at real prices (no free per-side history) and are
-forward-tested instead; no price is ever invented.</p>
+hit rate. (3) <i>Line replay</i> (<code>nbacomp/line_backtest.py</code>): the same archive prints
+<b>observed opening and closing spreads and totals</b>, which are lines, not prices. That track measures
+cover rates against the market's own line and each line's absolute error against the verified result, and
+<b>computes no P&amp;L at all</b> — a test fails the build if a money field ever appears in its output. It
+quotes the break-even frequency that standard −110 juice requires (52.38%) as a reference, and it is the
+evidence that tiers NBA-026 <span class="mono">failed</span>: its rule covered 49.31% of 1,888 firings at
+the archive's own closing spreads, against a 49.53% home-ATS baseline. Totals, spreads and props have no
+free per-side price history, so no simulated profit is ever assigned to them.</p>
 <h2>Forward testing &amp; paper trading</h2>
 <p>When historical prices don't exist (player props, sportsbook lines pre-2026-27), strategies are
 forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a

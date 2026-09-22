@@ -25,6 +25,7 @@
 <details><summary>Data limitations</summary><ul><li>priced evidence exists only for the SBR archive window (Oct-Dec of 2013-14..2022-23, moneylines only; see research.html)</li><li>Kalshi candles cover only the forward window</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'><b>Priced evidence for this rule exists:</b> 94 simulated bets at real archive moneylines returned $-176.61 (-18.79% ROI) on a 29.8% win rate — full detail, per season, on the <a href='research.html'>research page</a>. The outcome table below measures the SIGNAL only and is not P&amp;L; where the two disagree, the priced simulation is the one that matters. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 80/123 · hit rate 65.0% vs base rate 54.9% (+10.2pp) · Brier 0.209 · avg model prob 61.1% · streaks 8 hit / 5 miss</td></tr><tr><td>2023-24</td><td>hits 31/49 · hit rate 63.3% vs base rate 54.9% (+8.4pp) · Brier 0.201 · avg model prob 60.6% · streaks 6 hit / 5 miss</td></tr><tr><td>2024-25</td><td>hits 22/33 · hit rate 66.7% vs base rate 54.6% (+12.1pp) · Brier 0.166 · avg model prob 60.0% · streaks 6 hit / 4 miss</td></tr><tr><td>2025-26</td><td>hits 27/41 · hit rate 65.8% vs base rate 55.1% (+10.7pp) · Brier 0.255 · avg model prob 62.6% · streaks 8 hit / 3 miss</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -48,6 +49,7 @@
 <details><summary>Data limitations</summary><ul><li>team gamelogs lack opponent shooting splits</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical price series exists for THIS market (settled Kalshi markets expose no candles/tape; ESPN keeps no past odds; the SBR archive covers moneylines only), so a price-taking backtest is impossible and would require fabricated prices. The outcome table below measures the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only) — evidence about the signal, <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>n 0 · MAE 17.04 pts vs season-mean baseline 16.69</td></tr><tr><td>2024-25</td><td>n 0 · MAE 16.98 pts vs season-mean baseline 16.78</td></tr><tr><td>2025-26</td><td>n 0 · MAE 17.09 pts vs season-mean baseline 16.61</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 <div class='perf'><b>Quarantined</b>: 10 bet(s) (10 open) excluded from the figures above because their decision state was flagged defective; settled P&L +$0.00 is listed on <a href='positions.html#quarantined'>positions.html</a>.</div>
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -71,6 +73,7 @@
 <details><summary>Data limitations</summary><ul><li>no lineup-level ratings yet</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'><b>Priced evidence for this rule exists:</b> 410 simulated bets at real archive moneylines returned $-282.59 (-6.89% ROI) on a 44.6% win rate — full detail, per season, on the <a href='research.html'>research page</a>. The outcome table below measures the SIGNAL only and is not P&amp;L; where the two disagree, the priced simulation is the one that matters. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 1804/2758 · hit rate 65.4% vs base rate 51.9% (+13.5pp) · Brier 0.218 · avg model prob 69.0% · streaks 18 hit / 6 miss</td></tr><tr><td>2024-25</td><td>hits 846/1333 · hit rate 63.5% vs base rate 52.0% (+11.5pp) · Brier 0.221 · avg model prob 67.8% · streaks 16 hit / 5 miss</td></tr><tr><td>2025-26</td><td>hits 958/1425 · hit rate 67.2% vs base rate 51.8% (+15.4pp) · Brier 0.214 · avg model prob 70.0% · streaks 18 hit / 6 miss</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -94,6 +97,7 @@
 <details><summary>Data limitations</summary><ul><li>candles are last-trade based; historical book depth unknown</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+<details open><summary>Line-based validation (observed lines — cover rate, <b>not</b> P&amp;L)</summary><p>The archive's own closing line for every game this rule fired on (3,324 decided firings, line-sbr-2026-09-22): <b>49.16%</b> covered, against a break-even frequency of <b>52.38%</b> at standard −110 juice and a market baseline (home ATS every game) of 49.53% on 3,973 games (z = -3.72 vs break-even). <b>3.22 percentage points short of the break-even a standard −110 price requires</b>, so the rule has no cover edge on this evidence. No per-side price exists for spread or total markets, so <b>no P&amp;L is simulated or claimed</b> — this is a frequency, not a profit. This result is published as evidence for the rule's hypothesis but does <b>not</b> tier the strategy: the market it trades live is not the market measured here, and the measured market is the only one with history.</p></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -117,6 +121,7 @@
 <details><summary>Data limitations</summary><ul><li>ESPN injury board is not an official league confirmation</li><li>historical backtest impossible without dated injury history</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -140,6 +145,7 @@
 <details><summary>Data limitations</summary><ul><li>needs &gt;= 8 home games / 8 road games</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'><b>Priced evidence for this rule exists:</b> 158 simulated bets at real archive moneylines returned $-358.23 (-22.67% ROI) on a 32.3% win rate — full detail, per season, on the <a href='research.html'>research page</a>. The outcome table below measures the SIGNAL only and is not P&amp;L; where the two disagree, the priced simulation is the one that matters. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 1108/1802 · hit rate 61.5% vs base rate 54.9% (+6.6pp) · Brier 0.217 · avg model prob 69.3% · streaks 12 hit / 8 miss</td></tr><tr><td>2024-25</td><td>hits 428/674 · hit rate 63.5% vs base rate 54.6% (+8.9pp) · Brier 0.221 · avg model prob 72.5% · streaks 10 hit / 5 miss</td></tr><tr><td>2025-26</td><td>hits 680/1128 · hit rate 60.3% vs base rate 55.1% (+5.2pp) · Brier 0.215 · avg model prob 67.4% · streaks 12 hit / 8 miss</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -163,6 +169,7 @@
 <details><summary>Data limitations</summary><ul><li>great-circle city distances, not charter flight data</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'><b>Priced evidence for this rule exists:</b> 66 simulated bets at real archive moneylines returned $-197.53 (-29.93% ROI) on a 21.2% win rate — full detail, per season, on the <a href='research.html'>research page</a>. The outcome table below measures the SIGNAL only and is not P&amp;L; where the two disagree, the priced simulation is the one that matters. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 34/57 · hit rate 59.7% vs base rate 54.9% (+4.8pp) · Brier 0.178 · avg model prob 65.8% · streaks 8 hit / 4 miss</td></tr><tr><td>2023-24</td><td>hits 13/21 · hit rate 61.9% vs base rate 54.9% (+7.0pp) · Brier 0.146 · avg model prob 64.6% · streaks 7 hit / 4 miss</td></tr><tr><td>2024-25</td><td>hits 14/22 · hit rate 63.6% vs base rate 54.6% (+9.1pp) · Brier 0.212 · avg model prob 74.9% · streaks 8 hit / 3 miss</td></tr><tr><td>2025-26</td><td>hits 7/14 · hit rate 50.0% vs base rate 55.1% (-5.1pp) · Brier 0.172 · avg model prob 53.0% · streaks 3 hit / 2 miss</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -186,6 +193,7 @@
 <details><summary>Data limitations</summary><ul><li>requires Kalshi rebound-prop series; auto-activates when discovered</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -209,6 +217,7 @@
 <details><summary>Data limitations</summary><ul><li>requires prop series discovery</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -232,6 +241,7 @@
 <details><summary>Data limitations</summary><ul><li>team logs do not include opponent 3P defense</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -255,6 +265,7 @@
 <details><summary>Data limitations</summary><ul><li>no opponent shot-profile splits in team logs</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -278,6 +289,7 @@
 <details><summary>Data limitations</summary><ul><li>ESPN odds snapshots only exist from collection start forward</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -301,6 +313,7 @@
 <details><summary>Data limitations</summary><ul><li>quarter scores only where in-game scoreboard snapshots were captured; 1H history starts at first listing</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -324,6 +337,7 @@
 <details><summary>Data limitations</summary><ul><li>requires prop series discovery</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -347,6 +361,7 @@
 <details><summary>Data limitations</summary><ul><li>DRtg/ORtg are estimated from team gamelogs (no opponent shot splits)</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -370,6 +385,7 @@
 <details><summary>Data limitations</summary><ul><li>FT attempts only - free throw rate approximated</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -393,6 +409,7 @@
 <details><summary>Data limitations</summary><ul><li>no opponent-pace interaction in current rolling formulation</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -416,6 +433,7 @@
 <details><summary>Data limitations</summary><ul><li>no Kalshi OT-specific market</li><li>regulation-only MML/total markets may settle differently</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -439,6 +457,7 @@
 <details><summary>Data limitations</summary><ul><li>no free historical starting-lineup archive was found</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -462,6 +481,7 @@
 <details><summary>Data limitations</summary><ul><li>'previous game' = chronological predecessor in the games table; no in-between-game events (trade deadline etc.)</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical price series exists for THIS market (settled Kalshi markets expose no candles/tape; ESPN keeps no past odds; the SBR archive covers moneylines only), so a price-taking backtest is impossible and would require fabricated prices. The outcome table below measures the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only) — evidence about the signal, <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 396/976 · hit rate 40.6% vs base rate 50.3% (-9.7pp) · Brier 0.211 · avg model prob 44.8% · streaks 5 hit / 12 miss</td></tr><tr><td>2023-24</td><td>hits 123/298 · hit rate 41.3% vs base rate 50.2% (-8.9pp) · Brier 0.219 · avg model prob 47.8% · streaks 5 hit / 9 miss</td></tr><tr><td>2024-25</td><td>hits 131/337 · hit rate 38.9% vs base rate 50.1% (-11.2pp) · Brier 0.217 · avg model prob 43.1% · streaks 5 hit / 12 miss</td></tr><tr><td>2025-26</td><td>hits 142/341 · hit rate 41.6% vs base rate 50.5% (-8.9pp) · Brier 0.199 · avg model prob 43.9% · streaks 5 hit / 10 miss</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -485,6 +505,7 @@
 <details><summary>Data limitations</summary><ul><li>streak length limited to collected seasons</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'><b>Priced evidence for this rule exists:</b> 213 simulated bets at real archive moneylines returned $-385.00 (-18.08% ROI) on a 21.6% win rate — full detail, per season, on the <a href='research.html'>research page</a>. The outcome table below measures the SIGNAL only and is not P&amp;L; where the two disagree, the priced simulation is the one that matters. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 502/1455 · hit rate 34.5% vs base rate 49.9% (-15.4pp) · Brier 0.213 · avg model prob 40.7% · streaks 9 hit / 14 miss</td></tr><tr><td>2023-24</td><td>hits 153/446 · hit rate 34.3% vs base rate 50.1% (-15.8pp) · Brier 0.223 · avg model prob 43.1% · streaks 4 hit / 13 miss</td></tr><tr><td>2024-25</td><td>hits 180/493 · hit rate 36.5% vs base rate 49.8% (-13.3pp) · Brier 0.206 · avg model prob 40.8% · streaks 9 hit / 11 miss</td></tr><tr><td>2025-26</td><td>hits 169/516 · hit rate 32.8% vs base rate 49.9% (-17.1pp) · Brier 0.210 · avg model prob 38.6% · streaks 5 hit / 14 miss</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -508,6 +529,7 @@
 <details><summary>Data limitations</summary><ul><li>rest measured in calendar days, not minutes of travel</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'>No free historical price series exists for THIS market (settled Kalshi markets expose no candles/tape; ESPN keeps no past odds; the SBR archive covers moneylines only), so a price-taking backtest is impossible and would require fabricated prices. The outcome table below measures the strategy's <i>decision rule</i> against verified final results, chronologically (strictly prior data only) — evidence about the signal, <b>not</b> betting P&amp;L, ROI or edge. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>n 0 · MAE 18.06 pts vs season-mean baseline 16.69</td></tr><tr><td>2024-25</td><td>n 0 · MAE 20.80 pts vs season-mean baseline 16.78</td></tr><tr><td>2025-26</td><td>n 0 · MAE 16.25 pts vs season-mean baseline 16.61</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -531,6 +553,7 @@
 <details><summary>Data limitations</summary><ul><li>season_type is NULL for games collected before 2026-09-21 (never guessed retroactively) so the historical sample is window-based, not label-based</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -554,6 +577,7 @@
 <details><summary>Data limitations</summary><ul><li>forward Kalshi prices are 1-99 cents so a true +200 dog is rare; the priced test is the SBR archive</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -563,22 +587,23 @@
 <div class="strategy-card" id="NBA-026">
 <h2>Spread Sage <span class="mono">NBA-026 v1.0.0</span>
 <span class="pill">Spreads / Against the spread</span>
-<span class="pill status">quarantined (4 bet(s) flagged)</span></h2>
+<span class="pill status">active (open bets)</span></h2>
 <p class="username">plays as <b>@SpreadSageSam</b></p>
 <p><b>Thesis.</b> Elo expected margin disagrees with the captured closing spread by enough points that covering is more likely than the vig-implied 52.4%.</p>
 <p><b>Rules.</b> FORWARD-ONLY. When an ESPN or Kalshi spread line is captured before tipoff, convert Elo margin to expected cover vs that line. Bet ATS when |Elo margin + home_spread| &gt;= 3.5 points. No free per-side historical spread PRICE exists (SBR prints the line but not -110/-110), so this rule is never given a fabricated historical P&amp;L: it paper-trades at observed ESPN spread odds when present, else -110 labelled PRICED-ASSUMPTION.</p>
 <ul class="rules"><li>observed spread line exists at decision</li><li>|elo_margin + home_spread| &gt;= 3.5</li></ul>
 <p><b>Markets.</b> <code>spread</code> <code>kalshi:spread</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>kalshi:markets</code> </p>
 <p><b>Sizing.</b> Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
-<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<p><b>Verification status.</b> <span class='pill tier-failed'>failed</span> covered 49.31% of 1888 firings at the archive's own closing lines, BELOW the 52.38% standard-juice break-even; market baseline (home ATS every game) 49.53% — no cover edge, so the rule is parked by its own line evidence (no P&amp;L is claimed either way). <span class='muted'>decision rule measured against observed historical lines (cover rate vs standard-juice break-even; no per-side prices exist, so no P&amp;L)</span></p><p class='muted small'>Policy from this tier: NO bets (parked) · probability shrunk 100% toward the market · max credible edge 0% · stake scale 0.00x</p>
 <p class='muted small'>No prior versions.</p>
 <p><b>Look-ahead controls.</b> ['line captured at or before decision; Elo from prior games only']</p>
 <details><summary>Failure modes</summary><ul><li>spreads are the sharpest NBA market</li><li>Elo lags roster news</li></ul></details>
 <details><summary>Data limitations</summary><ul><li>SBR archive has spread LINES but not per-side prices; ATS P&amp;L is never invented for history</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+<details open><summary>Line-based validation (observed lines — cover rate, <b>not</b> P&amp;L)</summary><p>The archive's own closing line for every game this rule fired on (1,888 decided firings, line-sbr-2026-09-22): <b>49.31%</b> covered, against a break-even frequency of <b>52.38%</b> at standard −110 juice and a market baseline (home ATS every game) of 49.53% on 3,973 games (z = -2.67 vs break-even). <b>3.07 percentage points short of the break-even a standard −110 price requires</b>, so the rule has no cover edge on this evidence. No per-side price exists for spread or total markets, so <b>no P&amp;L is simulated or claimed</b> — this is a frequency, not a profit.</p></details>
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
-<div class='perf'><b>Quarantined</b>: 4 bet(s) (4 open) excluded from the figures above because their decision state was flagged defective; settled P&L +$0.00 is listed on <a href='positions.html#quarantined'>positions.html</a>.</div>
+
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation for this market (no free historical per-side prices for totals/spreads, no free prop or injury archives), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><div class='twrap'><table class=''><thead><tr><th>Game</th><th>Market</th><th>Pick</th><th>Price</th><th>Model</th><th>Result</th><th>P&amp;L</th></tr></thead><tbody><tr><td>DAL @ HOU 2026-10-21</td><td>spread</td><td>home -8.5</td><td>-110.0</td><td>0.575</td><td>pending</td><td>—</td></tr><tr><td>GSW @ LAL 2026-10-21</td><td>spread</td><td>home -4.5</td><td>-110.0</td><td>0.572</td><td>pending</td><td>—</td></tr><tr><td>CLE @ PHI 2026-10-22</td><td>spread</td><td>away +4.5</td><td>-110.0</td><td>0.580</td><td>pending</td><td>—</td></tr><tr><td>HOU @ SAS 2026-10-23</td><td>spread</td><td>home -6.5</td><td>-110.0</td><td>0.575</td><td>pending</td><td>—</td></tr></tbody></table></div></details>
@@ -600,6 +625,7 @@
 <details><summary>Data limitations</summary><ul><li>no confirmed free Kalshi team-total series; public betting % UNVERIFIED/UNAVAILABLE (no keyless source found)</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
@@ -623,6 +649,7 @@
 <details><summary>Data limitations</summary><ul><li>moneylines are priced from the SBR archive (Oct-Dec of each season); the measured hit rate alone is not a P&amp;L — the priced simulation on research.html is</li></ul></details>
 <div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
 <details open><summary><b>Signal validation</b> — decision rule vs verified outcomes (NO market prices; not P&amp;L)</summary><p class='muted small'><b>Priced evidence for this rule exists:</b> 220 simulated bets at real archive moneylines returned $-161.86 (-7.36% ROI) on a 22.7% win rate — full detail, per season, on the <a href='research.html'>research page</a>. The outcome table below measures the SIGNAL only and is not P&amp;L; where the two disagree, the priced simulation is the one that matters. Baseline = league base rate of the picked side (winner rules) / in-sample season-mean total (total rules).</p><table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody><tr><td>ALL</td><td>hits 987/1531 · hit rate 64.5% vs base rate 50.1% (+14.4pp) · Brier 0.209 · avg model prob 63.5% · streaks 13 hit / 9 miss</td></tr><tr><td>2023-24</td><td>hits 301/465 · hit rate 64.7% vs base rate 50.0% (+14.8pp) · Brier 0.207 · avg model prob 62.9% · streaks 7 hit / 4 miss</td></tr><tr><td>2024-25</td><td>hits 329/526 · hit rate 62.5% vs base rate 50.1% (+12.4pp) · Brier 0.207 · avg model prob 63.0% · streaks 11 hit / 9 miss</td></tr><tr><td>2025-26</td><td>hits 357/540 · hit rate 66.1% vs base rate 50.2% (+15.9pp) · Brier 0.212 · avg model prob 64.5% · streaks 13 hit / 5 miss</td></tr></tbody></table></details>
+
 <div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
 
 <details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
