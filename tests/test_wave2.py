@@ -313,8 +313,12 @@ def test_settle_1h_void_when_stale(con):
 
 
 def test_settle_1h_pending_when_recent(con):
-    _game(con, "espn:a", tipoff="2026-09-20T00:00:00Z", hs=110, as_=100)  # <48h
-    _mk1h_bet(con, tipoff="2026-09-20T00:00:00Z")
+    # Relative to now: a hard-coded "recent" timestamp silently becomes stale
+    # 48h later and this test then asserted the opposite of its own name
+    # (found 2026-09-22T00:00Z, exactly 48h after the fixed date it used).
+    recent = util.to_iso(util.utcnow() - util.timedelta(hours=2))
+    _game(con, "espn:a", tipoff=recent, hs=110, as_=100)
+    _mk1h_bet(con, tipoff=recent)
     assert paper.settle_finished(con) == 0
     assert con.execute(
         "SELECT result FROM bets WHERE bet_id='b-1h'").fetchone()["result"] == "pending"

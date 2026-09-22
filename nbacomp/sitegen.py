@@ -710,7 +710,17 @@ def strategies_page(con, out_dir):
     for sid, m in S.STRATEGIES.items():
         perf_f = strategy_performance(con, sid, "forward")
         perf_b = strategy_performance(con, sid, "backtest")
-        why = _why_analysis(perf_b, perf_f)
+        hist_row = con.execute(
+            "SELECT * FROM hist_backtests WHERE strategy_id=? AND UPPER(season)='ALL' "
+            "AND run_id=(SELECT run_id FROM hist_backtests ORDER BY generated_utc "
+            "DESC LIMIT 1)", (sid,)).fetchone()
+        base_row = con.execute(
+            "SELECT roi FROM hist_backtests WHERE strategy_id='MARKET' "
+            "AND UPPER(season)='ALL' AND run_id=(SELECT run_id FROM hist_backtests "
+            "ORDER BY generated_utc DESC LIMIT 1)").fetchone()
+        why = _why_analysis(perf_b, perf_f,
+                            hist=dict(hist_row) if hist_row else None,
+                            baseline_roi=base_row["roi"] if base_row else None)
         srcs = "".join(f"<code>{_esc(s)}</code> " for s in m["data_sources"])
         markets = "".join(f"<code>{_esc(x)}</code> " for x in m["market_types"])
         rules = "".join(f"<li>{_esc(r)}</li>" for r in m["entry_rules"])
@@ -878,15 +888,31 @@ def signal_validation_html(con, sid: str) -> str:
         else:
             core = "n/a"
         trs.append(f"<tr><td>{_esc(r['season'])}</td><td>{core}</td></tr>")
+    hist = con.execute(
+        "SELECT bets, roi, pnl, win_rate FROM hist_backtests WHERE strategy_id=? "
+        "AND UPPER(season)='ALL' AND run_id=(SELECT run_id FROM hist_backtests "
+        "ORDER BY generated_utc DESC LIMIT 1)", (sid,)).fetchone()
+    if hist:
+        priced_note = (
+            f"<b>Priced evidence for this rule exists:</b> {hist['bets']} simulated bets at "
+            f"real archive moneylines returned {fmt_money(hist['pnl'])} "
+            f"({fmt_pct(hist['roi'])} ROI) on a "
+            f"{(hist['win_rate'] or 0) * 100:.1f}% win rate — full detail, per season, on the "
+            f"<a href='research.html'>research page</a>. The outcome table below measures the "
+            f"SIGNAL only and is not P&amp;L; where the two disagree, the priced simulation is "
+            f"the one that matters.")
+    else:
+        priced_note = (
+            "No free historical price series exists for THIS market (settled Kalshi markets "
+            "expose no candles/tape; ESPN keeps no past odds; the SBR archive covers moneylines "
+            "only), so a price-taking backtest is impossible and would require fabricated "
+            "prices. The outcome table below measures the strategy's <i>decision rule</i> "
+            "against verified final results, chronologically (strictly prior data only) — "
+            "evidence about the signal, <b>not</b> betting P&amp;L, ROI or edge.")
     return (
         "<details open><summary><b>Signal validation</b> — decision rule vs verified "
         "outcomes (NO market prices; not P&amp;L)</summary>"
-        "<p class='muted small'>No free historical NBA price series exists (verified: "
-        "settled Kalshi markets expose no candles/tape; ESPN keeps no past odds), so a "
-        "price-taking backtest is impossible and would require fabricated prices. This "
-        "section instead validates the strategy's <i>decision rule</i> against verified "
-        "final results, chronologically (strictly prior data only). It is evidence "
-        "about the signal — <b>not</b> betting P&amp;L, ROI or edge. Baseline = league "
+        "<p class='muted small'>" + priced_note + " Baseline = league "
         "base rate of the picked side (winner rules) / in-sample season-mean total "
         "(total rules).</p>"
         "<table><thead><tr><th>Season</th><th>Result</th></tr></thead><tbody>"
@@ -904,7 +930,8 @@ def _profit_breakdown_html(by: dict, dim: str) -> str:
             "</th><th>Bets</th><th>Wins</th><th>P&L</th></tr></thead><tbody>" + rows + "</tbody></table>")
 
 
-def _why_analysis(bt: dict, fwd: dict) -> str:
+def _why_analysis(bt: dict, fwd: dict, hist: dict | None = None,
+                  baseline_roi: float | None = None) -> str:
     parts = []
     if bt.get("bets"):
         if (bt.get("pnl") or 0) > 0 and bt.get("win_rate", 0) > 0.5:
@@ -919,9 +946,22 @@ def _why_analysis(bt: dict, fwd: dict) -> str:
         parts.append(f"<b>Sample:</b> {bt['bets']} backtest bets. "
                      + ("Small sample — treat as suggestive, not established." if bt["bets"] < 100
                         else "Sample size is non-trivial but season-level."))
+    elif hist and hist.get("bets"):
+        roi = hist.get("roi") or 0.0
+        vs_base = (f" (market baseline {fmt_pct(baseline_roi)})"
+                   if baseline_roi is not None else "")
+        parts.append(
+            f"<b>Why it fails at real prices:</b> simulated on {hist['bets']} games at the "
+            f"archive's own moneylines it returned {fmt_money(hist['pnl'])} "
+            f"({fmt_pct(roi)} ROI){vs_base}. "
+            + ("The rule may still select good teams; it simply does not select them more "
+               "cheaply than the price already does."
+               if (hist.get('win_rate') or 0) > 0.5 else
+               "It also lost more often than it won, so there is no supporting signal."))
     else:
-        parts.append("<b>No backtest observations.</b> This is an explicit data limitation (no free "
-                     "historical prices for these markets), not evidence either way.")
+        parts.append("<b>No backtest observations.</b> This is an explicit data limitation for "
+                     "this market (no free historical per-side prices for totals/spreads, no free "
+                     "prop or injury archives), not evidence either way.")
     if fwd.get("bets"):
         parts.append(f"<b>Forward so far:</b> {fwd['bets']} settled / {fwd.get('pending', 0)} pending.")
     else:
