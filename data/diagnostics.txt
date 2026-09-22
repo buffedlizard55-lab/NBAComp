@@ -1,197 +1,53 @@
-espn.scoreboard: http=200 ok=True bytes=9821 err=None t=0.0s body[:160]=b'{"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association","abbreviation":"NBA","slug":"nba","season":{"year":2027,"startDate":"2026-09-30T07:00Z","endDate":"2027-06-26T06:59Z",'
-espn.scoreboard(20260115): http=200 ok=True bytes=125924 err=None t=0.8s body[:160]=b'{"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association","abbreviation":"NBA","slug":"nba","season":{"year":2026,"startDate":"2025-10-01T07:00Z","endDate":"2026-06-27T06:59Z",'
-espn.injuries: http=200 ok=True bytes=871272 err=None t=0.8s body[:160]=b'{"timestamp":"2026-09-21T23:22:35Z","status":"success","season":{"year":2027,"type":1,"name":"Preseason","displayName":"2026-27"},"injuries":[{"id":"1","displayName":"Atlanta Hawks","injuries":[{"id":'
-nba.teamstats: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.8s body[:160]=b''
-nba.teamgamelogs: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.7s body[:160]=b''
-nba.scoreboardv2: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.7s body[:160]=b''
+espn.scoreboard: http=200 ok=True bytes=9825 err=None t=0.1s body[:160]=b'{"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association","abbreviation":"NBA","slug":"nba","season":{"year":2027,"startDate":"2026-09-30T07:00Z","endDate":"2027-06-26T06:59Z",'
+espn.scoreboard(20260115): http=200 ok=True bytes=128137 err=None t=0.7s body[:160]=b'{"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association","abbreviation":"NBA","slug":"nba","season":{"year":2026,"startDate":"2025-10-01T07:00Z","endDate":"2026-06-27T06:59Z",'
+espn.injuries: http=200 ok=True bytes=867939 err=None t=0.8s body[:160]=b'{"timestamp":"2026-09-22T18:14:28Z","status":"success","season":{"year":2027,"type":1,"name":"Preseason","displayName":"2026-27"},"injuries":[{"id":"1","displayName":"Atlanta Hawks","injuries":[{"id":'
+nba.teamstats: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=65.0s body[:160]=b''
+nba.teamgamelogs: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.8s body[:160]=b''
+nba.scoreboardv2: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.8s body[:160]=b''
 kalshi.series KXNBAGAME: http=200 ok=True bytes=1586 err=None t=0.1s body[:160]=b'{"series":{"additional_prohibitions":["Current players, coaches, and staff of the league, association, or organization(s) governing the event. For college leagues/associations specifically, or where o'
 kalshi.markets KXNBAGAME open: rows=6 t=0.3s
 kalshi.markets KXNBAGAME settled: rows=0 t=0.4s
-kalshi.candlesticks: rows=0 t=0.4s
+kalshi.candlesticks: rows=0 t=0.3s
 
 collection_log tail:
-  2026-09-21T23:22:39Z signal-backtest engine ok sigbt-2026-09-21: games=4173 signals=7303 (outcome-only validation; no prices used)
-  2026-09-21T23:22:36Z backtest engine ok bt-2026-09-20: bets=0
-  2026-09-21T23:22:34Z bref-backfill basketball-reference skipped 2026-september: offseason, no monthly page exists
-  2026-09-21T23:22:34Z boxscores espn ok 2026-09-20
-  2026-09-21T23:22:34Z kalshi-settled-history kalshi:KXNBAGAME empty games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
-  2026-09-21T23:22:34Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-YES ok http=200 trades=0
-  2026-09-21T23:22:34Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NYK ok http=200 trades=0
-  2026-09-21T23:22:33Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NO ok http=200 trades=0
-  2026-09-21T23:22:33Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-ATL ok http=200 trades=0
-  2026-09-21T23:22:24Z kalshi-backfill kalshi empty settled markets not exposed by public API (verified 2026-09-21); forward candle accumulation is the history source
-  2026-09-21T23:22:24Z kalshi-backfill kalshi:KXNBAPRA ok events=0 skipped=0 markets_total=0
-  2026-09-21T23:22:24Z kalshi-backfill kalshi:KXNBABLK ok events=3 skipped=397 markets_total=0
-  2026-09-21T23:22:22Z kalshi-backfill kalshi:KXNBASTL ok events=3 skipped=397 markets_total=0
-  2026-09-21T23:22:20Z kalshi-backfill kalshi:KXNBAAST ok events=3 skipped=397 markets_total=0
-  2026-09-21T23:22:19Z kalshi-backfill kalshi:KXNBAREB ok events=3 skipped=397 markets_total=0
-  2026-09-21T23:22:17Z kalshi-backfill kalshi:KXNBAPTS ok events=3 skipped=397 markets_total=0
-  2026-09-21T23:22:15Z kalshi-backfill kalshi:KXNBAMVP ok events=1 skipped=0 markets_total=0
-  2026-09-21T23:22:14Z kalshi-backfill kalshi:KXNBA1H ok events=0 skipped=0 markets_total=0
-  2026-09-21T23:22:14Z kalshi-backfill kalshi:KXNBATOTAL ok events=3 skipped=397 markets_total=0
-  2026-09-21T23:22:12Z kalshi-backfill kalshi:KXNBASPREAD ok events=3 skipped=397 markets_total=0
-  2026-09-21T23:22:11Z kalshi-backfill kalshi:KXNBAGAME ok events=3 skipped=397 markets_total=0
-  2026-09-21T23:22:09Z kalshi-candles-forward kalshi ok tickers=6 candles=403 window=2026-09-18T23:22:09Z..2026-09-21T23:22:09Z
-  2026-09-21T23:22:09Z kalshi-snapshot kalshi ok open_markets=59 books=6 rejected=0
-  2026-09-21T23:22:06Z kalshi-snapshot kalshi:KXNBAPRA ok open_markets=0
-  2026-09-21T23:22:06Z kalshi-snapshot kalshi:KXNBABLK ok open_markets=0
+  2026-09-22T17:06:12Z signal-backtest engine ok sigbt-2026-09-21: games=4173 signals=10473 (outcome-only validation; no prices used)
+  2026-09-22T17:06:10Z backtest engine ok bt-2026-09-20: bets=0
+  2026-09-22T17:04:59Z signal-backtest engine ok sigbt-2026-09-21: games=4173 signals=10473 (outcome-only validation; no prices used)
+  2026-09-22T17:04:56Z backtest engine ok bt-2026-09-20: bets=0
+  2026-09-22T17:04:54Z bref-backfill basketball-reference skipped 2026-september: offseason, no monthly page exists
+  2026-09-22T17:04:54Z boxscores espn ok 2026-09-21
+  2026-09-22T17:04:54Z kalshi-settled-history kalshi:KXNBAGAME empty games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
+  2026-09-22T17:04:53Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-YES ok http=200 trades=0
+  2026-09-22T17:04:53Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NYK ok http=200 trades=0
+  2026-09-22T17:04:53Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-NO ok http=200 trades=0
+  2026-09-22T17:04:52Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR25ATLNYK-ATL ok http=200 trades=0
+  2026-09-22T17:04:44Z kalshi-backfill kalshi empty settled markets not exposed by public API (verified 2026-09-21); forward candle accumulation is the history source
+  2026-09-22T17:04:44Z kalshi-backfill kalshi:KXNBAPRA ok events=0 skipped=0 markets_total=0
+  2026-09-22T17:04:43Z kalshi-backfill kalshi:KXNBABLK ok events=3 skipped=397 markets_total=0
+  2026-09-22T17:04:42Z kalshi-backfill kalshi:KXNBASTL ok events=3 skipped=397 markets_total=0
+  2026-09-22T17:04:40Z kalshi-backfill kalshi:KXNBAAST ok events=3 skipped=397 markets_total=0
+  2026-09-22T17:04:38Z kalshi-backfill kalshi:KXNBAREB ok events=3 skipped=397 markets_total=0
+  2026-09-22T17:04:36Z kalshi-backfill kalshi:KXNBAPTS ok events=3 skipped=397 markets_total=0
+  2026-09-22T17:04:34Z kalshi-backfill kalshi:KXNBAMVP ok events=1 skipped=0 markets_total=0
+  2026-09-22T17:04:34Z kalshi-backfill kalshi:KXNBA1H ok events=0 skipped=0 markets_total=0
+  2026-09-22T17:04:33Z kalshi-backfill kalshi:KXNBATOTAL ok events=3 skipped=397 markets_total=0
+  2026-09-22T17:04:32Z kalshi-backfill kalshi:KXNBASPREAD ok events=3 skipped=397 markets_total=0
+  2026-09-22T17:04:30Z kalshi-backfill kalshi:KXNBAGAME ok events=3 skipped=397 markets_total=0
+  2026-09-22T17:04:28Z kalshi-candles-forward kalshi ok tickers=6 candles=408 window=2026-09-19T17:04:28Z..2026-09-22T17:04:28Z
+  2026-09-22T17:04:28Z kalshi-snapshot kalshi ok open_markets=59 books=6 rejected=0
 anomaly tail:
-  2026-09-21T23:22:39Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBAMVP-27", "c": 53}
-  2026-09-21T23:22:39Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBAGAME-26OCT20PHINYK", "c": 2}
-  2026-09-21T23:22:39Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBAGAME-26OCT20OKCSAS", "c": 2}
-  2026-09-21T23:22:39Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBAGAME-26OCT20BOSDET", "c": 2}
-  2026-09-21T23:22:39Z info unlabeled-season-type {"count": 4173, "detail": "ESPN did not report season.type for these rows; they are never guessed from dates"}
-  2026-09-21T23:22:39Z info quarantined-bets {"flag": "strategy-parked", "severity": "warn", "bets_flagged": 10, "open_bets": 10, "detail": "bets placed under a defective input (or at a
-  2026-09-21T23:22:39Z warn quarantined-bets {"flag": "stale-state-at-decision", "severity": "critical", "bets_flagged": 10, "open_bets": 10, "detail": "bets placed under a defective in
-  2026-09-21T23:22:39Z info quarantined-bets {"flag": "price-not-observed", "severity": "info", "bets_flagged": 10, "open_bets": 10, "detail": "bets placed under a defective input (or a
-  2026-09-21T23:22:39Z warn quarantined-bets {"flag": "implausible-edge", "severity": "critical", "bets_flagged": 3, "open_bets": 3, "detail": "bets placed under a defective input (or a
-  2026-09-21T23:22:39Z warn persistent-source-failure {"failures": {"boxscore:espn": 27}}
-  2026-09-21T23:22:39Z critical collector-crash {"tasks": ["sbr-2013-14", "sbr-2014-15", "sbr-2015-16", "sbr-2016-17", "sbr-2017-18", "sbr-2018-19", "sbr-2019-20", "sbr-2020-21", "sbr-2021
-  2026-09-21T23:19:40Z info non-nba-game-skipped {"game_id": "espn:401914130", "home": "POR", "away": "LON", "date": "2026-10-12"}
-  2026-09-21T23:19:04Z warn sbr-row-changed {"season": "2022-23", "game": "PHI@BOS 2022-10-18", "detail": "the archive's values differ from the row we already stored; the new row repla
-  2026-09-21T23:19:04Z warn sbr-row-changed {"season": "2021-22", "game": "BKN@MIL 2021-10-19", "detail": "the archive's values differ from the row we already stored; the new row repla
-  2026-09-21T23:19:01Z warn sbr-row-changed {"season": "2014-15", "game": "DAL@SAS 2014-10-28", "detail": "the archive's values differ from the row we already stored; the new row repla
-
-probe7 2026-09-21T23:27:04Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-21T23:50:34Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T00:01:14Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T00:26:27Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T00:32:42Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T00:36:38Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T03:41:45Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T04:09:21Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T05:08:20Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253706
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T07:45:12Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253707
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T11:49:40Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253707
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
-
-probe7 2026-09-22T17:03:07Z
-  espn 20260115: http=200 events=9 state=post events_with_odds=0
-  espn 20260613: http=200 events=1 state=post events_with_odds=0
-  espn 20250115: http=200 events=11 state=post events_with_odds=0
-  espn 20241022: http=200 events=2 state=post events_with_odds=0
-  bref october-2024 page: http=200 bytes=253707
-  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
-  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
-  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
-  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
-probe7 done
+  2026-09-22T18:11:21Z info sbr-row-changed-reclassified {"n_records": 1277, "detected_utc_values": ["2026-09-21T23:19:01Z", "2026-09-21T23:19:04Z", "2026-09-21T23:27:17Z", "2026-09-21T23:27:18Z", 
+  2026-09-22T17:06:13Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBAMVP-27", "c": 53}
+  2026-09-22T17:06:13Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBAGAME-26OCT20PHINYK", "c": 2}
+  2026-09-22T17:06:13Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBAGAME-26OCT20OKCSAS", "c": 2}
+  2026-09-22T17:06:13Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBAGAME-26OCT20BOSDET", "c": 2}
+  2026-09-22T17:06:13Z info unlabeled-season-type {"count": 4173, "detail": "ESPN did not report season.type for these rows; they are never guessed from dates"}
+  2026-09-22T17:06:13Z info quarantined-bets {"flag": "strategy-parked", "severity": "warn", "bets_flagged": 14, "open_bets": 14, "detail": "bets placed under a defective input (or at a
+  2026-09-22T17:06:13Z info quarantined-bets {"flag": "stale-state-at-decision-retracted", "severity": "info", "bets_flagged": 4, "open_bets": 4, "detail": "bets placed under a defectiv
+  2026-09-22T17:06:13Z warn quarantined-bets {"flag": "stale-state-at-decision", "severity": "critical", "bets_flagged": 14, "open_bets": 14, "detail": "bets placed under a defective in
+  2026-09-22T17:06:13Z info quarantined-bets {"flag": "price-not-observed", "severity": "info", "bets_flagged": 14, "open_bets": 14, "detail": "bets placed under a defective input (or a
+  2026-09-22T17:06:13Z warn quarantined-bets {"flag": "implausible-edge", "severity": "critical", "bets_flagged": 3, "open_bets": 3, "detail": "bets placed under a defective input (or a
+  2026-09-22T17:06:13Z warn unvalidated-strategy-holds-bets {"strategy": "NBA-026", "open_bets": 4, "tier": "failed", "evidence": "covered 49.31% of 1888 firings at the archive's own closing lines, BE
+  2026-09-22T17:06:13Z info collector-crash-resolved {"tasks": ["sbr-2013-14", "sbr-2014-15", "sbr-2015-16", "sbr-2016-17", "sbr-2017-18", "sbr-2018-19", "sbr-2019-20", "sbr-2020-21", "sbr-2021
+  2026-09-22T17:06:13Z info signal-gated-by-validation {"strategy": "NBA-026", "game": "espn:401909282", "reason": "tier=failed (covered 49.31% of 1888 firings at the archive's own closing lines,
+  2026-09-22T17:06:13Z info signal-gated-by-validation {"strategy": "NBA-026", "game": "espn:401909280", "reason": "tier=failed (covered 49.31% of 1888 firings at the archive's own closing lines,
