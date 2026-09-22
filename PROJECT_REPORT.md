@@ -272,7 +272,7 @@ starting, not a test artifact.
 
 <!-- facts:headline -->
 - strategies registered: **27** — `nbacomp/strategies.py` is the only source of this number, and the table below is generated from it
-- offline test suite: **242 tests** collected by pytest in 16 files (237 test functions; parametrized cases expand)
+- offline test suite: **266 tests** collected by pytest in 17 files (261 test functions; parametrized cases expand)
 - live database row counts are **not quoted here**: read `data/db_report.txt`, which every pipeline run regenerates
 <!-- /facts:headline -->
 
@@ -539,6 +539,20 @@ numbers where necessary rather than reconciling them silently.
 
 ## Known bugs
 
+### Fixed in this pass (2026-09-22, the integrity/observability pass)
+
+Every defect below was found by querying the committed `data/nbacomp.db`, not by
+reading the code — which is why the green test suite did not catch any of them.
+
+| Defect | Evidence (quoted, not asserted) | Fix |
+|--------|--------------------------------|-----|
+| **1,277 `sbr-row-changed` warnings blamed the archive for our own parser change.** They are 1,277 of the 1,455 `warn` rows ever recorded (88% of all warn noise on the dashboard), and every one was written in a single run. The anomaly text asserted "the archive's values differ from the row we already stored" — a claim about the source that was false | `SELECT detected_utc, COUNT(*) FROM anomalies WHERE check_name='sbr-row-changed' GROUP BY 1` → nine timestamps, all between `2026-09-21T23:19:01Z` and `2026-09-21T23:27:23Z`, i.e. the parser v1→v2 run; `collection_log` for that window shows `sbr-2022-23 … parsed=452` etc. Root cause: `source_row_hash = util.stable_hash(g)` hashes the *entire parsed dict*, and parser v2 started emitting `spread_printed_row` + `spread_sign_from_ml`, so every re-collected row's hash changed at once | `hist_odds.parser_version` (SCHEMA + `_migrate`) records which parser produced a row. A hash change under an **unchanged** version raises `sbr-row-changed` (a genuine source edit, and its detail now says "under the SAME parser version"); a hash change **across** versions raises `sbr-row-reparsed` (info) saying the archive "is not known to have edited it". `collect.reclassify_sbr_parser_warnings()` appends one `sbr-row-changed-reclassified` record and stamps `meta`, so it runs at most once — and it deletes nothing, because `anomalies` is append-only. Verified against the committed DB: `reclassified: 1277`, anomalies `2035 → 2036`, `sbr-row-changed` rows still `1277` |
+| **`data/db_report.txt` hid two empty tables.** Its docstring promised "row counts for every table" but the list was hardcoded at 23 while the schema has 28 real tables. `quarter_scores` and `player_season_stats` — both genuinely empty — were absent, so they never reached the `empty tables:` line that exists to catch exactly that. `quarter_scores` is the *only* settlement path for NBA-013's quarter/half market (`paper.py` reads `quarter=2`), so its emptiness is a live limitation | `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'` → 28 tables; the committed `data/db_report.txt` listed 23 and printed `empty tables: injuries, team_season_stats` only | `db_report.all_tables()` derives the list from `sqlite_master` (preferred order first, then alphabetical; `TABLE_ORDER` is now a display preference, not a filter). Output reads `=== table row counts (28 tables) ===` and `empty tables: injuries, player_season_stats, team_season_stats, quarter_scores, game_aliases`. A test creates a brand-new table and asserts it appears, so the drift cannot recur |
+| **No mark-to-market existed, and the positions page claimed one did.** The spec requires a current price for every open position. Nothing in the codebase computed one, while `positions.html` stated "current marks come from the latest collected orderbook snapshots" and then rendered no mark column at all | `grep -rn "current_price\|mark_to_market\|unrealized" nbacomp/*.py` → no matches; the old `positions()` table had 12 columns, none of them a mark. Meanwhile `kalshi_candles` holds 623 rows over 6 tickers and `odds_snapshots` holds 46 timestamped rows per game — the data for a real mark was already being collected | new `nbacomp/marks.py`. For each open bet it reports a current price **only where one was observed** (Kalshi live ask, else last closed candle, else an ESPN snapshot that carried a real side price), the market's current line, the line observed as of the decision timestamp, their difference, and unrealized P&L — and a `mark_status` of `marked` / `line-only` / `unavailable` with a written reason. All 14 open positions come back `line-only` and unrealized P&L is published as **UNAVAILABLE for all 14**, because ESPN's free feed stores `price_format='line'`, `price=0.0`; reading that 0.0 as a price would be fabrication, so `_latest_line` requires `line IS NOT NULL` and `_latest_price` excludes `price_format='line'`. Real movement is shown instead, e.g. MIN @ MIA total `242.5 → 243.5` (+1.0), DAL @ HOU spread `-8.5 → -7.5` |
+| The first draft of the mark formula dropped the returned stake, marking a $100 bet at −110 as **−$52.38** at its own entry price | `_unrealized` returned `p_now * to_win - stake`; the break-even check `stake/(stake+to_win) = 0.52381` equals `american_to_prob(-110) = 0.52381`, so the entry mark must be 0 | the value is now `p_now * (stake + to_win) - stake`, which returns `+0.0005` at entry; `test_american_unrealized_is_zero_at_the_entry_price` asserts entry ≈ 0 and that the mark rises when the market moves toward the pick and falls when it moves away |
+| Five strategy pages rendered **no** "Version history" section, which the spec lists as required. It read as missing information rather than as "nothing superseded yet" | splitting `strategies.html` on the card anchors: NBA-023/024/025/026/027 had none — exactly the five still at v1.0.0 with 0 `version_history` entries | the section is always rendered and always lists the current version, marked *current (first published version)* where nothing precedes it. `strategies.html` now contains exactly 27 "Version history" sections for 27 cards |
+| **A commit message could execute shell on the CI runner.** The scope step interpolated the commit message straight into a script: `--message "${{ github.event.head_commit.message }}"`. `${{ }}` is substituted *before* bash sees the line, so backticks and `$(...)` in a commit body run as commands | Found by breaking CI, not by inspection: run `35765860793`, step 5 `Decide this run's scope (event-aware)`, exit code 2. Reproduced locally — bash printed ``bash: line 1: sbr-row-changed: command not found`` / ``empty: command not found`` / ``line-only: command not found`` and argparse then received the message split across arguments. The step holds a `GITHUB_TOKEN` with `contents:write`, so the reachable failure mode is code execution in a job that pushes to `main` | both the scope step and `Fail the run if it did no work` now receive contexts through `env:` and read `$HEAD_COMMIT_MESSAGE` / `$EVENT_NAME` / `$SCOPE_*`. Verified against the exact message that broke CI: exit `0`, `skip=false probe=false`. Three tests guard it: one extracts every `run:` block and fails if an untrusted context (`github.event.head_commit.message`, `github.head_ref`, …) is interpolated into one, one asserts the `env:` pattern, and one feeds `run_scope` a message containing backticks, `$(whoami)`, quotes and `$100`. The first two were confirmed to fail with the vulnerable line restored |
+
 ### Fixed in this pass (2026-09-22, the line-evidence & quarantine-scope pass)
 
 | Defect | Evidence (quoted, not asserted) | Fix |
@@ -680,7 +694,7 @@ suite again — the previous revision claimed "200 passed" next to a suite that
 collected 207.
 
 <!-- facts:suite -->
-`python -m pytest tests` collects **242 tests** across 16 files (offline, no network needed). 237 of those are test functions; the difference is parametrized cases:
+`python -m pytest tests` collects **266 tests** across 17 files (offline, no network needed). 261 of those are test functions; the difference is parametrized cases:
 
 - `tests/test_adversarial.py` — 24 tests
 - `tests/test_audit_summary.py` — 3 tests
@@ -692,6 +706,7 @@ collected 207.
 - `tests/test_line_backtest.py` — 16 tests
 - `tests/test_live_shapes.py` — 18 tests
 - `tests/test_new_markets.py` — 7 tests
+- `tests/test_pass4_integrity.py` — 24 tests
 - `tests/test_pipeline_fixes.py` — 33 tests
 - `tests/test_quarantine_scope.py` — 13 tests
 - `tests/test_run_scope.py` — 11 tests

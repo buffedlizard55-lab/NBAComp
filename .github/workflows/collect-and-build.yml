@@ -53,6 +53,18 @@ jobs:
 
       - name: Decide this run's scope (event-aware)
         id: skip
+        # The commit message arrives through `env:`, NOT through ${{ }} inside
+        # the run script. ${{ }} is substituted textually before the shell sees
+        # the line, so a commit message containing a backtick, $(...) or a
+        # double quote is executed as shell or breaks the quoting. That is not
+        # hypothetical: run 35765860793 died here with exit code 2 on a commit
+        # whose body used backticks -- bash tried to run `sbr-row-changed` as a
+        # command and argparse then received the message split across arguments.
+        # This step holds the GITHUB_TOKEN with contents:write, so untrusted
+        # text reaching the shell is a code-execution path, not just a crash.
+        env:
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           # The subject sniffing that used to live here looked at the head
           # commit of whatever triggered the run. The bot's own commits are
@@ -63,8 +75,8 @@ jobs:
           # steps 6-21. Only a push may be skipped; schedule and
           # workflow_dispatch always work. Decision + verification live in
           # tools/run_scope.py, which is unit-tested.
-          python tools/run_scope.py --event "${{ github.event_name }}" \
-            --message "${{ github.event.head_commit.message }}" --out "$GITHUB_OUTPUT"
+          python tools/run_scope.py --event "$EVENT_NAME" \
+            --message "$HEAD_COMMIT_MESSAGE" --out "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT" | tail -2
 
       - name: Deep probe only (fast iteration)
@@ -217,16 +229,22 @@ jobs:
 
       - name: Fail the run if it did no work
         if: always() && steps.skip.outcome == 'success'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCOPE_SKIP: ${{ steps.skip.outputs.skip }}
+          SCOPE_PROBE: ${{ steps.skip.outputs.probe }}
+          DAILY_OUTCOME: ${{ steps.daily.outcome }}
         run: |
           # A run that skips every work step has nothing left to fail, so the
           # previous defect reported success for hours of idle cron. This step
           # runs even when the work steps were skipped and makes that state
           # loud. (2026-09-21: three scheduled runs did no collection at all.)
+          # Contexts are passed via env: for the same reason as the scope step.
           python tools/run_scope.py --verify \
-            --event "${{ github.event_name }}" \
-            --skip "${{ steps.skip.outputs.skip }}" \
-            --probe "${{ steps.skip.outputs.probe }}" \
-            --daily-outcome "${{ steps.daily.outcome }}"
+            --event "$EVENT_NAME" \
+            --skip "$SCOPE_SKIP" \
+            --probe "$SCOPE_PROBE" \
+            --daily-outcome "$DAILY_OUTCOME"
 
       - name: Failure diagnostics
         if: failure()

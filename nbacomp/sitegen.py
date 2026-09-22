@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import os
 
-from . import db, strategies as S, validation
+from . import db, marks as marks_lib, strategies as S, validation
 from .sources_registry import REGISTRY
 
 NAV = [
@@ -50,12 +50,14 @@ timestamped source; unverified data is labeled as such.</footer>
 </body></html>"""
 
 
-def table(headers: list[str], rows: list[list], cls: str = "") -> str:
+def table(headers: list[str], rows: list[list], cls: str = "", id: str = "") -> str:
     if not rows:
         return "<p class='empty'>No rows yet — data pending collection.</p>"
     h = "".join(f"<th>{_esc(x)}</th>" for x in headers)
     trs = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in row) + "</tr>" for row in rows)
-    return f"<div class='twrap'><table class='{cls}'><thead><tr>{h}</tr></thead><tbody>{trs}</tbody></table></div>"
+    idattr = f" id='{_esc(id)}'" if id else ""
+    return (f"<div class='twrap'><table{idattr} class='{cls}'><thead><tr>{h}</tr></thead>"
+            f"<tbody>{trs}</tbody></table></div>")
 
 
 def fmt_money(x) -> str:
@@ -804,18 +806,29 @@ def strategies_page(con, out_dir):
             f"{'bets allowed' if pol['allow_bets'] else 'NO bets (parked)'} · "
             f"probability shrunk {pol['shrink']:.0%} toward the market · "
             f"max credible edge {pol['max_edge']:.0%} · stake scale {pol['stake_scale']:.2f}x</p>")
+        # The spec lists "Version history" as a required section of every
+        # strategy page. Five strategies are still at v1.0.0 and the section was
+        # silently omitted for them, which reads as missing information rather
+        # than as "nothing has been superseded yet" — so it is always rendered,
+        # and the current version is always listed whether or not anything
+        # precedes it.
         hist = m.get("history") or []
-        if hist:
-            hist_html = "<details><summary>Version history ({n})</summary><ul>{items}</ul></details>".format(
-                n=len(hist),
-                items="".join(
-                    f"<li><b>v{_esc(h.get('version'))}</b> → v{_esc(h.get('superseded_by'))} "
-                    f"({_esc(h.get('changed_utc'))}): {_esc(h.get('note'))}</li>" for h in hist))
-        else:
-            hist_html = "<p class='muted small'>No prior versions.</p>"
+        hist_items = "".join(
+            f"<li><b>v{_esc(h.get('version'))}</b> → v{_esc(h.get('superseded_by'))} "
+            f"({_esc(h.get('changed_utc'))}): {_esc(h.get('note'))}</li>" for h in hist)
+        hist_items += (f"<li><b>v{_esc(m['version'])}</b> — <i>current</i>"
+                       f"{'' if hist else ' (first published version)'}</li>")
+        hist_html = (f"<details><summary>Version history ({len(hist) + 1} version"
+                     f"{'s' if len(hist) else ''} listed)</summary><ul>{hist_items}</ul></details>")
 
         cards.append(f"""
-<div class="strategy-card" id="{sid}">
+<div class="strategy-card" id="{sid}"
+     data-sid="{sid}" data-name="{_esc(m['name'].lower())}"
+     data-username="{_esc(m['username'].lower())}"
+     data-category="{_esc(m['category'].lower())}"
+     data-tier="{_esc(tier['tier'])}" data-version="{_esc(m['version'])}"
+     data-status="{_esc(_status_of(perf_f, 'forward').lower())}"
+     data-markets="{_esc(' '.join(m['market_types']).lower())}">
 <h2>{_esc(m['name'])} <span class="mono">{sid} v{m['version']}</span>
 <span class="pill">{_esc(m['category'])}</span>
 <span class="pill status">{_status_of(perf_f, 'forward')}</span></h2>
@@ -839,10 +852,61 @@ def strategies_page(con, out_dir):
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary>{why}</details>
 <details open><summary>Recent bets (all kinds)</summary>{bt_rows}</details>
 </div>""")
-    body = ("<h1>Strategies</h1>"
-            "<p class='muted'>Every strategy is a versioned, testable hypothesis with explicit rules. "
-            "Backtest and forward records are labeled separately and never mixed.</p>"
-            + "".join(cards))
+    # The spec asks for a searchable, filterable site. 27 strategies on one
+    # 100 KB page with no way to narrow them is not that, so the page carries a
+    # client-side search plus facet filters. Pure DOM over data attributes: no
+    # framework, no build step, works from GitHub Pages as static HTML.
+    tiers = sorted({validation.classify(con, sid)["tier"] for sid in S.STRATEGIES})
+    cats = sorted({m["category"] for m in S.STRATEGIES.values()})
+    mkts = sorted({x for m in S.STRATEGIES.values() for x in m["market_types"]})
+    tier_opts = "".join(f"<option value='{_esc(t)}'>{_esc(t.replace('_', ' '))}</option>" for t in tiers)
+    cat_opts = "".join(f"<option value='{_esc(c.lower())}'>{_esc(c)}</option>" for c in cats)
+    mkt_opts = "".join(f"<option value='{_esc(k.lower())}'>{_esc(k)}</option>" for k in mkts)
+    body = (
+        "<h1>Strategies</h1>"
+        f"<p class='muted'>{len(S.STRATEGIES)} registered strategies. Every one is a versioned, "
+        "testable hypothesis with explicit rules. Backtest and forward records are labeled "
+        "separately and never mixed, and losing strategies are never hidden.</p>"
+        "<input id=\"sq\" type=\"search\" placeholder=\"Search: id, name, username, category, thesis…\">"
+        "<div class=\"filters\">"
+        f"<select id=\"sf_tier\"><option value=\"\">all verification tiers</option>{tier_opts}</select>"
+        f"<select id=\"sf_cat\"><option value=\"\">all categories</option>{cat_opts}</select>"
+        f"<select id=\"sf_mkt\"><option value=\"\">all markets</option>{mkt_opts}</select>"
+        "</div><p id=\"scount\" class=\"muted\"></p>"
+        + "".join(cards)
+        + """
+<script>
+(function(){
+  const cards = [...document.querySelectorAll('.strategy-card')];
+  const ids = ['sq','sf_tier','sf_cat','sf_mkt'];
+  function apply(){
+    const q = document.getElementById('sq').value.trim().toLowerCase();
+    const t = document.getElementById('sf_tier').value;
+    const c = document.getElementById('sf_cat').value;
+    const m = document.getElementById('sf_mkt').value;
+    let shown = 0;
+    cards.forEach(card => {
+      const d = card.dataset;
+      const hay = [d.sid, d.name, d.username, d.category, d.markets, d.tier,
+                   card.textContent].join(' ').toLowerCase();
+      const ok = (!q || hay.includes(q)) && (!t || d.tier === t) &&
+                 (!c || d.category === c) &&
+                 (!m || d.markets.split(' ').includes(m));
+      card.style.display = ok ? '' : 'none';
+      if (ok) shown++;
+    });
+    document.getElementById('scount').textContent =
+      shown + ' of ' + cards.length + ' strategies';
+  }
+  ids.forEach(i => document.getElementById(i).addEventListener('input', apply));
+  apply();
+  // a deep link (#NBA-013) must survive a filter that would hide it
+  if (location.hash) {
+    const el = document.querySelector(location.hash);
+    if (el) { el.style.display = ''; el.scrollIntoView(); }
+  }
+})();
+</script>""")
     _write(out_dir, "strategies.html", page("Strategies", body, "strategies.html"))
 
 
@@ -1070,21 +1134,69 @@ def positions(con, out_dir):  # noqa: C901
     rows = con.execute(
         "SELECT * FROM bets WHERE kind='forward' AND result='pending' "
         "AND execution_status='simulated_fill' ORDER BY tipoff_utc").fetchall()
+    marks = {m["bet_id"]: m for m in marks_lib.mark_open_positions(con)}
+    msum = marks_lib.mark_summary(con)
     flags = flagged_bet_ids(con)
     qsec = quarantine_section_html(con)
+
+    def _mark_cells(r):
+        m = marks.get(r["bet_id"], {})
+        st = m.get("mark_status", "unavailable")
+        badge = {"marked": "<span class='ok'>marked</span>",
+                 "line-only": "<span class='warnbadge'>line only</span>"}.get(
+                     st, "<span class='bad'>UNAVAILABLE</span>")
+        px = m.get("current_price")
+        px_txt = ("—" if px is None else
+                  f"{px:g} {m.get('current_price_format') or ''}".strip())
+        move = m.get("line_move")
+        move_txt = "—" if move is None else f"{move:+g}"
+        cls = "" if move in (None, 0.0) else ("pos" if move > 0 else "neg")
+        unreal = m.get("unrealized_usd")
+        return [badge, px_txt,
+                "—" if m.get("current_line") is None else f"{m['current_line']:g}",
+                f"<span class='{cls}'>{move_txt}</span>",
+                ("—" if unreal is None else
+                 f"<span class='{'pos' if unreal >= 0 else 'neg'}'>{fmt_money(unreal)}</span>")]
+
+    status_counts = (", ".join(f"<b>{v}</b> {k}" for k, v in sorted(msum["by_status"].items()))
+                     or "none")
+    unreal_txt = (f"<b>UNAVAILABLE for all {msum['n_open']} positions</b>"
+                  if msum["unrealized_usd"] is None else fmt_money(msum["unrealized_usd"]))
+    psearch = ('<input id="pq" type="search" placeholder="Search open positions: '
+               'strategy, game, market, pick, flags…"><p id="pcount" class="muted"></p>'
+               if rows else "")
+    ptable = (table(["Strategy", "Game", "Tipoff (UTC)", "Market", "Pick", "Entry", "Contracts",
+                     "Stake", "To win", "Mark", "Current price", "Line now", "Line move",
+                     "Unrealized", "Flags"],
+                    [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["tipoff_utc"]),
+                      _esc(r["market"]), _esc(r["selection"]),
+                      f"{r['price']:g} {_esc(r['price_format'])}", r["contracts"],
+                      fmt_money(r["stake_usd"]), fmt_money(r["to_win_usd"]),
+                      *_mark_cells(r),
+                      ("<span class='bad mono small'>" + _esc(", ".join(flags[r["bet_id"]])) + "</span>")
+                      if r["bet_id"] in flags else "<span class='muted'>—</span>"] for r in rows],
+                    id="postable")
+              + _table_search_js("pq", "postable", "pcount", "open positions") if rows else
+              "<p class='empty'>No open positions.</p>")
     body = f"""
 <h1>Open positions</h1>
 <p class="muted">Executed (simulated fill) bets awaiting settlement. Entry price and exposure are immutable
-records; current marks come from the latest collected orderbook snapshots. Rows carrying a
-<span class="bad">quarantine flag</span> are shown with that flag: they are not counted in exposure or
-ranking P&amp;L.</p>
-{table(["Strategy", "Game", "Tipoff (UTC)", "Market", "Pick", "Entry ¢", "Contracts",
-        "Stake", "To win", "Fees", "Entry ts", "Flags"],
-       [[_esc(r["username"]), _esc(r["game_label"]), _esc(r["tipoff_utc"]), _esc(r["market"]),
-         _esc(r["selection"]), r["fill_price"], r["contracts"], fmt_money(r["stake_usd"]),
-         fmt_money(r["to_win_usd"]), fmt_money(r["fee_usd"]), _esc(r["source_ts"]),
-         ("<span class='bad mono small'>" + _esc(", ".join(flags[r["bet_id"]])) + "</span>")
-         if r["bet_id"] in flags else "<span class='muted'>—</span>"] for r in rows])}
+records. Rows carrying a <span class="bad">quarantine flag</span> are shown with that flag: they are not
+counted in exposure or ranking P&amp;L.</p>
+
+<h2>Mark to market</h2>
+<p>The spec requires a current price for every open position. It is only shown when one was
+<b>actually observed</b> — never estimated. {msum['n_open']} positions are open: {status_counts}.</p>
+<p class="muted">ESPN's free feed publishes spreads and totals as <b>lines without side prices</b>
+(<code>price_format='line'</code>, <code>price=0.0</code>), so for those bets the honest mark is the
+line, not a price: the <i>line move</i> column is real observed movement since the decision
+timestamp. Reading that 0.0 as a price would be fabrication, so it is excluded. Unrealized P&amp;L
+is computed only where a real price exists; it is currently {unreal_txt}.</p>
+{psearch}
+{ptable}
+<p class="muted small">Line sign convention: ESPN prints the <b>home</b> spread, so a spread pick of
+<code>away +4.5</code> marks against a market line of <code>-4.5</code>. Line move is
+(current line &minus; line at decision) in that same convention.</p>
 <a id="quarantined"></a>
 {qsec or "<p class='empty'>No quarantined bets.</p>"}
 """
@@ -1159,6 +1271,35 @@ render();
     _write(out_dir, "history.html", page("Trade History", body, "history.html"))
 
 
+def _table_search_js(input_id: str, table_id: str, count_id: str, noun: str) -> str:
+    """Client-side row filter for a static table.
+
+    Used by the pages whose content is a plain table rather than filterable
+    cards. Vanilla DOM only — GitHub Pages serves these as static files, so
+    nothing here may need a build step or a network call.
+    """
+    return f"""
+<script>
+(function(){{
+  const inp = document.getElementById('{input_id}');
+  const rows = [...document.querySelectorAll('#{table_id} tbody tr')];
+  const cnt = document.getElementById('{count_id}');
+  function apply() {{
+    const q = inp.value.trim().toLowerCase();
+    let n = 0;
+    rows.forEach(tr => {{
+      const ok = !q || tr.textContent.toLowerCase().includes(q);
+      tr.style.display = ok ? '' : 'none';
+      if (ok) n++;
+    }});
+    cnt.textContent = n + ' of ' + rows.length + ' {noun}';
+  }}
+  inp.addEventListener('input', apply);
+  apply();
+}})();
+</script>"""
+
+
 def sources_page(con, out_dir):
     rows = []
     for s in REGISTRY:
@@ -1186,8 +1327,11 @@ If a source stops working mid-pipeline: <code>(1)</code> the failure is logged i
 strategies get no signal in that run (no fallback to invented data); <code>(3)</code> the source-status row
 flips to <code>ok=0</code> and is surfaced on this page; <code>(4)</code> the audit pass raises an anomaly.
 The site does not depend on any single fragile endpoint.</p>
+<input id="srcq" type="search" placeholder="Search sources: name, id, data type, URL, notes…">
+<p id="srccount" class="muted"></p>
 {table(["Source", "URL", "Data", "Cost", "Registration", "Paid plan", "Rate limits", "Reliability",
-        "Last verified", "Latest run", "Verification notes"], rows)}
+        "Last verified", "Latest run", "Verification notes"], rows, id="srctable")}
+{_table_search_js("srcq", "srctable", "srccount", "sources")}
 <h2>Known unavailable data (documented, not assumed)</h2>
 <ul>
 <li><b>Historical sportsbook prices — found, with limits:</b> the SBR archive (2007-08..2022-23) is free and
@@ -1427,7 +1571,8 @@ def research_page(con, out_dir):
                [[_esc(a["detected_utc"]),
                  f"<span class='bad'>{_esc(a['severity'])}</span>" if a["severity"] == "critical"
                  else _esc(a["severity"]), _esc(a["check_name"]),
-                 f"<code class='small'>{_esc(a['detail_json'][:220])}</code>"] for a in anomalies])
+                 f"<code class='small'>{_esc(a['detail_json'][:220])}</code>"] for a in anomalies],
+               id="antable")
     body = f"""
 <h1>Research log</h1>
 <p class="muted">Every research question, what was searched, what was found, what was tested, and what was
@@ -1435,10 +1580,38 @@ decided — so research is auditable and never silently duplicated.</p>
 {research_scan_html()}
 {hist_backtest_html(con)}
 {line_backtest_html(con)}
+<h2>Research entries</h2>
+<input id="rq" type="search" placeholder="Search research: question, hypothesis, test, result, decision…">
+<p id="rcount" class="muted"></p>
 {items or "<p class='empty'>No research entries.</p>"}
 <h2>Anomaly register (latest 50)</h2>
 <p class="muted">Automated checks run on every pipeline pass. Flags are shown, never silently fixed.</p>
+<input id="aq" type="search" placeholder="Search anomalies: check name, severity, detail…">
+<p id="acount" class="muted"></p>
 {an}
+<script>
+(function(){{
+  function filterItems(inpId, cntId, sel, noun) {{
+    const inp = document.getElementById(inpId);
+    const nodes = [...document.querySelectorAll(sel)];
+    const cnt = document.getElementById(cntId);
+    function apply() {{
+      const q = inp.value.trim().toLowerCase();
+      let n = 0;
+      nodes.forEach(el => {{
+        const ok = !q || el.textContent.toLowerCase().includes(q);
+        el.style.display = ok ? '' : 'none';
+        if (ok) n++;
+      }});
+      cnt.textContent = n + ' of ' + nodes.length + ' ' + noun;
+    }}
+    inp.addEventListener('input', apply);
+    apply();
+  }}
+  filterItems('rq', 'rcount', '.research-item', 'research entries');
+  filterItems('aq', 'acount', '#antable tbody tr', 'anomalies');
+}})();
+</script>
 """
     _write(out_dir, "research.html", page("Research", body, "research.html"))
 
@@ -1611,7 +1784,9 @@ th { text-align:left; color:var(--muted); font-weight:600; padding:8px 10px; bor
      white-space:nowrap; background:var(--panel); position:sticky; top:0;}
 td { padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
 tr:last-child td { border-bottom:none; }
-.win,.pos { color:var(--good); font-weight:600; } .loss,.neg,.bad { color:var(--bad); font-weight:600; }
+.win,.pos,.ok { color:var(--good); font-weight:600; } .loss,.neg,.bad { color:var(--bad); font-weight:600; }
+.warnbadge { display:inline-block; background:#33291a; color:#e0a94a; border-radius:999px;
+             padding:1px 8px; font-size:11.5px; font-weight:600; }
 .push,.void { color:var(--muted); }
 .empty { color:var(--muted); background:var(--panel); border:1px dashed var(--line);
          padding:14px; border-radius:10px; }

@@ -94,22 +94,42 @@ def collect_sbr_season(con, season: str) -> dict:
             "ml_away": g["ml_away"], "ml_home": g["ml_home"],
             "source": "sbr", "source_url": g["source_url"],
             "source_row_hash": util.stable_hash(g),
+            "parser_version": sbr.SBR_PARSER_VERSION,
             "spread_printed_row": g.get("spread_printed_row"),
             "spread_sign_from_ml": g.get("spread_sign_from_ml"),
             "cross_checked": 0, "cross_check_detail": None,
             "captured_utc": now,
         }
         prev = con.execute(
-            "SELECT source_row_hash FROM hist_odds WHERE season=? AND game_date_et=? "
-            "AND away=? AND home=?", (row["season"], row["game_date_et"],
-                                      row["away"], row["home"])).fetchone()
+            "SELECT source_row_hash, parser_version FROM hist_odds WHERE season=? "
+            "AND game_date_et=? AND away=? AND home=?",
+            (row["season"], row["game_date_et"], row["away"], row["home"])).fetchone()
         if prev and prev["source_row_hash"] != row["source_row_hash"]:
-            db.log_anomaly(con, "warn", "sbr-row-changed",
-                           {"season": season, "game": f"{row['away']}@{row['home']} "
-                            f"{row['game_date_et']}",
-                            "detail": "the archive's values differ from the row we "
-                                      "already stored; the new row replaces it and the "
-                                      "change is recorded here"})
+            # Two very different things can change a row's hash, and conflating
+            # them is what produced 1,277 false "the archive's values differ"
+            # warnings on 2026-09-21T23:27Z when the parser went v1->v2:
+            #   * a different parser version  -> WE re-derived the row
+            #   * the same parser version    -> THE ARCHIVE edited it
+            # Only the second is the event this check exists to catch.
+            if prev["parser_version"] != row["parser_version"]:
+                db.log_anomaly(con, "info", "sbr-row-reparsed",
+                               {"season": season,
+                                "game": f"{row['away']}@{row['home']} {row['game_date_et']}",
+                                "from_parser": prev["parser_version"],
+                                "to_parser": row["parser_version"],
+                                "detail": "the parser version changed, so this row "
+                                          "was re-derived by our own code; the "
+                                          "archive is not known to have edited it"})
+            else:
+                db.log_anomaly(con, "warn", "sbr-row-changed",
+                               {"season": season,
+                                "game": f"{row['away']}@{row['home']} {row['game_date_et']}",
+                                "parser_version": row["parser_version"],
+                                "detail": "the archive's values differ from the row "
+                                          "we already stored, under the SAME parser "
+                                          "version, so this is an edit at the source; "
+                                          "the new row replaces it and the change is "
+                                          "recorded here"})
         db.insert(con, "hist_odds", row, replace=True)
         stored += 1
     db.log_collection(con, f"sbr-{season}", "sbr",
@@ -128,6 +148,53 @@ def collect_sbr_season(con, season: str) -> dict:
             "status": r.status}
 
 
+def reclassify_sbr_parser_warnings(con) -> dict:
+    """Correct the record for `sbr-row-changed` rows that were never source edits.
+
+    On 2026-09-21T23:27Z the SBR parser went v1 -> v2 and started emitting two
+    extra fields. Because ``source_row_hash`` hashes the whole parsed row, every
+    re-collected row's hash changed at once and the run logged **1,277**
+    warnings whose text asserts "the archive's values differ from the row we
+    already stored". The archive had not been edited; our code had changed what
+    it emits.
+
+    ``anomalies`` is append-only, so those rows stay exactly as written — this
+    function never deletes or edits them. It appends one correction record and
+    stamps a meta key so it can only ever run once.
+    """
+    if con.execute("SELECT 1 FROM meta WHERE key='sbr_row_changed_reclassified'").fetchone():
+        return {"reclassified": 0, "status": "already-done"}
+    # The parser-version column did not exist before this fix, so a stored row
+    # with parser_version IS NULL is by definition a pre-v2 row.
+    pre = con.execute("SELECT COUNT(*) c FROM hist_odds WHERE parser_version IS NULL").fetchone()["c"]
+    n = con.execute("SELECT COUNT(*) c FROM anomalies WHERE check_name='sbr-row-changed'"
+                    ).fetchone()["c"]
+    runs = [r[0] for r in con.execute(
+        "SELECT DISTINCT detected_utc FROM anomalies WHERE check_name='sbr-row-changed' "
+        "ORDER BY detected_utc")]
+    db.log_anomaly(con, "info", "sbr-row-changed-reclassified", {
+        "n_records": n,
+        "detected_utc_values": runs,
+        "hist_odds_rows_without_parser_version": pre,
+        "detail": ("every `sbr-row-changed` row recorded before the parser_version "
+                   "column existed was produced by the 2026-09-21 parser v1->v2 "
+                   "upgrade changing our own output shape, not by the archive "
+                   "editing a value. They are left in place (the log is "
+                   "append-only) but must not be read as source edits; from the "
+                   "next collection onward a hash change under an unchanged parser "
+                   "version is what raises `sbr-row-changed`, and a hash change "
+                   "across parser versions raises `sbr-row-reparsed` instead."),
+    })
+    db.insert(con, "meta", {"key": "sbr_row_changed_reclassified",
+                            "value": json.dumps({"n_records": n, "runs": runs,
+                                                 "at_utc": util.utcnow_iso()}),
+                            "updated_utc": util.utcnow_iso()}, replace=True)
+    db.log_audit(con, "collect", "reclassify", "anomalies:sbr-row-changed",
+                 {"n_records": n, "reason": "parser-upgrade artifacts misattributed "
+                                            "to the archive"})
+    return {"reclassified": n, "status": "recorded", "runs": runs}
+
+
 def collect_sbr_odds(con, seasons: list[str]) -> dict:
     out = {}
     for season in seasons:
@@ -136,6 +203,7 @@ def collect_sbr_odds(con, seasons: list[str]) -> dict:
         except Exception as e:  # a source defect must not kill the pipeline
             db.log_collection(con, f"sbr-{season}", "sbr", "crash", f"{e!r}")
             out[season] = {"season": season, "stored": 0, "error": repr(e)}
+    out["_reclassified"] = reclassify_sbr_parser_warnings(con)
     return out
 
 
