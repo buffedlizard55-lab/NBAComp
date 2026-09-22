@@ -51,3 +51,15 @@ anomaly tail:
   2026-09-22T17:06:13Z info collector-crash-resolved {"tasks": ["sbr-2013-14", "sbr-2014-15", "sbr-2015-16", "sbr-2016-17", "sbr-2017-18", "sbr-2018-19", "sbr-2019-20", "sbr-2020-21", "sbr-2021
   2026-09-22T17:06:13Z info signal-gated-by-validation {"strategy": "NBA-026", "game": "espn:401909282", "reason": "tier=failed (covered 49.31% of 1888 firings at the archive's own closing lines,
   2026-09-22T17:06:13Z info signal-gated-by-validation {"strategy": "NBA-026", "game": "espn:401909280", "reason": "tier=failed (covered 49.31% of 1888 firings at the archive's own closing lines,
+
+probe7 2026-09-22T18:23:48Z
+  espn 20260115: http=200 events=9 state=post events_with_odds=0
+  espn 20260613: http=200 events=1 state=post events_with_odds=0
+  espn 20250115: http=200 events=11 state=post events_with_odds=0
+  espn 20241022: http=200 events=2 state=post events_with_odds=0
+  bref october-2024 page: http=200 bytes=253707
+  bref data-stat names: ['arena_name', 'attendance', 'box_score_text', 'date_game', 'game_duration', 'game_remarks', 'game_start_time', 'home_pts', 'home_team_name', 'overtimes', 'visitor_pts', 'visitor_team_name']
+  bref boxscore links: 142 first=[('20241022', 'BOS'), ('20241022', 'LAL'), ('20241023', 'DET')]
+  bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
+  espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
+probe7 done
