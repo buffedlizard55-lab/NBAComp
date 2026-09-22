@@ -870,6 +870,84 @@ def eval_momentum(ctx):
         tipoff_utc=ctx["game"]["tipoff_utc"])]
 
 
+def eval_longshot(ctx):
+    """NBA-025: fade a side whose implied win probability is <= 1/3."""
+    price = _px(ctx)
+    if price is None:
+        return []
+    mkt_home = price.price_cents / 100.0
+    mkt_away = 1.0 - mkt_home
+    if mkt_home <= 1.0 / 3.0:
+        side, prob, mkt = "away", 1.0 - mkt_home, mkt_away
+        why = f"home longshot ask {price.price_cents:.0f}c; fade to away"
+    elif mkt_away <= 1.0 / 3.0:
+        side, prob, mkt = "home", mkt_home, mkt_home
+        why = f"away longshot (home ask {price.price_cents:.0f}c); fade to home"
+    else:
+        return []
+    return [_sig(ctx, "NBA-025", side, prob, mkt, price, why)]
+
+
+def eval_spread(ctx):
+    """NBA-026: Elo margin vs captured home spread (forward; needs a line)."""
+    line = ctx.get("spread_line")
+    if line is None:
+        return []
+    try:
+        line = float(line)
+    except (TypeError, ValueError):
+        return []
+    margin = ctx["elo"].margin(ctx["home"], ctx["away"])
+    cover = margin + line  # positive => home expected to cover
+    if abs(cover) < 3.5:
+        return []
+    side = "home" if cover > 0 else "away"
+    p = util.norm_cdf(abs(cover) / 12.0)  # 12pt SD of NBA margins (documented prior)
+    if p - 0.524 < 0.02:
+        return []
+    # settle_score_based expects 'home -4.5' / 'away +4.5'
+    sel = f"home {line:+g}" if side == "home" else f"away {-line:+g}"
+    return [S.Signal(
+        strategy_id="NBA-026", game_id=ctx["game"]["game_id"], market="spread",
+        selection=sel, side=side, price=-110, price_format="american",
+        source="espn:spread", model_prob=p, market_prob=0.524,
+        trigger=f"elo margin {margin:+.1f} vs home spread {line:+g} (cover {cover:+.1f})",
+        game_label=f"{ctx['away']} @ {ctx['home']} {ctx['game']['game_date_et']}",
+        tipoff_utc=ctx["game"]["tipoff_utc"], strike=line)]
+
+
+def eval_team_total(ctx):
+    """NBA-027: implied home team total from (total − home_spread)/2."""
+    tot = ctx.get("total_line")
+    spr = ctx.get("spread_line")
+    if tot is None or spr is None:
+        return []
+    try:
+        tot, spr = float(tot), float(spr)
+    except (TypeError, ValueError):
+        return []
+    implied = (tot - spr) / 2.0
+    roll = ctx.get("h_roll") or {}
+    pts = roll.get("pts")
+    if pts is None:
+        return []
+    diff = float(pts) - implied
+    if abs(diff) < 6.0:
+        return []
+    side = "over" if diff > 0 else "under"
+    p = util.norm_cdf(abs(diff) / 10.0)
+    if p - 0.524 < 0.02:
+        return []
+    return [S.Signal(
+        strategy_id="NBA-027", game_id=ctx["game"]["game_id"], market="team_total",
+        selection=f"home {side} {implied:.1f}", side=side, price=-110,
+        price_format="american", source="implied:total-spread",
+        model_prob=p, market_prob=0.524,
+        trigger=f"rolling home pts {pts:.1f} vs implied TT {implied:.1f} ({diff:+.1f})",
+        game_label=f"{ctx['away']} @ {ctx['home']} {ctx['game']['game_date_et']}",
+        tipoff_utc=ctx["game"]["tipoff_utc"], strike=implied)]
+
+
 EVALUATORS = {
     "NBA-001": eval_rest,
     "NBA-002": eval_pace_total,
@@ -885,6 +963,9 @@ EVALUATORS = {
     "NBA-022": eval_rest_total,
     "NBA-023": eval_playoff_grind,
     "NBA-024": eval_momentum,
+    "NBA-025": eval_longshot,
+    "NBA-026": eval_spread,
+    "NBA-027": eval_team_total,
 }
 # NBA-013 (1H markets) is forward-only: no historical 1H price series exists
 # (KXNBA1H candles accumulate from first listing forward), so it has no

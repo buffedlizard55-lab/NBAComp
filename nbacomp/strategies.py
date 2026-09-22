@@ -647,6 +647,84 @@ register("NBA-023", version="1.0.0", name="Playoff Grind", username="PlayoffGrin
          lookahead_controls=["rolling state excludes the current game and any other season",
                              "line and price observed at or before the decision timestamp"])
 
+register("NBA-025", version="1.0.0", name="Longshot Fade", username="LongshotLarry",
+         category="Academic anomaly / Favorite-longshot bias",
+         thesis=("The favorite-longshot bias documented in betting markets "
+                 "(favorites underbet, longshots overbet) appears in NBA moneylines; "
+                 "fading sides priced +200 or longer captures that bias."),
+         description=("When the observed moneyline (SBR archive historically, Kalshi "
+                      "winner ask forward) implies the side is a longshot at +200 or "
+                      "longer (implied p <= 1/3), bet the OTHER side at the archive's "
+                      "own price. This is an academic-anomaly test, not a model-edge "
+                      "claim: model_prob is the market probability of the favorite, "
+                      "and the hypothesis is that the favorite still wins often enough "
+                      "to overcome the vig. Priced on real SBR moneylines in hist_backtest."),
+         market_types=["kalshi:winner", "ml"],
+         data_sources=["sbr:nba-odds", "kalshi:markets"],
+         entry_rules=["one side's implied win probability <= 1/3 (American +200 or longer)",
+                      "bet the favorite at the observed price"],
+         exit_rules=["settle at game conclusion from verified score / Kalshi result"],
+         sizing_rules="Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll",
+         historical_window="SBR archive moneylines 2013-14..2022-23 (Oct-Dec)",
+         expected_edge="academic prior (FLB); no assumed NBA-specific edge",
+         failure_modes=["NBA moneylines may already be efficient vs horse-racing FLB",
+                        "vig on heavy favorites can erase the bias",
+                        "small sample of +200 dogs"],
+         data_limitations=["forward Kalshi prices are 1-99 cents so a true +200 dog is rare; "
+                           "the priced test is the SBR archive"],
+         lookahead_controls=["price is the pre-game archive/ask; result unused until settlement"])
+
+register("NBA-026", version="1.0.0", name="Spread Sage", username="SpreadSageSam",
+         category="Spreads / Against the spread",
+         thesis=("Elo expected margin disagrees with the captured closing spread by "
+                 "enough points that covering is more likely than the vig-implied 52.4%."),
+         description=("FORWARD-ONLY. When an ESPN or Kalshi spread line is captured "
+                      "before tipoff, convert Elo margin to expected cover vs that "
+                      "line. Bet ATS when |Elo margin + home_spread| >= 3.5 points. "
+                      "No free per-side historical spread PRICE exists (SBR prints "
+                      "the line but not -110/-110), so this rule is never given a "
+                      "fabricated historical P&L: it paper-trades at observed ESPN "
+                      "spread odds when present, else -110 labelled PRICED-ASSUMPTION."),
+         market_types=["spread", "kalshi:spread"],
+         data_sources=["espn:scoreboard", "kalshi:markets"],
+         entry_rules=["observed spread line exists at decision",
+                      "|elo_margin + home_spread| >= 3.5"],
+         exit_rules=["settle on verified final margin vs the frozen spread"],
+         sizing_rules="Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll",
+         historical_window="forward-only (no free historical ATS prices)",
+         expected_edge="no assumed edge; hypothesis under test",
+         failure_modes=["spreads are the sharpest NBA market", "Elo lags roster news"],
+         data_limitations=["SBR archive has spread LINES but not per-side prices; "
+                           "ATS P&L is never invented for history"],
+         lookahead_controls=["line captured at or before decision; Elo from prior games only"])
+
+register("NBA-027", version="1.0.0", name="Team Total Tess", username="TeamTotalTess",
+         category="Team totals",
+         thesis=("A team's rolling scoring rate plus opponent rolling points-allowed "
+                 "disagrees with the implied team total constructed from "
+                 "(game total − home spread) / 2, a no-arbitrage identity."),
+         description=("FORWARD-ONLY. Implied home team total = (total_line − home_spread) / 2 "
+                      "when BOTH lines are observed (never guessed). Bet the home score "
+                      "OVER/UNDER that implied team total when rolling home pts vs "
+                      "rolling away pts-allowed differs from the implied line by >= 6. "
+                      "This is a team-total market proxy: Kalshi team-total series were "
+                      "not confirmed as of 2026-09-22 (UNVERIFIED/UNAVAILABLE). "
+                      "Settlement is the verified home score vs the frozen implied line. "
+                      "Priced at observed ESPN team-total odds if captured, else -110 labelled."),
+         market_types=["team_total"],
+         data_sources=["espn:scoreboard"],
+         entry_rules=["both total and spread lines observed at decision",
+                      "|rolling_home_pts - implied_home_tt| >= 6"],
+         exit_rules=["settle verified home_score vs frozen implied team total"],
+         sizing_rules="Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll",
+         historical_window="forward-only",
+         expected_edge="no assumed edge; identity is exact, mispricing is the hypothesis",
+         failure_modes=["implied TT already equals the market team total",
+                        "garbage time inflates home scoring"],
+         data_limitations=["no confirmed free Kalshi team-total series; public betting % "
+                           "UNVERIFIED/UNAVAILABLE (no keyless source found)"],
+         lookahead_controls=["both lines observed at decision; rolling windows exclude current game"])
+
 register("NBA-024", version="1.0.0", name="Momentum Witness", username="MomentumWitness",
          category="Streaks (counter-hypothesis to NBA-021)",
          thesis=("Streak information is NOT fully faded: teams on a 4+ game winning streak "
@@ -704,6 +782,9 @@ HYPOTHESES: dict[str, str] = {
     "NBA-022": "H: mixing a rested team with a back-to-back team raises the total because the tired team's defense drops more than its offense. Refuted by: the measured rest-asymmetry total difference being inside noise (ours: +1.82 pts, t=1.38) or model MAE worse than baseline (MAE 18.06 vs 16.69) -> parked.",
     "NBA-023": "H: postseason games are lower-scoring than regular-season games by more than the market's postseason adjustment. Refuted by: the measured postseason shift being inside noise (ours: -9.40 pts on 469 games) or the under-side hit rate at or below 50% in forward play.",
     "NBA-024": "H: teams on a 4+ game winning streak keep winning at a higher rate than the market's price implies (streaks are not fully faded). Refuted by: hit rate at or below the base rate (ours: 64.5% vs 50.1% on 1,531 firings, +14.4%) or negative forward P&L.",
+    "NBA-025": "H: NBA moneylines exhibit favorite-longshot bias — sides priced +200 or longer are overbet. Refuted by: fading those longshots losing money at the archive's own prices.",
+    "NBA-026": "H: Elo expected margin disagrees with the captured spread by >= 3.5 points often enough to cover after -110. Refuted by: ATS hit rate <= 52.4% in forward play.",
+    "NBA-027": "H: implied team totals from (total - spread)/2 disagree with rolling scoring rates. Refuted by: team-total hit rate <= 52.4% in forward play. Public betting % and coaching effects remain UNVERIFIED/UNAVAILABLE.",
 }
 
 

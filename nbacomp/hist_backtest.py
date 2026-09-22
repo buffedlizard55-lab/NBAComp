@@ -160,6 +160,15 @@ def _rules(state: _State, g: dict) -> list[dict]:
                             "prob": p_home if side == "home" else 1 - p_home,
                             "why": f"{team} own-venue margin {own:+.1f} vs road {road:+.1f}"})
 
+    # NBA-025 favorite-longshot: fade a side priced +200 or longer.
+    ml_h, ml_a = g.get("ml_home"), g.get("ml_away")
+    if ml_a is not None and ml_a >= 200:
+        out.append({"sid": "NBA-025", "side": "home", "prob": p_home,
+                    "why": f"fade away longshot ML {ml_a}"})
+    if ml_h is not None and ml_h >= 200:
+        out.append({"sid": "NBA-025", "side": "away", "prob": 1 - p_home,
+                    "why": f"fade home longshot ML {ml_h}"})
+
     # NBA-007 road-trip finale: a team closing a 5+ game road trip.
     if state.road_trip.get(away, 0) >= 4:
         out.append({"sid": "NBA-007", "side": "home", "prob": p_home,

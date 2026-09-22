@@ -696,6 +696,50 @@
    "avg_edge": 0.0523,
    "avg_price": 322.9
   },
+  "NBA-025": {
+   "bets": 4,
+   "wins": 2,
+   "win_rate": 0.5,
+   "pnl": -13.07,
+   "staked": 40.0,
+   "roi": -0.3267,
+   "max_dd": 13.07,
+   "avg_edge": 0.0457,
+   "avg_price": 275.0
+  },
+  "NBA-025|2015-16": {
+   "bets": 1,
+   "wins": 0,
+   "win_rate": 0.0,
+   "pnl": -10.0,
+   "staked": 10.0,
+   "roi": -1.0,
+   "max_dd": 10.0,
+   "avg_edge": 0.0459,
+   "avg_price": 240.0
+  },
+  "NBA-025|2019-20": {
+   "bets": 2,
+   "wins": 2,
+   "win_rate": 1.0,
+   "pnl": 6.93,
+   "staked": 20.0,
+   "roi": 0.3465,
+   "max_dd": 0.0,
+   "avg_edge": 0.0496,
+   "avg_price": 290.0
+  },
+  "NBA-025|2021-22": {
+   "bets": 1,
+   "wins": 0,
+   "win_rate": 0.0,
+   "pnl": -10.0,
+   "staked": 10.0,
+   "roi": -1.0,
+   "max_dd": 10.0,
+   "avg_edge": 0.0377,
+   "avg_price": 280.0
+  },
   "MARKET|all": {
    "bets": 4043,
    "wins": 2357,

@@ -300,6 +300,10 @@ def generate_forward_bets(con) -> int:
         for sig in _total_signals(con, ctx):
             n += _place_total_bet(con, ctx, sig, ctx.get("total"))
 
+        # ---- spread / implied team-total (NBA-026 / NBA-027) ----
+        for sig in _line_signals(con, ctx):
+            n += _place_total_bet(con, ctx, sig, None)
+
         # ---- prop-market signals (NBA-008/009/014) ----
         for sig in _prop_signals(con, ctx, props_by_game.get(g["game_id"], [])):
             n += _place_prop_bet(con, ctx, sig)
@@ -316,7 +320,7 @@ def _winner_signals(con, ctx, live: engine.PricePoint) -> list[S.Signal]:
     # Run the same evaluators used by the backtest so rules are symmetric.
     # Evaluators return winner-market Signals only.
     for sid in ("NBA-001", "NBA-003", "NBA-004", "NBA-005", "NBA-006",
-                "NBA-007", "NBA-020", "NBA-021", "NBA-024"):
+                "NBA-007", "NBA-020", "NBA-021", "NBA-024", "NBA-025"):
         try:
             fn = EVALUATORS.get(sid)
             if not fn:
@@ -369,6 +373,20 @@ def _winner_signals(con, ctx, live: engine.PricePoint) -> list[S.Signal]:
         seen.add(key)
         out.append(sig)
     return out
+
+
+def _line_signals(con, ctx) -> list[S.Signal]:
+    """NBA-026 (ATS) and NBA-027 (implied team total). Require observed lines."""
+    from .backtest import eval_spread, eval_team_total
+    out: list[S.Signal] = []
+    try:
+        out.extend(eval_spread(ctx) or [])
+        out.extend(eval_team_total(ctx) or [])
+    except Exception as e:
+        db.log_anomaly(con, "warn", "paper-eval-error",
+                       {"strategy": "NBA-026/027", "err": str(e)[:200],
+                        "game": ctx["game"]["game_id"]})
+    return _dedup_per_strategy(out)
 
 
 def _total_signals(con, ctx) -> list[S.Signal]:
@@ -972,7 +990,7 @@ def settle_finished(con) -> int:
         result, src = _settle_one(con, b, by_game, markets_by_ticker, g, stale)
         if result not in ("win", "loss", "push", "void"):
             continue  # not resolvable yet (box score / quarter data pending)
-        if b["market"] == "total":
+        if b["market"] in ("total", "spread", "team_total"):
             # settle at the price frozen on the bet row (an observed ESPN
             # over/under price where one was captured, else -110)
             pnl = engine.american_pnl(b["stake_usd"], b["price"] or -110, result)
@@ -1052,6 +1070,22 @@ def _settle_one(con, b: dict, by_game: dict, markets_by_ticker: dict, g: dict,
         r = engine.settle_score_based("total", g["home_score"], g["away_score"],
                                       b["selection"], line)
         return r, "verified final score vs decision-time line"
+    if b["market"] == "spread":
+        r = engine.settle_score_based("spread", g["home_score"], g["away_score"],
+                                      b["selection"], b.get("strike"))
+        return r, "verified final margin vs decision-time spread"
+    if b["market"] == "team_total":
+        line = b.get("strike")
+        if line is None:
+            line = _strike_from_selection(b["selection"])
+        hs = g["home_score"]
+        if line is None or hs is None:
+            return ("void", "void: team-total line missing") if stale else ("pending", "no line")
+        if hs == line:
+            return "push", "verified home score vs implied team total"
+        over = hs > line
+        won = (b["side"] == "over") == over
+        return ("win" if won else "loss"), "verified home score vs implied team total"
     if b["market"] == "kalshi:winner":
         info = by_game.get(g["game_id"])
         if info:

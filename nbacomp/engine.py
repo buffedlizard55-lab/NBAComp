@@ -412,6 +412,7 @@ MARKET_SIDES: dict[str, tuple[str, ...]] = {
     "kalshi:spread": ("home", "away"),
     "total": ("over", "under"),
     "kalshi:total": ("over", "under"),
+    "team_total": ("over", "under"),
     "1h": ("home", "away", "yes", "no"),
     "kalshi:1h": ("yes", "no", "home", "away"),
     "kalshi:1h_winner": ("yes", "no"),
