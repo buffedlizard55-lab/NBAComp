@@ -71,6 +71,18 @@ publishes the entire pipeline as a static GitHub Pages site.
 > offseason), no box scores (cursor `20241028`), and **no bets of any kind** — so still
 > **0 backtested strategies, 0 forward-tested strategies, $0 P&L**.
 
+## Strategies discovered (27 registered; most v1.0.0, five revised)
+
+Pass 3 (2026-09-22) added three families the original spec named that were not yet executable:
+
+| ID | Username | Category | Win condition |
+|----|----------|----------|--------------|
+| NBA-025 | LongshotLarry | Academic FLB | Fade moneylines +200 or longer at the archive's own price |
+| NBA-026 | SpreadSageSam | Spreads / ATS | Elo margin vs captured spread ≥ 3.5 pts (forward-only; no free ATS prices) |
+| NBA-027 | TeamTotalTess | Team totals | Rolling home pts vs implied TT (total−spread)/2 (forward-only) |
+
+Public betting percentages and coaching-assignment feeds remain **UNVERIFIED/UNAVAILABLE** (registry entries `unavailable:public-betting-pct`, `unavailable:coaching-effects`); no strategy was faked on those inputs. Live/in-game trading stays out of scope (1h pre-tip guard).
+
 ## Strategies discovered (24 registered; most v1.0.0, five revised)
 
 | ID | Username | Category | Win condition |

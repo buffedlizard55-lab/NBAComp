@@ -537,6 +537,75 @@
 <details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation for this market (no free historical per-side prices for totals/spreads, no free prop or injury archives), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
 <details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
 </div>
+<div class="strategy-card" id="NBA-025">
+<h2>Longshot Fade <span class="mono">NBA-025 v1.0.0</span>
+<span class="pill">Academic anomaly / Favorite-longshot bias</span>
+<span class="pill status">awaiting-opportunity</span></h2>
+<p class="username">plays as <b>@LongshotLarry</b></p>
+<p><b>Thesis.</b> The favorite-longshot bias documented in betting markets (favorites underbet, longshots overbet) appears in NBA moneylines; fading sides priced +200 or longer captures that bias.</p>
+<p><b>Rules.</b> When the observed moneyline (SBR archive historically, Kalshi winner ask forward) implies the side is a longshot at +200 or longer (implied p &lt;= 1/3), bet the OTHER side at the archive's own price. This is an academic-anomaly test, not a model-edge claim: model_prob is the market probability of the favorite, and the hypothesis is that the favorite still wins often enough to overcome the vig. Priced on real SBR moneylines in hist_backtest.</p>
+<ul class="rules"><li>one side's implied win probability &lt;= 1/3 (American +200 or longer)</li><li>bet the favorite at the observed price</li></ul>
+<p><b>Markets.</b> <code>kalshi:winner</code> <code>ml</code>  <br><b>Data sources.</b> <code>sbr:nba-odds</code> <code>kalshi:markets</code> </p>
+<p><b>Sizing.</b> Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll · <b>Expected edge.</b> academic prior (FLB); no assumed NBA-specific edge</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<p class='muted small'>No prior versions.</p>
+<p><b>Look-ahead controls.</b> ['price is the pre-game archive/ask; result unused until settlement']</p>
+<details><summary>Failure modes</summary><ul><li>NBA moneylines may already be efficient vs horse-racing FLB</li><li>vig on heavy favorites can erase the bias</li><li>small sample of +200 dogs</li></ul></details>
+<details><summary>Data limitations</summary><ul><li>forward Kalshi prices are 1-99 cents so a true +200 dog is rare; the priced test is the SBR archive</li></ul></details>
+<div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
+<div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+<div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
+<details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
+<details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation for this market (no free historical per-side prices for totals/spreads, no free prop or injury archives), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
+<details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
+</div>
+<div class="strategy-card" id="NBA-026">
+<h2>Spread Sage <span class="mono">NBA-026 v1.0.0</span>
+<span class="pill">Spreads / Against the spread</span>
+<span class="pill status">awaiting-opportunity</span></h2>
+<p class="username">plays as <b>@SpreadSageSam</b></p>
+<p><b>Thesis.</b> Elo expected margin disagrees with the captured closing spread by enough points that covering is more likely than the vig-implied 52.4%.</p>
+<p><b>Rules.</b> FORWARD-ONLY. When an ESPN or Kalshi spread line is captured before tipoff, convert Elo margin to expected cover vs that line. Bet ATS when |Elo margin + home_spread| &gt;= 3.5 points. No free per-side historical spread PRICE exists (SBR prints the line but not -110/-110), so this rule is never given a fabricated historical P&amp;L: it paper-trades at observed ESPN spread odds when present, else -110 labelled PRICED-ASSUMPTION.</p>
+<ul class="rules"><li>observed spread line exists at decision</li><li>|elo_margin + home_spread| &gt;= 3.5</li></ul>
+<p><b>Markets.</b> <code>spread</code> <code>kalshi:spread</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> <code>kalshi:markets</code> </p>
+<p><b>Sizing.</b> Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll · <b>Expected edge.</b> no assumed edge; hypothesis under test</p>
+<p><b>Verification status.</b> <span class='pill tier-forward_only'>forward only</span> no outcome-only evaluation exists for this rule. <span class='muted'>no historical evidence obtainable from free sources; forward experiment</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<p class='muted small'>No prior versions.</p>
+<p><b>Look-ahead controls.</b> ['line captured at or before decision; Elo from prior games only']</p>
+<details><summary>Failure modes</summary><ul><li>spreads are the sharpest NBA market</li><li>Elo lags roster news</li></ul></details>
+<details><summary>Data limitations</summary><ul><li>SBR archive has spread LINES but not per-side prices; ATS P&amp;L is never invented for history</li></ul></details>
+<div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
+<div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+<div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
+<details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
+<details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation for this market (no free historical per-side prices for totals/spreads, no free prop or injury archives), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
+<details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
+</div>
+<div class="strategy-card" id="NBA-027">
+<h2>Team Total Tess <span class="mono">NBA-027 v1.0.0</span>
+<span class="pill">Team totals</span>
+<span class="pill status">awaiting-opportunity</span></h2>
+<p class="username">plays as <b>@TeamTotalTess</b></p>
+<p><b>Thesis.</b> A team's rolling scoring rate plus opponent rolling points-allowed disagrees with the implied team total constructed from (game total − home spread) / 2, a no-arbitrage identity.</p>
+<p><b>Rules.</b> FORWARD-ONLY. Implied home team total = (total_line − home_spread) / 2 when BOTH lines are observed (never guessed). Bet the home score OVER/UNDER that implied team total when rolling home pts vs rolling away pts-allowed differs from the implied line by &gt;= 6. This is a team-total market proxy: Kalshi team-total series were not confirmed as of 2026-09-22 (UNVERIFIED/UNAVAILABLE). Settlement is the verified home score vs the frozen implied line. Priced at observed ESPN team-total odds if captured, else -110 labelled.</p>
+<ul class="rules"><li>both total and spread lines observed at decision</li><li>|rolling_home_pts - implied_home_tt| &gt;= 6</li></ul>
+<p><b>Markets.</b> <code>team_total</code>  <br><b>Data sources.</b> <code>espn:scoreboard</code> </p>
+<p><b>Sizing.</b> Fractional Kelly (25%) x tier stake scale, capped at 3% of bankroll · <b>Expected edge.</b> no assumed edge; identity is exact, mispricing is the hypothesis</p>
+<p><b>Verification status.</b> <span class='pill tier-weak'>weak</span> no rule firings recorded. <span class='muted'>evidence present but inconclusive (small sample or inside the noise band)</span></p><p class='muted small'>Policy from this tier: bets allowed · probability shrunk 60% toward the market · max credible edge 6% · stake scale 0.25x</p>
+<p class='muted small'>No prior versions.</p>
+<p><b>Look-ahead controls.</b> ['both lines observed at decision; rolling windows exclude current game']</p>
+<details><summary>Failure modes</summary><ul><li>implied TT already equals the market team total</li><li>garbage time inflates home scoring</li></ul></details>
+<details><summary>Data limitations</summary><ul><li>no confirmed free Kalshi team-total series; public betting % UNVERIFIED/UNAVAILABLE (no keyless source found)</li></ul></details>
+<div class='perf'><b>Backtest (historical simulation)</b>: no backtest bets yet.</div>
+<div class='perf'><b>Signal validation</b>: no signal-validation rows yet (runs on every pipeline pass once box scores exist).</div>
+<div class='perf'><b>Forward (live paper competition)</b>: no forward bets yet.</div>
+
+<details><summary>Forward breakdowns (market / team / month)</summary><p class='empty'>No forward bets yet.</p></details>
+<details><summary>Why it works / fails (auto-analysis, sample-size aware)</summary><p><b>No backtest observations.</b> This is an explicit data limitation for this market (no free historical per-side prices for totals/spreads, no free prop or injury archives), not evidence either way.</p><p><b>Forward:</b> awaiting the 2026-27 season and first verifiable prices.</p></details>
+<details open><summary>Recent bets (all kinds)</summary><p class='empty'>No rows yet — data pending collection.</p></details>
+</div>
 <div class="strategy-card" id="NBA-024">
 <h2>Momentum Witness <span class="mono">NBA-024 v1.0.0</span>
 <span class="pill">Streaks (counter-hypothesis to NBA-021)</span>
