@@ -1306,6 +1306,55 @@ decided — so research is auditable and never silently duplicated.</p>
     _write(out_dir, "research.html", page("Research", body, "research.html"))
 
 
+def live_verify_html(out_dir: str = ".") -> str:
+    """Deployed-site verification block, from data/live_verify.json (real evidence).
+
+    The acceptance criterion is "verify the GitHub deployment and the live site",
+    so the site reports what that check actually observed -- or says plainly that
+    it has not run yet -- instead of asserting that deployment works.
+    """
+    cand = os.path.join(out_dir or ".", "data", "live_verify.json")
+    path = cand if os.path.exists(cand) else os.path.join("data", "live_verify.json")
+    if not os.path.exists(path):
+        return ("<h2>Deployment verification</h2><p class=\"muted\">No deployed-site "
+                "verification recorded yet. Each collection run ends with an independent "
+                "check (<span class='mono'>tools/verify_deployed.py</span>) that fetches every "
+                "published page and requires it to be byte-identical to the committed file; "
+                "its output is committed as <span class='mono'>data/live_verify.json</span>.</p>")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rep = json.load(fh)
+    except Exception as e:  # corrupt artifact must not crash the build
+        return ("<h2>Deployment verification</h2><p class=\"bad\">Could not read "
+                f"data/live_verify.json ({_esc(e)}).</p>")
+    ok = rep.get("verdict") == "ok"
+    cls = "ok" if ok else "bad"
+    rows = [[_esc(r["path"]), r["http_status"], f"{r['live_bytes']:,}",
+             _esc(r["live_sha256"][:12]), f"<span class='{ 'ok' if r['verdict']=='OK' else 'bad'}'>"
+             f"{_esc(r['verdict'])}</span>"] for r in rep.get("pages", [])]
+    build = rep.get("pages_build") or {}
+    note = ""
+    if build.get("matched") is False:
+        note = (f"<p class='muted small'>The Pages build reported commit "
+                f"<span class='mono'>{_esc((build.get('commit') or '?')[:8])}</span> "
+                f"status <span class='mono'>{_esc(build.get('status') or 'unknown')}</span> "
+                f"({_esc(build.get('note') or '')}); byte comparison above is authoritative.</p>")
+    return f"""
+<h2>Deployment verification</h2>
+<p>Last independent live check: <b class="{cls}">{_esc(rep.get('verdict','unknown')).upper()}</b> —
+{rep.get('pages_ok', 0)}/{rep.get('pages_checked', 0)} published files fetched from
+<a href="{_esc(rep.get('base_url',''))}" rel="noopener">{_esc(rep.get('base_url',''))}</a>
+were <b>byte-identical</b> to the files committed at
+<span class="mono">{_esc((rep.get('commit') or '?')[:12])}</span>
+(checked {_esc(rep.get('generated_utc','?'))}, Pages build status
+<span class="mono">{_esc((build.get('status') or 'unknown'))}</span>). Nothing here is asserted: the
+comparison is the committed SHA-256 of each fetched response against the committed blob, and the
+result is stored in <span class="mono">data/live_verify.json</span>.</p>
+{note}
+{table(["File", "HTTP", "Live bytes", "Live sha256", "Verdict"], rows)}
+"""
+
+
 def methodology(out_dir):
     body = """
 <h1>Methodology</h1>
@@ -1325,6 +1374,17 @@ closing prices, and game results are never used at decision time.</li>
 absorbed into the model only after its bets are placed. Settlement uses Kalshi's own recorded result when
 available, cross-checked against the cross-verified final score; disagreements raise anomalies instead of
 silent choices.</p>
+<p><b>Two tracks, never mixed.</b> (1) <i>Signal replay</i>: the decision rule is scored against verified
+final results, strictly prior data only. This measures whether the rule picks winners, <b>not</b> whether it
+makes money. (2) <i>Priced replay</i>: the same rules are simulated at real historical moneylines from the
+free SBR archive (4,043 validated games, 2013-14..2022-23, October-December of each season), with model
+probabilities shrunk (0.5) and edges capped at 8% before a bet is allowed. Every priced run also simulates a
+<i>MARKET baseline</i> — the home side at the archive's own price on every game — because a rule that beats
+the market must first beat that number. All six moneyline rules currently in the priced replay lose money,
+and the baseline loses too (-5.3% ROI), so the published conclusion is that these signals do not survive
+real prices; the priced result tiers each rule <span class="mono">failed</span> regardless of its signal
+hit rate. Totals, spreads and props remain unbacktestable at real prices (no free per-side history) and are
+forward-tested instead; no price is ever invented.</p>
 <h2>Forward testing &amp; paper trading</h2>
 <p>When historical prices don't exist (player props, sportsbook lines pre-2026-27), strategies are
 forward-tested: at each scheduled collection, the captured price/injury/schedule state is frozen into a
@@ -1374,7 +1434,7 @@ the version that produced it.</p>
 <h2>What this site is not</h2>
 <p>Not betting advice, not real money, not a guarantee of edge. It is an auditable research process: the
 point is to find out, with real verified data, which hypotheses survive.</p>
-"""
+""" + live_verify_html(out_dir)
     _write(out_dir, "methodology.html", page("Methodology", body, "methodology.html"))
 
 

@@ -51,19 +51,21 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Skip auto-commits
+      - name: Decide this run's scope (event-aware)
         id: skip
         run: |
-          # Fixed-string match (-F): the old --grep='\[auto\]' regex collapsed
-          # into a character class and matched nearly EVERY commit, so all of
-          # 2026-09-21's runs silently took the probe-only path (daily
-          # collection + pipeline never executed). Verified by job-step audit.
-          if git log -1 --format=%s | grep -qF '[auto]'; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-          if git log -1 --format=%s | grep -qF '[probe]'; then
-            echo "probe=true" >> "$GITHUB_OUTPUT"
-          fi
+          # The subject sniffing that used to live here looked at the head
+          # commit of whatever triggered the run. The bot's own commits are
+          # titled "[auto] ...", so every run that started after one of them
+          # decided it was its own echo and skipped ALL work while still
+          # reporting success. Evidence (jobs API): cron runs 35660560504,
+          # 35602774751 and the 05:07Z run each executed steps 1-5 and skipped
+          # steps 6-21. Only a push may be skipped; schedule and
+          # workflow_dispatch always work. Decision + verification live in
+          # tools/run_scope.py, which is unit-tested.
+          python tools/run_scope.py --event "${{ github.event_name }}" \
+            --message "${{ github.event.head_commit.message }}" --out "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT" | tail -2
 
       - name: Deep probe only (fast iteration)
         if: steps.skip.outputs.probe == 'true'
@@ -180,6 +182,7 @@ jobs:
           fi
 
       - name: Daily collection (schedule+odds, injuries, Kalshi, boxscores, verification)
+        id: daily
         if: steps.skip.outputs.skip != 'true'
         run: |
           python -m nbacomp.collect kalshi-discovery || true
@@ -212,6 +215,19 @@ jobs:
             exit 1
           fi
 
+      - name: Fail the run if it did no work
+        if: always() && steps.skip.outcome == 'success'
+        run: |
+          # A run that skips every work step has nothing left to fail, so the
+          # previous defect reported success for hours of idle cron. This step
+          # runs even when the work steps were skipped and makes that state
+          # loud. (2026-09-21: three scheduled runs did no collection at all.)
+          python tools/run_scope.py --verify \
+            --event "${{ github.event_name }}" \
+            --skip "${{ steps.skip.outputs.skip }}" \
+            --probe "${{ steps.skip.outputs.probe }}" \
+            --daily-outcome "${{ steps.daily.outcome }}"
+
       - name: Failure diagnostics
         if: failure()
         continue-on-error: true
@@ -240,4 +256,40 @@ jobs:
             # the next scheduled run re-collects.
             git pull --rebase origin "${GITHUB_REF_NAME}" || git rebase --abort || true
             git push origin HEAD || (sleep 30 && git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin HEAD) || true
+          fi
+
+      - name: Verify the DEPLOYED site against this commit
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Independent, read-only end-to-end check: fetch every published page
+          # from the Pages URL and require it to be byte-identical to the file
+          # committed at HEAD. Pages takes a minute or two to publish, so wait
+          # for the build of THIS commit before comparing. Evidence lands in
+          # data/live_verify.json and is committed by the step below.
+          python tools/verify_deployed.py --ref HEAD --commit "$(git rev-parse HEAD)" \
+            --wait 900 --retry-wait 20 --out data/live_verify.json
+
+      - name: Commit deployment verification
+        if: steps.skip.outputs.skip != 'true' && always()
+        run: |
+          # The verification step fails the run on a mismatch; this step still
+          # commits whatever evidence it produced so the failure is inspectable.
+          if [ -f data/live_verify.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            # Rebuild so methodology.html shows THIS verification (its table is
+            # read from data/live_verify.json); the site build is idempotent.
+            python tools/run_pipeline.py || true
+            git add -A data index.html leaderboard.html strategies.html upcoming.html \
+              positions.html history.html sources.html research.html methodology.html \
+              style.css || true
+            if git diff --cached --quiet; then
+              echo "no change in live verification"
+            else
+              git commit -m "[auto] live site verification $(date -u +%FT%TZ)" || true
+              git pull --rebase origin "${GITHUB_REF_NAME}" || git rebase --abort || true
+              git push origin HEAD || (sleep 30 && git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin HEAD) || true
+            fi
           fi
