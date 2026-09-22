@@ -475,7 +475,9 @@ numbers where necessary rather than reconciling them silently.
   (per-file HTTP status, byte count, SHA-256, verdict). It runs at the end of every
   collection run and **fails the run** on any mismatch. The methodology page
   renders the latest result, including its timestamp and commit, or states plainly
-  that no verification has been recorded yet.
+  that no verification has been recorded yet. The step is gated to the branch
+  Pages actually serves (`main`): on a feature branch the live site is a different
+  commit by definition, and a byte comparison there would raise a false alarm.
 - Sandbox egress note: this environment cannot open `*.github.io` over TLS
   (`SSL_ERROR_SYSCALL`) and `curl` returns `000`; the in-repo verifier therefore
   runs inside Actions, and page content during this pass was read through the
