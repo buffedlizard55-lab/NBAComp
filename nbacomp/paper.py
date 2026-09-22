@@ -34,8 +34,7 @@ EXPOSURE_CAP_PCT = 0.25
 #: bets (see `quarantine_bets`) are excluded from exposure, available balance
 #: and competition P&L, but they are never deleted or hidden: the site lists
 #: them with their flag and their own settlement P&L.
-EFFECTIVE = ("AND bet_id NOT IN (SELECT bet_id FROM bet_flags "
-             "WHERE severity='critical')")
+EFFECTIVE = f"AND bet_id NOT IN {db.QUARANTINED_BET_IDS}"
 
 #: Claimed edges above this are treated as evidence of a data/state defect
 #: rather than opportunity (a 25pt edge against a captured market line is not a
@@ -1200,13 +1199,16 @@ def _strike_from_selection(sel: str) -> float | None:
 # --------------------------------------------------------- quarantine
 
 def flag_bet(con, bet_id: str, strategy_id: str, flag: str, severity: str,
-             detail: dict, run_id: str | None = None) -> bool:
+             detail: dict, run_id: str | None = None,
+             anomaly: str | None = None) -> bool:
     """Record a defect flag on an existing bet (append-only, idempotent).
 
     Bets can never be edited or deleted, so a bet that turns out to have been
     placed on invalid state gets a durable flag instead. Critical flags remove
     the bet from exposure and from the ranking P&L; every flag stays visible in
-    the ledgers.
+    the ledgers. A retraction (`<flag>-retracted`) is written the same way — it
+    is also evidence, and it is the only way to withdraw a flag that an earlier,
+    over-broad check misapplied.
     """
     if con.execute("SELECT 1 FROM bet_flags WHERE bet_id=? AND flag=?",
                    (bet_id, flag)).fetchone():
@@ -1215,7 +1217,7 @@ def flag_bet(con, bet_id: str, strategy_id: str, flag: str, severity: str,
         "bet_id": bet_id, "strategy_id": strategy_id, "flag": flag,
         "severity": severity, "detail_json": json.dumps(detail, sort_keys=True),
         "flagged_utc": util.utcnow_iso(), "run_id": run_id})
-    db.log_anomaly(con, severity, f"bet-quarantined-{flag}",
+    db.log_anomaly(con, severity, anomaly or f"bet-quarantined-{flag}",
                    {"bet_id": bet_id, "strategy": strategy_id, **detail})
     return True
 
@@ -1227,19 +1229,25 @@ def quarantine_bets(con, run_id: str | None = None) -> dict:
     ranking whether or not it has already been graded.
 
     Checks (all evidence-based, never a guess about intent):
-      * stale-state-at-decision  — the game is priced off team state older than
-        MAX_STATE_AGE_DAYS (critical: the claimed edge is an artifact).
+      * stale-state-at-decision  — the decision read rolling box-score state
+        older than MAX_STATE_AGE_DAYS (critical: the claimed edge is an
+        artifact). Scoped by `strategies.state_inputs()`: a rule that reads no
+        box-score state (NBA-026 prices off Elo + the observed spread, NBA-003
+        off Elo alone) cannot have this defect, and flagging it anyway would
+        remove a live bet from the ranking for a reason that does not apply.
+        The table checked is the one the rule reads — `team_gamelogs` for the
+        pace/efficiency/venue rules, `player_gamelogs` for injury and prop
+        rules, which previously were measured against team logs they never read.
       * implausible-edge         — claimed edge > IMPLAUSIBLE_EDGE (critical).
       * price-not-observed       — the bet is priced at an assumed -110 because
-        no free historical totals price exists (info: disclosed, not excluded).
+        no free per-side price exists for that market (info: disclosed, never
+        excluded).
       * strategy-parked          — the strategy's own validation evidence now
         forbids betting (warn: placed under an earlier version, kept visible).
 
     Returns counts by flag. Idempotent: a (bet_id, flag) pair is only ever
     written once.
     """
-    from .model import MAX_STATE_AGE_DAYS
-    from datetime import date as _date
     counts: dict[str, int] = {}
     bets = con.execute(
         "SELECT b.*, g.home_team, g.away_team, g.game_date_et FROM bets b "
@@ -1248,27 +1256,11 @@ def quarantine_bets(con, run_id: str | None = None) -> dict:
     tiers = validation.all_tiers(con)
     for b in bets:
         d = dict(b)
-        if d.get("game_date_et"):
-            for team in (d["home_team"], d["away_team"]):
-                last = con.execute(
-                    "SELECT MAX(game_date_et) m FROM team_gamelogs WHERE team=? "
-                    "AND game_date_et < ?", (team, d["game_date_et"])).fetchone()
-                if not (last and last["m"]):
-                    age = None
-                else:
-                    age = (_date.fromisoformat(d["game_date_et"])
-                           - _date.fromisoformat(last["m"])).days
-                if age is None:
-                    continue
-                if age > MAX_STATE_AGE_DAYS:
-                    if flag_bet(con, d["bet_id"], d["strategy_id"],
-                                "stale-state-at-decision", "critical",
-                                {"team": team, "state_age_days": age,
-                                 "max_state_age_days": MAX_STATE_AGE_DAYS,
-                                 "claimed_edge": d.get("edge"),
-                                 "game": d["game_date_et"]}, run_id):
-                        counts["stale-state-at-decision"] = counts.get(
-                            "stale-state-at-decision", 0) + 1
+        for ev in _stale_state_evidence(con, d):
+            if flag_bet(con, d["bet_id"], d["strategy_id"],
+                        "stale-state-at-decision", "critical", ev, run_id):
+                counts["stale-state-at-decision"] = counts.get(
+                    "stale-state-at-decision", 0) + 1
         if d.get("edge") is not None and abs(d["edge"]) > IMPLAUSIBLE_EDGE:
             if flag_bet(con, d["bet_id"], d["strategy_id"], "implausible-edge",
                         "critical",
@@ -1281,10 +1273,11 @@ def quarantine_bets(con, run_id: str | None = None) -> dict:
         if (d.get("verification") or "").startswith("PRICED-ASSUMPTION"):
             if flag_bet(con, d["bet_id"], d["strategy_id"], "price-not-observed",
                         "info",
-                        {"price": d.get("price"),
-                         "detail": "no free historical totals price source "
-                                   "exists; the bet is simulated at the "
-                                   "standard -110 and labeled, not excluded"},
+                        {"price": d.get("price"), "market": d.get("market"),
+                         "detail": f"no free per-side price exists for "
+                                   f"{d.get('market') or 'this'} markets; the bet "
+                                   f"is simulated at the standard -110 and "
+                                   f"labeled, not excluded"},
                         run_id):
                 counts["price-not-observed"] = counts.get("price-not-observed", 0) + 1
         info = tiers.get(d["strategy_id"])
@@ -1297,7 +1290,105 @@ def quarantine_bets(con, run_id: str | None = None) -> dict:
                                    "measured evidence and will place no more"},
                         run_id):
                 counts["strategy-parked"] = counts.get("strategy-parked", 0) + 1
+    for r in retract_misapplied_flags(con, bets, run_id):
+        counts[r["flag"]] = counts.get(r["flag"], 0) + 1
     return counts
+
+
+#: Tables whose freshness the stale-state check can measure, and the column the
+#: measurement reads. A strategy's declared state input must be one of these.
+_STATE_TABLES = {
+    "team_gamelogs": ("team_gamelogs", "team"),
+    "player_gamelogs": ("player_gamelogs", "team"),
+}
+
+
+def _stale_state_evidence(con, bet: dict) -> list[dict]:
+    """Evidence that a bet's DECISION read rolling state that was too old.
+
+    Returns one dict per stale input (empty when the rule reads no rolling
+    box-score state, or when every input it reads was fresh). The rule's own
+    declaration (`strategies.state_inputs`) decides whether and what is checked:
+    an undeclared strategy is checked against `team_gamelogs` so a new rule can
+    never escape the check by forgetting its declaration.
+    """
+    from datetime import date as _date
+
+    from .model import MAX_STATE_AGE_DAYS
+    gdate = bet.get("game_date_et")
+    if not gdate:
+        return []  # no game row: nothing measurable, never guessed
+    inputs = S.state_inputs(bet["strategy_id"])
+    if bet["strategy_id"] not in S.STATE_INPUTS:
+        inputs = ("team_gamelogs",)  # conservative: unknown rule => checked
+    if not inputs:
+        return []
+    out = []
+    for table in inputs:
+        tname, col = _STATE_TABLES[table]
+        for team in {bet.get("home_team"), bet.get("away_team")}:
+            if not team:
+                continue
+            last = con.execute(
+                f"SELECT MAX(game_date_et) m FROM {tname} WHERE {col}=? "
+                "AND game_date_et < ?", (team, gdate)).fetchone()
+            if not (last and last["m"]):
+                continue
+            age = (_date.fromisoformat(gdate) - _date.fromisoformat(last["m"])).days
+            if age > MAX_STATE_AGE_DAYS:
+                out.append({"team": team, "state_table": tname,
+                            "state_age_days": age,
+                            "max_state_age_days": MAX_STATE_AGE_DAYS,
+                            "claimed_edge": bet.get("edge"), "game": gdate,
+                            "detail": (f"{bet['strategy_id']} reads {tname} for its "
+                                       f"rolling state; the newest row before this "
+                                       f"game is {age} days old")})
+    return out
+
+
+def retract_misapplied_flags(con, bets=None, run_id: str | None = None) -> list[dict]:
+    """Append a retraction for every critical stale-state flag that does not apply.
+
+    `bet_flags` is append-only (a DB trigger aborts UPDATE and DELETE), so a
+    flag written by an earlier, over-broad version of the check cannot be
+    edited or removed. The original row stays on the page; a second row,
+    `stale-state-at-decision-retracted`, records that the rule's decision never
+    read the state the flag measured, which is what stops the bet from being
+    excluded from exposure and ranking (`db.QUARANTINED_BET_IDS`).
+
+    2026-09-22 evidence: all four NBA-026 spread bets carried a critical
+    `stale-state-at-decision` flag measuring `team_gamelogs` age, while
+    `backtest.eval_spread` reads only `ctx['elo']` and `ctx['spread_line']`.
+    """
+    if bets is None:
+        bets = con.execute(
+            "SELECT b.*, g.home_team, g.away_team, g.game_date_et FROM bets b "
+            "LEFT JOIN games g ON g.game_id=b.game_id WHERE b.kind='forward'").fetchall()
+    retracted = []
+    for b in bets:
+        d = dict(b)
+        row = con.execute(
+            "SELECT * FROM bet_flags WHERE bet_id=? AND flag='stale-state-at-decision'",
+            (d["bet_id"],)).fetchone()
+        if not row:
+            continue
+        if _stale_state_evidence(con, d):
+            continue  # the flag applies; leave it in force
+        why = ("this strategy's decision reads no rolling box-score state "
+               f"(declared state inputs: {list(S.state_inputs(d['strategy_id'])) or 'none'}); "
+               "the flag measured a table the decision never read")
+        if flag_bet(con, d["bet_id"], d["strategy_id"],
+                    "stale-state-at-decision" + db.RETRACTION_SUFFIX, "info",
+                    {"retracts": "stale-state-at-decision",
+                     "original_detail": row["detail_json"],
+                     "state_inputs": list(S.state_inputs(d["strategy_id"])),
+                     "detail": why}, run_id,
+                    anomaly="bet-flag-retracted"):
+            retracted.append({"bet_id": d["bet_id"],
+                              "strategy_id": d["strategy_id"],
+                              "flag": "stale-state-at-decision" + db.RETRACTION_SUFFIX,
+                              "detail": why})
+    return retracted
 
 
 # --------------------------------------------------------- elo build

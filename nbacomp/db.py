@@ -33,6 +33,22 @@ _BETS_CORE_IMMUTABLE = [
 # must be frozen at decision time; settlement needs them).
 _BETS_V2_IMMUTABLE = ["strike", "market_ticker", "prop_player"]
 
+#: Suffix that turns a defect flag into its retraction. `bet_flags` is
+#: append-only at the database level (a trigger aborts UPDATE and DELETE), so a
+#: flag that turns out to have been misapplied cannot be edited away: a second
+#: row, `<flag>-retracted`, records that it does not apply and why. The original
+#: row stays visible in every ledger; only its power to exclude the bet from
+#: exposure and ranking is withdrawn.
+RETRACTION_SUFFIX = "-retracted"
+
+#: The single definition of "this bet is quarantined", used by the paper engine,
+#: the audit and the site so the three can never disagree. A bet is quarantined
+#: while it carries a critical defect flag that has not been retracted.
+QUARANTINED_BET_IDS = (
+    "(SELECT f.bet_id FROM bet_flags f WHERE f.severity='critical' "
+    "AND NOT EXISTS (SELECT 1 FROM bet_flags r WHERE r.bet_id=f.bet_id "
+    f"AND r.flag = f.flag || '{RETRACTION_SUFFIX}'))")
+
 
 def _bets_trigger_sql(extra_cols=()):
     cols = _BETS_CORE_IMMUTABLE + list(extra_cols)
@@ -394,6 +410,28 @@ CREATE TABLE IF NOT EXISTS hist_backtests (
   games_available INTEGER NOT NULL,
   generated_utc TEXT NOT NULL,
   PRIMARY KEY (run_id, strategy_id, season)
+);
+
+-- Line-based historical validation over the same archive (nbacomp/line_backtest).
+-- The archive prints observed opening/closing SPREADS and TOTALS but no per-side
+-- price for those markets, so this table stores frequencies and absolute errors
+-- against the observed lines -- never P&L. `breakeven` is the win frequency a
+-- bet needs at standard -110 juice, quoted as a reference and labeled as such
+-- wherever it is published; `z` is a z (cover rates) or paired t (MAE
+-- comparisons) statistic against the stated comparison.
+CREATE TABLE IF NOT EXISTS line_backtests (
+  run_id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,                -- strategy id, or MARKET for baselines
+  season TEXT NOT NULL,                 -- or ALL
+  metric TEXT NOT NULL,                 -- cover_rate|*_mae_*|paired_*_mae
+  n INTEGER NOT NULL,
+  value REAL,
+  baseline REAL,                        -- the comparison the value is read against
+  breakeven REAL,                       -- standard-juice break-even frequency
+  z REAL,
+  detail TEXT,
+  generated_utc TEXT NOT NULL,
+  PRIMARY KEY (run_id, rule_id, season, metric)
 );
 
 -- Bet quarantine flags. A bet placed by a version of the engine that is now

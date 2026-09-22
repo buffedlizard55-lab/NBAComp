@@ -19,3 +19,10 @@ jobs:
           python-version: "3.11"
       - run: pip install pytest
       - run: python -m pytest tests -q
+      - name: Documentation facts match the code (drift gate)
+        run: |
+          # README/PROJECT_REPORT figures that can be read out of the repository
+          # are generated, not typed: this repo shipped "14 vs 19 strategies",
+          # "49/54 vs actual test count" and "24 strategies next to a 27-row
+          # registry" before the blocks were generated. Fails on any drift.
+          python tools/doc_facts.py --check

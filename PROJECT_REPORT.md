@@ -154,10 +154,42 @@ the baseline next to the result), and the site says so on each strategy page.
 Season-level ROIs are noisy and are published as such (NBA-024 +91.8% in 2015-16
 on 17 bets, −74.8% in 2018-19; NBA-003 swings from +15.6% to −24.0%).
 
-**Totals, spreads and props remain unbacktestable at real prices** — the archive
-prints no per-side prices for those markets and no free prop/injury history
-exists — so those rules are forward-tested instead. No price is ever invented,
-and no rule is marked `failed` on the strength of a simulated assumption price.
+**Totals, spreads and props have no per-side prices in the archive**, so no
+simulated profit is ever assigned to them — but the archive does print their
+**observed lines**, which is what Track 3 measures.
+
+**Track 3 — line replay (observed lines, no prices, no P&L).**
+`nbacomp/line_backtest.py` (added 2026-09-22) uses the same 4,043 games' opening
+and closing spreads and totals. A line is not a price, so this track publishes
+frequencies and absolute errors and **computes no P&L at all** — the invariant
+is pinned by a test that fails if a money field ever appears in a result row or
+in the `line_backtests` table. Measured on the committed archive:
+
+| rule / baseline | metric | n | value | break-even / comparison | z |
+|-----------------|--------|---|-------|-------------------------|---|
+| **NBA-026** Elo margin vs closing spread | cover rate | 1,888 | **49.31%** | 52.38% (standard −110 juice) | −2.67 |
+| **NBA-004** spread-move analogue (move ≥ 0.5 pt) | cover rate | 3,324 | **49.16%** | 52.38% | −3.72 |
+| MARKET baseline (home ATS every game) | cover rate | 3,973 | 49.53% | 52.38% | −3.59 |
+| MARKET closing spread | margin MAE | 4,043 | 15.392 pts | opening 15.188 pts | paired t = −9.30 |
+| MARKET closing total | total MAE | 4,043 | 13.522 pts | opening 13.782 pts | paired t = +6.06 |
+
+Readings, stated as measurements and nothing more:
+
+- **NBA-026 is refuted by the market's own lines.** Its rule fires 1,888 times
+  and covers 49.31% — below a coin flip and 3.07 points below the frequency a
+  standard −110 price requires. The strategy is therefore tiered `failed` by
+  this evidence and parked (`validation.TIERED_BY_LINE`).
+- **NBA-004's momentum premise does not hold on spreads either** (49.16% on
+  3,324 firings), but that result is *published without tiering it*: the live
+  rule trades Kalshi winner-market moves in cents, a market with no history, so
+  the spread analogue is evidence about the hypothesis, not a verdict on the
+  traded rule. The distinction is enforced in code, not in prose.
+- **Line accuracy is asymmetric**: the *opening* spread predicts the final
+  margin better than the closing spread (−0.204 pts MAE, paired t = −9.30)
+  while the *closing* total predicts the total better than the opening total
+  (+0.260 pts, t = +6.06). Both are per-game paired comparisons over all 4,043
+  games, and both support the shrink-toward-the-market policy the engines
+  already apply.
 
 ## Signal validation (outcome-only — no prices, not P&L)
 
@@ -214,7 +246,9 @@ final score / captured in-game quarter scores / verified box score vs the
 strike frozen at decision. When a bet is unresolvable 48h after tipoff it
 is **void** (stake returned, no P&L, anomaly logged) — never a guess.
 
-**Result to date: 9 forward bets, 0 settled.** The first bets were placed by
+**Result to date: 14 forward bets, 0 settled** (10 NBA-002 totals + 4 NBA-026
+spreads; the "9 forward bets" figure below was accurate for the 2026-09-21 run
+and is superseded). The first bets were placed by
 the pipeline run of 2026-09-21T04:34Z: NBA-002 (pace/efficiency totals)
 fired UNDER on nine 2026-27 preseason/opening-week games (2026-10-20 →
 2026-10-30) where the model total (215–230) sat 8.7–21.9 points below the
@@ -222,11 +256,11 @@ captured ESPN total line. Each row: real captured line with timestamp,
 `PRICED-ASSUMPTION` label (simulated at standard −110 — no free totals
 price source exists), model/market probability, edge, Kelly-capped stake
 ($23.51–$30.00), bankroll event, and the trigger text (model total vs
-line) in `notes`. All 9 are `pending` — the season has not tipped off. No
+line) in `notes`. All are `pending` — the season has not tipped off. No
 other strategy's rules currently fire against live data: winner-market
 strategies wait for the 2026-10-20 KXNBAGAME asks, and NBA-013 waits for
-KXNBA1H markets to open. The leaderboard shows 22 strategies; NBA-002 is
-`active (open bets)` with 9 open, the rest `awaiting-opportunity`.
+KXNBA1H markets to open. The leaderboard shows every registered strategy;
+NBA-002 and NBA-026 are `active (open bets)`, the rest `awaiting-opportunity`.
 
 An earlier revision of this section said 0 forward bets because at
 `53465b8` neither upcoming games with tipoffs nor mapped Kalshi markets
@@ -236,14 +270,20 @@ starting, not a test artifact.
 
 ## Current paper-trading strategies
 
-All 22 strategies are registered and represented on the leaderboard, each
-with a $1,000 virtual wallet, sorted by total forward P&L (the primary
-competition objective). **Currently: 9 open bets (all NBA-002, pending),
-0 settled, $0 P&L.** No strategy has a settled bet yet, so no ROI, win
-rate, or drawdown is claimed. No result of any strategy is ever modified
-after the fact: bet rows are append-only (a DB trigger blocks updates to
-every decision-state column), and settlement outcomes can only move a
-pending bet to win/loss/push/void once.
+<!-- facts:headline -->
+- strategies registered: **27** — `nbacomp/strategies.py` is the only source of this number, and the table below is generated from it
+- offline test suite: **242 tests** collected by pytest in 16 files (237 test functions; parametrized cases expand)
+- live database row counts are **not quoted here**: read `data/db_report.txt`, which every pipeline run regenerates
+<!-- /facts:headline -->
+
+Every registered strategy is represented on the leaderboard with a $1,000
+virtual wallet, sorted by total forward P&L (the primary competition
+objective). **Currently: 14 paper bets, all `pending`, 0 settled, $0 P&L**
+(read from `data/nbacomp.db` on 2026-09-22: 10 NBA-002 totals + 4 NBA-026
+spreads). No strategy has a settled bet, so no ROI, win rate, or drawdown is
+claimed. No result of any strategy is ever modified after the fact: bet rows are
+append-only (a DB trigger blocks updates to every decision-state column), and
+settlement outcomes can only move a pending bet to win/loss/push/void once.
 
 Two separate reasons, both real:
 
@@ -417,9 +457,11 @@ Built and committed in repo root; GitHub Pages serves `main:/`. Pages:
 - `leaderboard.html` — Full forward leaderboard with risk metrics
   (volatility, longest streaks, largest W/L) + profit-by-month and
   profit-by-category tables + backtest section.
-- `strategies.html` — 24 strategy cards with thesis, rules, sources,
+- `strategies.html` — one card per registered strategy (count generated in
+  **Current paper-trading strategies**) with thesis, rules, sources,
   market types, sizing, look-ahead controls, failure modes, data
-  limitations, performance block (both kinds), forward breakdowns
+  limitations, performance block (both kinds), the line-based evidence
+  block where that market has line history, forward breakdowns
   (market / team / month), auto-analysis, and recent bets.
 - `upcoming.html` — Every intended bet pre-tipoff with model prob,
   edge, stake, trigger, source ts.
@@ -497,7 +539,18 @@ numbers where necessary rather than reconciling them silently.
 
 ## Known bugs
 
-### Fixed in this pass (2026-09-22, the deployed-site audit)
+### Fixed in this pass (2026-09-22, the line-evidence & quarantine-scope pass)
+
+| Defect | Evidence (quoted, not asserted) | Fix |
+|--------|--------------------------------|-----|
+| `quarantine_bets` measured `team_gamelogs` age for **both teams of every** forward bet, so the four NBA-026 spread bets were flagged `stale-state-at-decision` (critical) and dropped out of exposure and ranking — while `backtest.eval_spread` reads only `ctx["elo"]` and `ctx["spread_line"]` and never touches a box score | 4 rows in `bet_flags`, e.g. `{"claimed_edge": 0.0511, "max_state_age_days": 14, "state_age_days": 268, "team": "HOU"}`; `paper._open_exposure(con,'NBA-026') == 0.0` with 4 pending bets | `strategies.STATE_INPUTS` declares which rolling-state table each rule reads (a test derives it from the evaluator source, so it cannot drift); `_stale_state_evidence` checks only those tables, using `player_gamelogs` for the prop/injury rules that read it. `retract_misapplied_flags` appends `stale-state-at-decision-retracted` (info) — the original critical row stays, because `bet_flags` is append-only at the database level — and the single shared predicate `db.QUARANTINED_BET_IDS` (paper + audit + site) ignores retracted flags. Exposure returned to $26.73 on 4 live bets; the 10 NBA-002 bets stay quarantined |
+| The audit's `stale-model-state-at-decision` check had the identical over-broad scope and would have raised a **critical** anomaly for every future spread bet | `audit.py` re-implemented the same `team_gamelogs` loop with a hard-coded `age > 14` | it now calls the same scoped `paper._stale_state_evidence`, so the two can never disagree, and `MAX_STATE_AGE_DAYS` is read from `model` instead of duplicated |
+| The `price-not-observed` flag detail said "no free historical **totals** price source exists" on **spread** bets | `bet_flags` rows for the four NBA-026 spread bets | the detail names the bet's own market |
+| The archive's observed spreads and totals were stored but never used, so the ATS rule had no historical evidence at all and was tiered `forward_only` by default | `hist_odds` has 4,043 non-null `close_home_spread`/`close_total` rows; `EVALUATORS['NBA-026']` existed but the backtester never supplied `spread_line` | `nbacomp/line_backtest.py` + `line_backtests` table + `tools/line_backtest.py`, wired into `run_pipeline.py`, published on `research.html` and on each strategy page, and consumed by `validation.classify` for the one rule whose traded market it measures |
+| `_summarise` crashed with `TypeError: unsupported format string passed to NoneType` when every paired MAE difference was identical (`util.std` → 0 → no t statistic) | found by `tests/test_line_backtest.py`, not by the pipeline (the real archive has variance) | the paired detail renders "paired t undefined: every game's difference is identical", and a zero mean reads "neither line is better" instead of picking a winner |
+| README/PROJECT_REPORT drift again: README claimed "24 strategies" and listed 22 rows; the report claimed "200 passed" next to a suite collecting 207, "9 forward bets" next to 14, and "22 strategies" on the leaderboard | `len(S.STRATEGIES) == 27`; `pytest tests` → `207 passed`; `SELECT COUNT(*) FROM bets` → 14 | `tools/doc_facts.py` **generates** the strategy table, the headline figures and the per-file test counts into marked blocks; `--check` runs in CI and exits 1 on drift. Volatile row counts were removed from prose entirely and delegated to `data/db_report.txt`, which the pipeline regenerates |
+
+### Fixed in the earlier pass (2026-09-22, the deployed-site audit)
 
 | Defect | Evidence (quoted, not asserted) | Fix |
 |--------|--------------------------------|-----|
@@ -620,30 +673,46 @@ See **Source limitations** above. Additional structural limits:
 
 ## Test summary
 
-Run in this pass, in a fresh venv (`python3 -m venv .venv && .venv/bin/pip
-install pytest`), on `arena/01a0c1af-nbacomp`:
+Run in a fresh venv (`python3 -m venv .venv && .venv/bin/pip install pytest`).
+The counts below are **generated** by `tools/doc_facts.py` from an AST walk of
+`tests/` and verified in CI (`--check`), so this section cannot drift from the
+suite again — the previous revision claimed "200 passed" next to a suite that
+collected 207.
 
-```
-.venv/bin/python -m pytest tests   ->  200 passed   (2026-09-22)
+<!-- facts:suite -->
+`python -m pytest tests` collects **242 tests** across 16 files (offline, no network needed). 237 of those are test functions; the difference is parametrized cases:
 
-tests/test_adversarial.py           22 tests
-tests/test_audit_summary.py          3 tests   (new)
-tests/test_collect_and_backtest.py   9 tests
-tests/test_core.py                  45 tests
-tests/test_hist_backtest.py          4 tests   (new)
-tests/test_integrity_v2.py          13 tests
-tests/test_live_shapes.py           18 tests
-tests/test_pipeline_fixes.py        33 tests
-tests/test_run_scope.py             11 tests   (new)
-tests/test_sbr_odds.py               7 tests   (new)
-tests/test_verify_deployed.py        7 tests   (new)
-tests/test_wave2.py                 26 tests
-```
+- `tests/test_adversarial.py` — 24 tests
+- `tests/test_audit_summary.py` — 3 tests
+- `tests/test_collect_and_backtest.py` — 9 tests
+- `tests/test_core.py` — 45 tests
+- `tests/test_doc_facts.py` — 6 tests
+- `tests/test_hist_backtest.py` — 4 tests
+- `tests/test_integrity_v2.py` — 13 tests
+- `tests/test_line_backtest.py` — 16 tests
+- `tests/test_live_shapes.py` — 18 tests
+- `tests/test_new_markets.py` — 7 tests
+- `tests/test_pipeline_fixes.py` — 33 tests
+- `tests/test_quarantine_scope.py` — 13 tests
+- `tests/test_run_scope.py` — 11 tests
+- `tests/test_sbr_odds.py` — 7 tests
+- `tests/test_verify_deployed.py` — 7 tests
+- `tests/test_wave2.py` — 26 tests
+<!-- /facts:suite -->
 
-The new file pins every defect above: snapshot stores markets that omit
-`series_ticker` and raises an anomaly when nothing is storable; the ESPN
-backfill walks backwards, persists its cursor, and refuses to advance past a
-failed day; the box-score backfill respects its request budget, resumes, and
+The two files added in the 2026-09-22 pass pin that pass's defects:
+`tests/test_quarantine_scope.py` (a stale-state flag must describe a defect the
+decision actually had; the declaration is derived from the evaluator source so
+it cannot drift; a misapplied flag is retracted by an appended row and the
+append-only triggers still abort `UPDATE`/`DELETE`) and
+`tests/test_line_backtest.py` (cover arithmetic including pushes, rule fidelity
+against `backtest.eval_spread`, no look-ahead, and the invariant that the
+line-based track computes no P&L anywhere).
+
+The earlier pass's file pins every defect above it: snapshot stores markets
+that omit `series_ticker` and raises an anomaly when nothing is storable; the
+ESPN backfill walks backwards, persists its cursor, and refuses to advance past
+a failed day; the box-score backfill respects its request budget, resumes, and
 never refetches a logged day; the BRef task skips the offseason and uses the
 season-end year; settled-history stores only tickers that returned candles and
 records `unavailable` when the API returns nothing; the audit flags an empty

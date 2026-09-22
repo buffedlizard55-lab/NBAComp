@@ -8,8 +8,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nbacomp import (audit, backtest, db, hist_backtest, paper,  # noqa: E402
-                     signal_backtest, sitegen, strategies as S, util, validation)
+from nbacomp import (audit, backtest, db, hist_backtest, line_backtest,  # noqa: E402
+                     paper, signal_backtest, sitegen, strategies as S, util,
+                     validation)
 
 BACKTEST_SEASONS = ["2023-24", "2024-25", "2025-26"]
 
@@ -68,6 +69,36 @@ def main():
                           f, indent=1)
             print(f"hist-backtest: {hres['games']} priced games, "
                   f"{len(hres['bets'])} simulated bets, {n_rows} rows")
+
+        # 1d) line-based validation over the same archive: the archive prints
+        # observed opening/closing spreads and totals but no per-side price for
+        # those markets, so this track publishes cover rates and line accuracy —
+        # never P&L. It is the only historical evidence the ATS/totals rules can
+        # honestly have, and it is kept in its own table for that reason.
+        if con.execute("SELECT COUNT(*) c FROM hist_odds").fetchone()["c"]:
+            lres = line_backtest.run(con)
+            n_line = line_backtest.persist(con, lres, "line-sbr-2026-09-22")
+            with open("data/line_backtest.json", "w") as f:
+                json.dump({"run_id": "line-sbr-2026-09-22", "games": lres["games"],
+                           "seasons": lres["seasons"],
+                           "breakeven": lres["breakeven"],
+                           "summary": lres["summary"],
+                           "firings_sample": {k: v[:25] for k, v in
+                                              lres["firings"].items()},
+                           "method": {
+                               "price_source": "none — observed lines only",
+                               "lines": "SBR archive opening/closing spread+total",
+                               "spread_min_cover": backtest.SPREAD_MIN_COVER,
+                               "spread_margin_sd": backtest.SPREAD_MARGIN_SD,
+                               "line_move_min": line_backtest.LINE_MOVE_MIN,
+                               "breakeven_juice": line_backtest.BREAKEVEN_AMERICAN,
+                               "state": "same-season, strictly-prior games",
+                               "pnl": "not computed and not claimed"}},
+                          f, indent=1)
+            pooled = lres["summary"].get("NBA-026|ALL") or {}
+            print(f"line-backtest: {lres['games']} games, {n_line} rows; "
+                  f"NBA-026 cover {pooled.get('value')} on {pooled.get('n')} firings "
+                  f"(breakeven {lres['breakeven']:.4f}, no P&L)")
 
         # 2) forward paper engine
         n_new = paper.generate_forward_bets(con)

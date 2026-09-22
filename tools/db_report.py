@@ -25,8 +25,9 @@ from nbacomp import db  # noqa: E402
 
 TABLES = ["games", "odds_snapshots", "injuries", "team_gamelogs", "player_gamelogs",
           "team_season_stats", "kalshi_markets", "kalshi_candles", "kalshi_orderbooks",
-          "strategies", "bets", "bankroll_events", "verifications", "anomalies",
-          "audit_log", "research_log", "source_status", "collection_log"]
+          "hist_odds", "hist_backtests", "line_backtests", "signal_backtests",
+          "strategies", "bets", "bet_flags", "bankroll_events", "verifications",
+          "anomalies", "audit_log", "research_log", "source_status", "collection_log"]
 
 
 def main(argv: list[str]) -> int:

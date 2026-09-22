@@ -19,6 +19,14 @@ from .model import SD_TOTAL, EloModel, RollingTeamState, expected_total
 
 ELO_PER_POINT = 28.0  # Elo points per expected margin point (standard conversion)
 
+#: NBA-026 (ATS): minimum expected cover in points before the rule fires, and
+#: the prior SD of NBA margins used to turn that cover into a probability.
+#: Named (2026-09-22) instead of inlined so the line-based historical track
+#: (`nbacomp/line_backtest.py`) evaluates the SAME rule rather than a copy of
+#: it — a pinned test asserts the two modules agree.
+SPREAD_MIN_COVER = 3.5
+SPREAD_MARGIN_SD = 12.0
+
 
 def margin_to_prob(margin: float) -> float:
     """P(home wins) from expected margin via logistic Elo equivalent."""
@@ -899,10 +907,11 @@ def eval_spread(ctx):
         return []
     margin = ctx["elo"].margin(ctx["home"], ctx["away"])
     cover = margin + line  # positive => home expected to cover
-    if abs(cover) < 3.5:
+    if abs(cover) < SPREAD_MIN_COVER:
         return []
     side = "home" if cover > 0 else "away"
-    p = util.norm_cdf(abs(cover) / 12.0)  # 12pt SD of NBA margins (documented prior)
+    # SPREAD_MARGIN_SD: 12pt SD of NBA margins (documented prior)
+    p = util.norm_cdf(abs(cover) / SPREAD_MARGIN_SD)
     if p - 0.524 < 0.02:
         return []
     # settle_score_based expects 'home -4.5' / 'away +4.5'
