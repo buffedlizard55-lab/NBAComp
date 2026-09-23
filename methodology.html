@@ -93,17 +93,17 @@ the version that produced it.</p>
 point is to find out, with real verified data, which hypotheses survive.</p>
 
 <h2>Deployment verification</h2>
-<p>Last independent live check: <b class="ok">OK</b> —
-10/10 published files fetched from
+<p>Last independent live check: <b class="bad">FAILED</b> —
+9/10 published files fetched from
 <a href="https://buffedlizard55-lab.github.io/NBAComp/" rel="noopener">https://buffedlizard55-lab.github.io/NBAComp/</a>
 were <b>byte-identical</b> to the files committed at
-<span class="mono">ae0ce39cd080</span>
-(checked 2026-09-23T17:18:36Z, Pages build status
+<span class="mono">aefa8084969c</span>
+(checked 2026-09-23T21:40:20Z, Pages build status
 <span class="mono">built</span>). Nothing here is asserted: the
 comparison is the committed SHA-256 of each fetched response against the committed blob, and the
 result is stored in <span class="mono">data/live_verify.json</span>.</p>
 
-<div class='twrap'><table class=''><thead><tr><th>File</th><th>HTTP</th><th>Live bytes</th><th>Live sha256</th><th>Verdict</th></tr></thead><tbody><tr><td>history.html</td><td>200</td><td>18,642</td><td>596ca3fd9d7d</td><td><span class='ok'>OK</span></td></tr><tr><td>index.html</td><td>200</td><td>12,002</td><td>9040fadaa091</td><td><span class='ok'>OK</span></td></tr><tr><td>leaderboard.html</td><td>200</td><td>35,075</td><td>93512c83b655</td><td><span class='ok'>OK</span></td></tr><tr><td>methodology.html</td><td>200</td><td>10,046</td><td>d4971da4151a</td><td><span class='ok'>OK</span></td></tr><tr><td>positions.html</td><td>200</td><td>41,213</td><td>83c58f7aa9bc</td><td><span class='ok'>OK</span></td></tr><tr><td>research.html</td><td>200</td><td>57,384</td><td>8ab3ff13c61d</td><td><span class='ok'>OK</span></td></tr><tr><td>sources.html</td><td>200</td><td>18,421</td><td>97b2d52386ea</td><td><span class='ok'>OK</span></td></tr><tr><td>strategies.html</td><td>200</td><td>116,070</td><td>0a1dfca78f5f</td><td><span class='ok'>OK</span></td></tr><tr><td>style.css</td><td>200</td><td>5,689</td><td>d72d6c017e90</td><td><span class='ok'>OK</span></td></tr><tr><td>upcoming.html</td><td>200</td><td>8,919</td><td>380c5d43bcb5</td><td><span class='ok'>OK</span></td></tr></tbody></table></div>
+<div class='twrap'><table class=''><thead><tr><th>File</th><th>HTTP</th><th>Live bytes</th><th>Live sha256</th><th>Verdict</th></tr></thead><tbody><tr><td>history.html</td><td>200</td><td>18,642</td><td>596ca3fd9d7d</td><td><span class='ok'>OK</span></td></tr><tr><td>index.html</td><td>200</td><td>12,003</td><td>80fb1b6523e4</td><td><span class='ok'>OK</span></td></tr><tr><td>leaderboard.html</td><td>200</td><td>35,075</td><td>3d6277f88733</td><td><span class='ok'>OK</span></td></tr><tr><td>methodology.html</td><td>200</td><td>10,046</td><td>86a40745f6cc</td><td><span class='ok'>OK</span></td></tr><tr><td>positions.html</td><td>200</td><td>41,210</td><td>55ee0c476f18</td><td><span class='ok'>OK</span></td></tr><tr><td>research.html</td><td>200</td><td>57,418</td><td>7f999dbfee8d</td><td><span class='ok'>OK</span></td></tr><tr><td>sources.html</td><td>200</td><td>18,421</td><td>97b2d52386ea</td><td><span class='ok'>OK</span></td></tr><tr><td>strategies.html</td><td>503</td><td>54,887</td><td>27927b33ebee</td><td><span class='bad'>FAIL</span></td></tr><tr><td>style.css</td><td>200</td><td>5,689</td><td>d72d6c017e90</td><td><span class='ok'>OK</span></td></tr><tr><td>upcoming.html</td><td>200</td><td>8,919</td><td>380c5d43bcb5</td><td><span class='ok'>OK</span></td></tr></tbody></table></div>
 </main>
 <footer>Simulated paper trading only. No real money. Data: ESPN, NBA.com/stats, Kalshi public API —
 see <a href="sources.html">Data Sources</a>. Every number on this site is traceable to a logged,
