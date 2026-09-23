@@ -808,8 +808,14 @@ def collect_injuries(con) -> int:
         db.log_collection(con, "injuries", "espn", "fail", r.error or "unavailable")
         return 0
     items = espn.parse_injuries(r.json)
+    captured = util.utcnow_iso()
     for it in items:
-        db.insert(con, "injuries", it)
+        # injuries.captured_utc is NOT NULL. The parser records the listing's
+        # published date; the capture time is this fetch, never invented from
+        # the listing date.
+        row = dict(it)
+        row.setdefault("captured_utc", captured)
+        db.insert(con, "injuries", row)
     db.log_collection(con, "injuries", "espn", "ok", "", rows=len(items))
     return len(items)
 
@@ -2116,16 +2122,6 @@ def _parse_month_tokens(months: str) -> list[tuple[int, str]]:
         y, m = token.strip().split(":")
         items.append((int(y), m.strip().lower()))
     return items
-
-
-def _month_name(m: int) -> str:
-    return ["january", "february", "march", "april", "may", "june", "july",
-            "august", "september", "october", "november", "december"][m - 1]
-
-
-if __name__ == "__main__":
-    main()
-s
 
 
 def _month_name(m: int) -> str:
