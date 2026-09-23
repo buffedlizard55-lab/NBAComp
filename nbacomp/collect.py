@@ -605,37 +605,40 @@ BREF_GAME_MONTHS = {"october", "november", "december", "january", "february",
 
 
 def bref_verify_recent(con, min_rows: int = 50) -> dict:
-    """Cross-verify the most recent month that has final games in the DB.
+    """Cross-verify the newest month whose finals are not all verified.
 
-    The daily `bref-month` task is skipped in the offseason (Jul/Aug/Sep have
-    no BRef page), which left `verifications` at 0 forever after the season
-    ended (2026-09-21: 2,788 finals, 0 verified). This pins verification to
-    the latest month that actually has finals — e.g. June 2026 while the
-    2026-27 season is in its offseason — so the cross-check keeps running
-    year-round. Re-fetches the monthly page whenever that month has fewer
-    than `min_rows` verification rows (cheap: one request, ~1 rps).
+    June 2026 is 5/5 verified, so a count-based gate (`verification rows < 50`)
+    kept refetching June forever and never reached May (0/38). One month per
+    run, newest incomplete first. `min_rows` is retained so existing callers
+    keep working; completeness is `verified finals < finals`, not that count.
     """
-    row = con.execute(
-        "SELECT MAX(substr(game_date_et,1,7)) m FROM games WHERE status='final'").fetchone()
-    if not row or not row["m"]:
+    months = con.execute(
+        "SELECT substr(game_date_et,1,7) m, COUNT(*) finals, "
+        "SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) verified "
+        "FROM games WHERE status='final' AND game_date_et IS NOT NULL "
+        "GROUP BY 1 ORDER BY 1 DESC").fetchall()
+    if not months:
         db.log_collection(con, "bref-verify-recent", "basketball-reference", "skipped",
                           "no final games in database")
         return {"skipped": "no-finals"}
-    y, mo = row["m"].split("-")
+    target = None
+    for row in months:
+        if (row["verified"] or 0) < row["finals"]:
+            target = row
+            break
+    if target is None:
+        db.log_collection(con, "bref-verify-recent", "basketball-reference", "ok",
+                          "every month with finals is fully verified")
+        return {"skipped": "complete", "fetched": False}
+    y, mo = target["m"].split("-")
     month = _month_name(int(mo))
     cal_year = int(y)
     # Oct-Dec of calendar year Y belong to the season ENDING in Y+1
     # (same mapping as bref.calendar_year_for, applied in reverse).
     season_end = cal_year + (1 if month in ("october", "november", "december") else 0)
-    n = con.execute(
-        "SELECT COUNT(*) c FROM verifications WHERE claim LIKE ?",
-        (f"final score % on {y}-{mo}%",)).fetchone()["c"]
-    if n >= min_rows:
-        db.log_collection(con, "bref-verify-recent", "basketball-reference", "ok",
-                          f"{y}-{mo}: {n} verifications already recorded")
-        return {"month": f"{y}-{mo}", "verified": n, "fetched": False}
     verified = bref.verify_month(con, season_end, month)
-    return {"month": f"{y}-{mo}", "verified": verified, "fetched": True}
+    return {"month": f"{y}-{mo}", "verified": verified, "fetched": True,
+            "finals": target["finals"], "already_verified": target["verified"]}
 
 
 def bref_current_month(con, now: datetime | None = None) -> dict:
@@ -1159,6 +1162,215 @@ def market_ticker_candidates(event_ticker: str, home: str, away: str) -> list[st
     return [f"{event_ticker}-{s}" for s in (away, home, "YES", "NO")]
 
 
+# Series the historical tier actually returned on 2026-09-22. KXNBA1H limit-1
+# was an empty page; do not page it until a live or docs ticker proves 1H
+# contracts exist under another name.
+HISTORICAL_SERIES = ("KXNBAGAME", "KXNBASPREAD", "KXNBATOTAL")
+_HIST_CANDLE_SPAN_CAP = 21 * 86400
+_HIST_CANDLE_LOOKBACK = 14  # days, used only to clip a span that exceeds the cap
+
+
+def _historical_tier_stored(con, series: str) -> bool:
+    """True when this series has a finalized row the historical tier wrote.
+
+    A row counts only if it carries a result or an open_time. The 2026-09-21
+    live probe inserted status='settled' with both NULL; those rows must not
+    suppress the empty-database `unavailable` write.
+    """
+    row = con.execute(
+        "SELECT COUNT(*) c FROM kalshi_markets WHERE series_ticker=? "
+        "AND status IN ('finalized','determined','settled') "
+        "AND ((result IS NOT NULL AND result != '') OR open_time IS NOT NULL)",
+        (series,)).fetchone()
+    return bool(row and row["c"])
+
+
+def kalshi_historical_collect(con, max_pages: int = 2, candle_budget: int = 15,
+                              series: tuple[str, ...] | None = None) -> dict:
+    """Cursor-paged historical markets + a bounded candle fetch.
+
+    Budget is 2 pages per series and ~15 candle requests per run, newest
+    finalized markets without a candle mark first. A failed request is not
+    marked done. An empty candle body is a real answer and is marked done.
+    Post-settlement bid/ask/last on the market row are stored as market state
+    and are never synthesized into a candle.
+    """
+    series = series or HISTORICAL_SERIES
+    stats = {"markets": 0, "candles": 0, "pages": 0, "failed": 0, "series": {}}
+    cap = util.utcnow_iso()
+    for s in series:
+        done = con.execute("SELECT value FROM meta WHERE key=?",
+                           (f"kalshi_hist_done:{s}",)).fetchone()
+        if done and done["value"] == "complete":
+            stats["series"][s] = "already-complete"
+            continue
+        cursor_row = con.execute("SELECT value FROM meta WHERE key=?",
+                                 (f"kalshi_hist_cursor:{s}",)).fetchone()
+        cursor = cursor_row["value"] if cursor_row and cursor_row["value"] else None
+        stored = 0
+        for _page in range(max(0, max_pages)):
+            r = kalshi.historical_markets(s, cursor=cursor, limit=200)
+            save_source_status(con, "kalshi:api", r, detail=f"historical {s}")
+            if not r.ok:
+                stats["failed"] += 1
+                db.log_collection(con, "kalshi-historical", f"kalshi:{s}", "fail",
+                                  f"historical/markets http={r.status} {r.error or ''}",
+                                  rows=stored)
+                break
+            js = r.json or {}
+            for m in js.get("markets") or []:
+                try:
+                    row = kalshi.parse_market(m, cap)
+                except Exception as e:
+                    db.log_anomaly(con, "warn", "kalshi-historical-parse-error",
+                                   {"ticker": (m or {}).get("ticker"), "err": str(e)[:200]})
+                    continue
+                row = normalize_market_row(row, s)
+                if row is None:
+                    db.log_anomaly(con, "warn", "kalshi-market-missing-identity",
+                                   {"ticker": (m or {}).get("ticker"), "queried_series": s,
+                                    "tier": "historical"})
+                    continue
+                db.insert(con, "kalshi_markets", row, replace=True)
+                stored += 1
+            cursor = js.get("cursor") or ""
+            db.insert(con, "meta", {"key": f"kalshi_hist_cursor:{s}", "value": cursor,
+                                    "updated_utc": util.utcnow_iso()}, replace=True)
+            stats["pages"] += 1
+            if not cursor:
+                db.insert(con, "meta", {"key": f"kalshi_hist_done:{s}", "value": "complete",
+                                        "updated_utc": util.utcnow_iso()}, replace=True)
+                break
+            time.sleep(0.25)
+        stats["markets"] += stored
+        stats["series"][s] = stored
+        db.log_collection(con, "kalshi-historical", f"kalshi:{s}",
+                          "ok" if stored else "empty",
+                          f"pages_this_run<={max_pages} stored={stored}", rows=stored)
+    stats["candles"] = _historical_candles(con, candle_budget)
+    stats["cross_check"] = cross_check_kalshi_settlements(con)
+    return stats
+
+
+def _historical_candles(con, budget: int) -> int:
+    """Candles for finalized historical markets, newest close first.
+
+    The window is that market's stored open_time → close_time. A span longer
+    than 21 days is clipped to close−14d. The year is never guessed: both
+    ends come from the row, and a row without both is skipped.
+    """
+    rows = con.execute(
+        "SELECT ticker, open_time, close_time FROM kalshi_markets "
+        "WHERE series_ticker IN ('KXNBAGAME','KXNBASPREAD','KXNBATOTAL') "
+        "AND status IN ('finalized','determined','settled') "
+        "AND open_time IS NOT NULL AND close_time IS NOT NULL "
+        "ORDER BY close_time DESC").fetchall()
+    stored = fetched = 0
+    for r in rows:
+        if fetched >= budget:
+            break
+        key = f"kalshi_hist_candles:{r['ticker']}"
+        if con.execute("SELECT 1 FROM meta WHERE key=?", (key,)).fetchone():
+            continue
+        start = util.parse_iso(r["open_time"])
+        end = util.parse_iso(r["close_time"])
+        if not start or not end or end <= start:
+            db.log_anomaly(con, "warn", "kalshi-historical-bad-window",
+                           {"ticker": r["ticker"], "open": r["open_time"],
+                            "close": r["close_time"]})
+            continue
+        clipped = False
+        if (end - start).total_seconds() > _HIST_CANDLE_SPAN_CAP:
+            start = end - timedelta(days=_HIST_CANDLE_LOOKBACK)
+            clipped = True
+        resp = kalshi.historical_candlesticks(
+            r["ticker"], int(start.timestamp()), int(end.timestamp()) + 3600, 60)
+        fetched += 1
+        if not resp.ok:
+            # A failed request is not an empty history. Leave the mark unset.
+            db.log_collection(con, "kalshi-historical", f"kalshi:candles:{r['ticker']}",
+                              "fail", f"http={resp.status} {resp.error or ''}", rows=0)
+            continue
+        got = kalshi.normalize_candlestick_payload(resp.json, r["ticker"])
+        n = _store_candles(con, got, 60)
+        stored += n
+        db.insert(con, "meta", {
+            "key": key,
+            "value": "empty" if n == 0 else f"stored={n}",
+            "updated_utc": util.utcnow_iso()}, replace=True)
+        db.log_collection(con, "kalshi-historical", f"kalshi:candles:{r['ticker']}",
+                          "ok" if n else "empty",
+                          ("window clipped to close-14d; " if clipped else "")
+                          + f"candles={n}", rows=n)
+        if clipped:
+            db.log_anomaly(con, "info", "kalshi-candle-window-clipped",
+                           {"ticker": r["ticker"],
+                            "detail": "span exceeded 21 days; requested close-14d, "
+                                      "not a guessed year"})
+        time.sleep(0.2)
+    return stored
+
+
+def cross_check_kalshi_settlements(con) -> dict:
+    """KXNBAGAME yes/no vs the joined final score.
+
+    Idempotency is the claim string. `verifications` has no source_b column.
+    last_price is not a result and is not consulted. A post-settlement quote
+    of 0 or 100 on the market row is ignored.
+    """
+    infos = engine.map_kalshi_markets(con)
+    matches = mismatches = skipped = 0
+    for ticker, info in infos.items():
+        if (info.series_ticker or "") != "KXNBAGAME" or info.market_type != "winner":
+            continue
+        if info.result not in ("yes", "no"):
+            skipped += 1
+            continue
+        if not info.team or not info.game_id or not info.home or not info.away:
+            skipped += 1
+            continue
+        g = con.execute("SELECT * FROM games WHERE game_id=?", (info.game_id,)).fetchone()
+        if not g or g["home_score"] is None or g["away_score"] is None:
+            skipped += 1
+            continue
+        if g["home_score"] == g["away_score"]:
+            skipped += 1
+            continue
+        claim = f"kalshi settlement {ticker} vs score {info.game_id}"
+        if con.execute("SELECT 1 FROM verifications WHERE claim=?", (claim,)).fetchone():
+            continue
+        score_winner = info.home if g["home_score"] > g["away_score"] else info.away
+        if info.result == "yes":
+            kalshi_winner = info.team
+        else:
+            kalshi_winner = info.away if info.team == info.home else info.home
+        status = "match" if kalshi_winner == score_winner else "mismatch"
+        db.insert(con, "verifications", {
+            "checked_utc": util.utcnow_iso(),
+            "claim": claim,
+            "primary_source": "kalshi:historical",
+            "primary_value": f"{info.result}:{kalshi_winner}",
+            "secondary_source": "games",
+            "secondary_value": f"{g['away_score']}-{g['home_score']}:{score_winner}",
+            "status": status,
+            "discrepancy": None if status == "match" else
+            f"kalshi {kalshi_winner} vs score {score_winner}"})
+        if status == "mismatch":
+            mismatches += 1
+            db.log_anomaly(con, "critical", "kalshi-settlement-score-mismatch", {
+                "ticker": ticker, "kalshi_result": info.result,
+                "kalshi_winner": kalshi_winner, "score_winner": score_winner,
+                "game_id": info.game_id})
+        else:
+            matches += 1
+    if matches or mismatches:
+        db.log_collection(con, "kalshi-historical", "kalshi:settlement-cross-check",
+                          "ok" if not mismatches else "partial",
+                          f"matches={matches} mismatches={mismatches} skipped={skipped}",
+                          rows=matches + mismatches)
+    return {"matches": matches, "mismatches": mismatches, "skipped": skipped}
+
+
 def kalshi_settled_history(con, series: str = "KXNBAGAME", max_games: int = 60,
                            interval: int = 60) -> dict:
     """Attempt to recover price history for SETTLED Kalshi markets.
@@ -1237,13 +1449,24 @@ def kalshi_settled_history(con, series: str = "KXNBAGAME", max_games: int = 60,
                       f"tickers_with_candles={len(hit_tickers)} candles={candles} "
                       f"trades={trades} availability={availability}",
                       rows=candles + trades)
-    db.insert(con, "meta", {"key": f"kalshi_settled_availability:{series}",
-                            "value": json.dumps({"availability": availability,
-                                                 "candles": candles, "trades": trades,
-                                                 "games_probed": len(games),
-                                                 "tickers_probed": len(tickers),
-                                                 "checked_utc": CAP2}),
-               "updated_utc": CAP2}, replace=True)
+    # The 2026-09-21 probe wrote `unavailable` because the LIVE tier returned
+    # nothing. Once the historical tier has stored a finalized row that actually
+    # carries a result or an open_time, do not overwrite that key with the live
+    # probe's negative answer. Old probe rows (status=settled, NULL result and
+    # NULL open_time) do not count — an empty database must still write
+    # unavailable, which the regression test pins.
+    if availability == "unavailable" and _historical_tier_stored(con, series):
+        db.log_collection(con, "kalshi-settled-history", f"kalshi:{series}", "skipped",
+                          "historical tier already stored finalized rows; not overwriting "
+                          f"kalshi_settled_availability:{series}")
+    else:
+        db.insert(con, "meta", {"key": f"kalshi_settled_availability:{series}",
+                                "value": json.dumps({"availability": availability,
+                                                     "candles": candles, "trades": trades,
+                                                     "games_probed": len(games),
+                                                     "tickers_probed": len(tickers),
+                                                     "checked_utc": CAP2}),
+                   "updated_utc": CAP2}, replace=True)
     return {"games_probed": len(games), "tickers_probed": len(tickers),
             "candles": candles, "trades": trades, "availability": availability}
 
@@ -1264,7 +1487,11 @@ def _store_candles(con, got: list[dict], interval: int) -> int:
                 # end_period_ts is the candle CLOSE; the DB invariant (and
                 # PriceBook's look-ahead guard) is ts = candle OPEN.
                 ts = util.to_iso(util.parse_iso(ts) - timedelta(seconds=interval * 60))
+            if not t or not ts:
+                continue
             price = c.get("price") or {}
+            yes_ask = _nested_close_cents(c.get("yes_ask"))
+            yes_bid = _nested_close_cents(c.get("yes_bid"))
             db.insert(con, "kalshi_candles", {
                 "ticker": t, "interval": interval,
                 "ts_utc": ts,
@@ -1273,10 +1500,29 @@ def _store_candles(con, got: list[dict], interval: int) -> int:
                 "low": _dollars_to_cents(price.get("low_dollars"), price.get("low")),
                 "close": _dollars_to_cents(price.get("close_dollars"), price.get("close")),
                 "volume": _contracts(c.get("volume_fp"), c.get("volume")),
+                "yes_bid": yes_bid, "yes_ask": yes_ask,
                 "captured_utc": C,
             })
+            # INSERT OR IGNORE will not backfill an ask onto a row stored before
+            # the column existed. Fill only NULLs; never rewrite a stored close.
+            if yes_ask is not None or yes_bid is not None:
+                con.execute(
+                    "UPDATE kalshi_candles SET yes_ask=COALESCE(yes_ask, ?), "
+                    "yes_bid=COALESCE(yes_bid, ?) WHERE ticker=? AND interval=? AND ts_utc=?",
+                    (yes_ask, yes_bid, t, interval, ts))
             n += 1
     return n
+
+
+def _nested_close_cents(node) -> int | None:
+    """yes_ask/yes_bid close from either wire shape.
+
+    Live candles use close_dollars (\"0.3700\" → 37). Historical candles use
+    close (\"0.4900\" → 49). A missing side stays None — never 0.
+    """
+    if not isinstance(node, dict):
+        return None
+    return _dollars_to_cents(node.get("close_dollars"), node.get("close"))
 
 
 def _ms_iso(ts) -> str | None:
@@ -1705,6 +1951,7 @@ def main():
                                         "kalshi-snapshot", "kalshi-candles", "espn-backfill",
                                         "espn-forward",
                                         "boxscores-backfill", "kalshi-settled-history",
+                                        "kalshi-historical",
                                         "bref-month", "repair", "sbr-odds"])
     ap.add_argument("--days", type=int, default=113,
                     help="espn-backfill: day budget per run (default 113 = ~1 season)")
@@ -1808,13 +2055,17 @@ def main():
             run_task("bref-verify-recent", bref_verify_recent, con)
             run_task("injuries", collect_injuries, con)
             run_task("kalshi-snapshot", kalshi_snapshot, con)
-            # candles for open markets: the ONLY Kalshi history source
-            # (settled markets are not API-exposed). Idempotent.
+            # candles for open markets (live tier). Idempotent.
             run_task("kalshi-candles-forward", kalshi_candles_forward, con)
-            # recent settled events (settlement ground truth for forward bets)
+            # historical tier: finalized markets + their candles. The 2026-09-21
+            # live probe never queried /historical. Bounded; runs before the
+            # live-tier probe so a stored result is not overwritten by it.
+            run_task("kalshi-historical", kalshi_historical_collect, con)
+            # recent settled events on the live tier (still empty for finalized
+            # contracts; kept so a Kalshi-side change is noticed).
             run_task("kalshi-backfill", kalshi_backfill, con, max_pages=2)
-            # does Kalshi expose candles/tape for settled NBA markets? probed
-            # and recorded every run; a zero yield is logged as empty.
+            # live-tier probe of constructed tickers. A zero yield is the 2026-09-21
+            # record; it must not overwrite availability once historical rows exist.
             run_task("kalshi-settled-history", kalshi_settled_history, con)
             # yesterday's boxscores (player logs + rolling features)
             y = now - timedelta(days=1)
@@ -1839,6 +2090,9 @@ def main():
             print(json.dumps(collect_sbr_odds(con, seasons), indent=2))
         elif args.command == "kalshi-settled-history":
             print(json.dumps(kalshi_settled_history(con, args.series or "KXNBAGAME"), indent=2))
+        elif args.command == "kalshi-historical":
+            series = (args.series,) if args.series else None
+            print(json.dumps(kalshi_historical_collect(con, series=series), indent=2, default=str))
         elif args.command == "bref-month":
             print(json.dumps(bref_current_month(con), indent=2))
         elif args.command == "kalshi-discovery":
@@ -1862,6 +2116,16 @@ def _parse_month_tokens(months: str) -> list[tuple[int, str]]:
         y, m = token.strip().split(":")
         items.append((int(y), m.strip().lower()))
     return items
+
+
+def _month_name(m: int) -> str:
+    return ["january", "february", "march", "april", "may", "june", "july",
+            "august", "september", "october", "november", "december"][m - 1]
+
+
+if __name__ == "__main__":
+    main()
+s
 
 
 def _month_name(m: int) -> str:

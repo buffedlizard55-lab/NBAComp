@@ -9,6 +9,13 @@ external-api.kalshi.com). Endpoints used:
   GET /markets/{ticker}/orderbook      live book (yes side; no side derived)
   GET /markets/candlesticks            batch OHLCV, interval 1|60|1440 minutes
   GET /markets/trades                  tape
+  GET /historical/cutoff               live-tier cutoff (markets older than this
+                                       are not on the live /markets endpoints)
+  GET /historical/markets              cursor-paged finalized markets
+  GET /historical/markets/{ticker}/candlesticks
+                                       single-ticker history; body is
+                                       {ticker, candlesticks}, not the live
+                                       {markets:[...]} batch shape
 Rate limit: Kalshi documents a basic tier (~10 rps); we keep <=3 rps.
 NBA series tickers are DISCOVERED at runtime (never hard-coded as fact):
 we probe a candidate list and record which series actually exist.
@@ -142,6 +149,63 @@ def get_candlesticks(tickers: list[str], start_ts_ms: int, end_ts_ms: int,
         if r.ok:
             out.extend((r.json or {}).get("markets") or [])
     return out
+
+
+def historical_cutoff() -> http.HttpResult:
+    """GET /historical/cutoff. All four timestamps were 2026-07-24T00:00:00Z
+    on the 2026-09-22 public fetch. Callers record the response; they do not
+    hard-code the date as a window."""
+    return _get("/historical/cutoff")
+
+
+def historical_markets(series_ticker: str, cursor: str | None = None,
+                       limit: int = 200) -> http.HttpResult:
+    """One page of GET /historical/markets?series_ticker=.
+
+    The live /markets?status=settled path returns nothing for finalized NBA
+    contracts (2026-09-21 probe). This is the tier that actually returns them.
+    """
+    params: dict = {"series_ticker": series_ticker, "limit": min(int(limit), 1000)}
+    if cursor:
+        params["cursor"] = cursor
+    return _get("/historical/markets", params)
+
+
+def historical_candlesticks(ticker: str, start_ts: int, end_ts: int,
+                            interval: int = 60) -> http.HttpResult:
+    """GET /historical/markets/{ticker}/candlesticks.
+
+    `start_ts` / `end_ts` are unix seconds (same as the live batch endpoint).
+    The body is `{ticker, candlesticks}`, not the live `{markets: [...]}` shape;
+    `normalize_candlestick_payload` is the adapter.
+    """
+    return _get(f"/historical/markets/{ticker}/candlesticks", {
+        "start_ts": int(start_ts),
+        "end_ts": int(end_ts),
+        "period_interval": interval,
+    })
+
+
+def normalize_candlestick_payload(js: dict | None, ticker: str | None = None) -> list[dict]:
+    """Live batch shape and historical single-ticker shape → the list
+    `_store_candles` already consumes: [{market_ticker, candlesticks}].
+
+    An empty body is a real empty answer (the caller may mark that ticker
+    done). A missing ticker on the historical shape is not stored — nothing
+    is invented to fill the gap.
+    """
+    if not isinstance(js, dict):
+        return []
+    markets = js.get("markets")
+    if isinstance(markets, list):
+        return [m for m in markets if isinstance(m, dict)]
+    sticks = js.get("candlesticks")
+    if isinstance(sticks, list):
+        t = js.get("ticker") or ticker
+        if not t:
+            return []
+        return [{"market_ticker": t, "candlesticks": sticks}]
+    return []
 
 
 def get_orderbook(ticker: str) -> http.HttpResult:
@@ -294,14 +358,21 @@ def parse_market(m: dict, captured_utc: str) -> dict:
         __import__("json").dumps(st, default=str),
         "status": m.get("status"),
         "close_time": _iso(m.get("close_time")),
+        # historical tier field (2026-09-22). Live open markets omit it; None
+        # is stored, never guessed.
+        "open_time": _iso(m.get("open_time")),
         "expected_expiration_time": _iso(m.get("expected_expiration_time")),
         "yes_bid": _cents(m, "yes_bid_dollars", "yes_bid"),
         "yes_ask": _cents(m, "yes_ask_dollars", "yes_ask"),
         "last_price": _cents(m, "last_price_dollars", "last_price"),
+        # volume_fp is a contract count ("9924.08" → 9924, "48467702.82" →
+        # 48467702). _cents leaves non-_dollars fields as int(float); do not
+        # route this through the dollar scaler.
         "volume": _cents(m, "volume_fp", "volume"),
         "open_interest": _cents(m, "open_interest_fp", "open_interest"),
         "result": result,
-        "settled_time": _iso(m.get("settled_time")),
+        # historical payloads carry settlement_ts, not settled_time.
+        "settled_time": _iso(m.get("settlement_ts") or m.get("settled_time")),
         "captured_utc": captured_utc,
     }
 

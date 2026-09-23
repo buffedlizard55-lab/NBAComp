@@ -276,32 +276,91 @@ def _parse_odds(o: dict, game_id: str) -> dict | None:
         return None
 
 
+def _injury_status_name(status) -> str:
+    """Live board (2026-09-22) sends status as the string \"Out\". The older
+    fixture sends {name: \"Out\"}. Both are accepted; anything else is empty."""
+    if isinstance(status, str):
+        return status.strip()
+    if isinstance(status, dict):
+        return str(status.get("name") or status.get("type") or "").strip()
+    return ""
+
+
+def _injury_team(node: dict, athlete: dict) -> str | None:
+    """Team from the block, else from the athlete. Live blocks have no
+    top-level `team`; the athlete carries `{team: {abbreviation}}`."""
+    t = node.get("team")
+    if isinstance(t, dict):
+        ab = t.get("abbreviation") or t.get("shortDisplayName")
+        if ab:
+            return ab
+    if isinstance(t, str) and t.strip():
+        return t.strip()
+    ath_team = athlete.get("team") if isinstance(athlete, dict) else None
+    if isinstance(ath_team, dict):
+        return ath_team.get("abbreviation") or ath_team.get("shortDisplayName")
+    return None
+
+
 def parse_injuries(js: dict) -> list[dict]:
-    """Shape-agnostic: find every {team, injuries[]} block in the payload."""
+    """Shape-agnostic injury listings.
+
+    Accepted blocks (both observed):
+      * older: `{team: {abbreviation}, injuries: [{status: {name}, athlete}]}`
+      * live (2026-09-22): `{displayName, injuries: [{status: \"Out\", date,
+        athlete: {displayName, team: {abbreviation}}}]}`
+
+    A consumed `injuries` list is not walked again, so a team block is not
+    also parsed as a nested listing.
+    """
     out: list[dict] = []
+
+    def _listing(node: dict, item: dict) -> None:
+        if not isinstance(item, dict) or item.get("injuries"):
+            return
+        ath = item.get("athlete") or {}
+        if not isinstance(ath, dict):
+            ath = {}
+        status = _injury_status_name(item.get("status"))
+        published = item.get("date")
+        if isinstance(item.get("status"), dict):
+            published = published or item["status"].get("date")
+        row = {
+            "player": ath.get("displayName") or item.get("displayName") or "",
+            "player_id": f"espn:{ath.get('id')}" if ath.get("id") else None,
+            "team": _injury_team(node, ath),
+            "status": status,
+            "source": "espn",
+            "source_url": f"{BASE}/injuries",
+            "published_utc": published,
+            "note": item.get("longComment") or item.get("shortComment") or None,
+            "game_date": None,
+        }
+        if row["player"] and row["status"]:
+            out.append(row)
+
+    def _consume(node: dict) -> bool:
+        inj = node.get("injuries")
+        if not isinstance(inj, list) or not inj:
+            return False
+        teamish = bool(node.get("team") or node.get("displayName") or node.get("abbreviation"))
+        listings = [i for i in inj if isinstance(i, dict) and not i.get("injuries")]
+        if not teamish and not listings:
+            return False
+        if not teamish and not any(
+                isinstance((i.get("athlete") or {}), dict) and (i.get("athlete") or {}).get("team")
+                for i in listings):
+            return False
+        for item in listings:
+            _listing(node, item)
+        return True
 
     def walk(node):
         if isinstance(node, dict):
-            inj = node.get("injuries")
-            if isinstance(inj, list) and node.get("team"):
-                t = node["team"] or {}
-                abbrev = t.get("abbreviation") or t.get("shortDisplayName")
-                for i in inj:
-                    ath = i.get("athlete") or {}
-                    item = {
-                        "player": ath.get("displayName") or "",
-                        "player_id": f"espn:{ath.get('id')}" if ath.get("id") else None,
-                        "team": abbrev,
-                        "status": ((i.get("status") or {}).get("name") or ""),
-                        "source": "espn",
-                        "source_url": f"{BASE}/injuries",
-                        "published_utc": i.get("date") or ((i.get("status") or {}).get("date")),
-                        "note": i.get("longComment") or i.get("shortComment") or None,
-                        "game_date": None,
-                    }
-                    if item["player"] and item["status"]:
-                        out.append(item)
-            for v in node.values():
+            consumed = _consume(node) if isinstance(node.get("injuries"), list) else False
+            for k, v in node.items():
+                if consumed and k == "injuries":
+                    continue
                 walk(v)
         elif isinstance(node, list):
             for v in node:

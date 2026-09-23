@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS kalshi_markets (
   strike_values TEXT,                   -- JSON
   status TEXT,
   close_time TEXT,
+  open_time TEXT,                       -- historical-tier listing time; NULL on live rows
   expected_expiration_time TEXT,
   yes_bid INTEGER, yes_ask INTEGER, last_price INTEGER,
   volume INTEGER, open_interest INTEGER,
@@ -145,6 +146,7 @@ CREATE TABLE IF NOT EXISTS kalshi_candles (
   ts_utc TEXT NOT NULL,
   open INTEGER, high INTEGER, low INTEGER, close INTEGER,
   volume INTEGER,
+  yes_bid INTEGER, yes_ask INTEGER,     -- nested candle OHLC close, cents; NULL until observed
   captured_utc TEXT NOT NULL,
   PRIMARY KEY (ticker, interval, ts_utc)
 );
@@ -600,6 +602,17 @@ def _migrate(con: sqlite3.Connection) -> None:
         # that changes what it trades gets a new version and the previous
         # version's rule text is preserved here, never rewritten.
         con.execute("ALTER TABLE strategies ADD COLUMN version_history TEXT")
+    # 2026-09-22: the historical tier returns open_time and nested yes_ask/yes_bid.
+    # CREATE TABLE IF NOT EXISTS does not add columns to a database that already
+    # exists, and a parse_market dict that carries open_time fails the insert if
+    # the column is missing. ALTER before any insert.
+    kcols = {r[1] for r in con.execute("PRAGMA table_info(kalshi_markets)")}
+    if "open_time" not in kcols:
+        con.execute("ALTER TABLE kalshi_markets ADD COLUMN open_time TEXT")
+    ccols = {r[1] for r in con.execute("PRAGMA table_info(kalshi_candles)")}
+    for col in ("yes_bid", "yes_ask"):
+        if col not in ccols:
+            con.execute(f"ALTER TABLE kalshi_candles ADD COLUMN {col} INTEGER")
     cols = {r[1] for r in con.execute("PRAGMA table_info(bets)")}
     for col, decl in (("strike", "REAL"), ("market_ticker", "TEXT"),
                       ("prop_player", "TEXT"), ("closing_price", "REAL")):

@@ -327,6 +327,17 @@ class PriceBook:
                 "SELECT ticker, ts_utc, close FROM kalshi_candles WHERE interval=60 "
                 "AND close IS NOT NULL ORDER BY ticker, ts_utc"):
             self._candles.setdefault(r["ticker"], []).append((r["ts_utc"], float(r["close"])))
+        # Parallel ask map, keyed by the same candle OPEN timestamp as _candles.
+        # The __new__ fakes in unit tests set only _candles/_books; kalshi_price_at
+        # must getattr this map rather than assume __init__ ran.
+        self._candle_asks: dict[str, dict[str, float]] = {}
+        try:
+            for r in con.execute(
+                    "SELECT ticker, ts_utc, yes_ask FROM kalshi_candles WHERE interval=60 "
+                    "AND yes_ask IS NOT NULL"):
+                self._candle_asks.setdefault(r["ticker"], {})[r["ts_utc"]] = float(r["yes_ask"])
+        except Exception:
+            self._candle_asks = {}
         self._books: dict[str, tuple[str, float]] = {}
         self._ask_history: dict[str, list[tuple[str, float]]] = {}
         for r in con.execute(
@@ -347,6 +358,8 @@ class PriceBook:
         """
         cands = self._candles.get(ticker) or []
         dec = util.parse_iso(decision_iso)
+        # Fake PriceBooks built with __new__ set _candles/_books only.
+        asks = (getattr(self, "_candle_asks", None) or {}).get(ticker) or {}
         best = None
         import datetime as _dt
         for ts, close in cands:
@@ -354,11 +367,17 @@ class PriceBook:
             if ts_dt is None:
                 continue
             close_time = ts_dt + _dt.timedelta(minutes=60)
-            if close_time <= dec:
-                best = PricePoint(util.to_iso(close_time), close + 1.0,
-                                  "candle_close+1tick")  # 1-tick slippage
-            else:
+            # A candle that closes after the decision is future information.
+            # Post-settlement candles fail this guard when the decision is
+            # before tipoff (settlement is after the game).
+            if close_time > dec:
                 break
+            ask = asks.get(ts)
+            px, kind = _entry_from_candle(ask, close)
+            if px is None:
+                # 0 and 99/100 are post-settlement quotes, not an entry.
+                continue
+            best = PricePoint(util.to_iso(close_time), px, kind)
         return best
 
     def kalshi_price_around(self, ticker: str, target_iso: str, window_hours: int = 12) -> PricePoint | None:
@@ -392,6 +411,29 @@ class PriceBook:
             else:
                 break
         return best
+
+
+def _entry_from_candle(ask, close) -> tuple[float | None, str | None]:
+    """Executable entry from one fully closed hourly candle.
+
+    Prefer the stored yes-ask (what a buyer would have paid) when it is a
+    real pre-settlement quote. Otherwise the trade close + 1 tick, the
+    labeled slippage assumption. 0 and 99/100 are the post-settlement
+    bid/ask/last the historical market row also carries; they are never an
+    entry, even if a candle somehow closed with them.
+    """
+    def _usable(v) -> bool:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return False
+        return 1.0 <= f <= 98.0
+
+    if ask is not None and _usable(ask):
+        return float(ask), "candle_yes_ask"
+    if close is not None and _usable(close) and _usable(float(close) + 1.0):
+        return float(close) + 1.0, "candle_close+1tick"
+    return None, None
 
 
 def espn_odds_at(con, game_id: str, decision_iso: str, market: str) -> dict | None:
