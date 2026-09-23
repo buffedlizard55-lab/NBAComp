@@ -471,9 +471,12 @@ def run_checks(con) -> dict:
     # console line prints the same numbers.
     from . import db as _db
     summary["finished_utc"] = util.utcnow_iso()
+    critical_checks = sorted({c["check"] for c in summary["checks"]
+                              if c["severity"] == "critical"})
     _db.insert(con, "meta", {
         "key": "audit_last_pass",
         "value": json.dumps({"critical": summary["critical"], "warn": summary["warn"],
-                             "info": summary["info"], "finished_utc": summary["finished_utc"]}),
+                             "info": summary["info"], "finished_utc": summary["finished_utc"],
+                             "critical_checks": critical_checks}),
         "updated_utc": summary["finished_utc"]}, replace=True)
     return summary
