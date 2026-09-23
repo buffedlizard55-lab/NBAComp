@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/runner/work/NBAComp/NBAComp/nbacomp/collect.py", line 2128, in <module>
+    s
+NameError: name 's' is not defined. Did you mean: 'os'?
