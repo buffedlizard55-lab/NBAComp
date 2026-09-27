@@ -315,3 +315,10 @@ probe7 2026-09-27T12:12:25Z
   bref start-time cells: [('game_start_time', 'Start (ET)'), ('game_start_time', '7:30p'), ('game_start_time', '10:00p'), ('game_start_time', '7:00p'), ('game_start_time', '7:30p')]
   espn summary(202410220BOS) [from bref link]: http=400 ok=False err=HTTP 400
 probe7 done
+
+probe7 2026-09-27T17:03:42Z
+  espn 20260115: http=200 events=9 state=post events_with_odds=0
+  espn 20260613: http=200 events=1 state=post events_with_odds=0
+  espn 20250115: http=200 events=11 state=post events_with_odds=0
+  espn 20241022: http=200 events=2 state=post events_with_odds=0
+  bref https://www.basketball-reference.com/leagues/NBA_2025_games-october.html: http=403 err=HTTP 403
