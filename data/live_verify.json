@@ -1,12 +1,12 @@
 {
-  "generated_utc": "2026-09-29T05:54:47Z",
+  "generated_utc": "2026-09-29T13:08:17Z",
   "repo": "buffedlizard55-lab/NBAComp",
   "base_url": "https://buffedlizard55-lab.github.io/NBAComp/",
   "ref": "HEAD",
-  "commit": "06afffcafcc4f690c9b50b37b318dc43ffb88fdc",
+  "commit": "b30cd96713ae830fd5e274e2055755fd5eec35a6",
   "pages_build": {
     "status": "built",
-    "commit": "06afffcafcc4f690c9b50b37b318dc43ffb88fdc",
+    "commit": "b30cd96713ae830fd5e274e2055755fd5eec35a6",
     "matched": true
   },
   "pages_checked": 10,
@@ -16,7 +16,7 @@
   "pages": [
     {
       "path": "history.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/history.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/history.html?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 18642,
       "committed_bytes": 18642,
@@ -26,37 +26,37 @@
     },
     {
       "path": "index.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/index.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/index.html?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 11176,
       "committed_bytes": 11176,
-      "live_sha256": "39a9a7b686102f2393c4b6eaa099895e64a16ac87d7a091bcdc36cc4f9c8f941",
-      "committed_sha256": "39a9a7b686102f2393c4b6eaa099895e64a16ac87d7a091bcdc36cc4f9c8f941",
+      "live_sha256": "b880be096c53e51fed2ca10580e13ccbcfbbd2b5017f1449ac4499cb0acf5cb2",
+      "committed_sha256": "b880be096c53e51fed2ca10580e13ccbcfbbd2b5017f1449ac4499cb0acf5cb2",
       "verdict": "OK"
     },
     {
       "path": "leaderboard.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/leaderboard.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/leaderboard.html?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 35075,
       "committed_bytes": 35075,
-      "live_sha256": "35221571fab9ab365ff28d285723438940e3ceefd055dc5c709c1c25d1ba5c86",
-      "committed_sha256": "35221571fab9ab365ff28d285723438940e3ceefd055dc5c709c1c25d1ba5c86",
+      "live_sha256": "ac1ff7f35761a4a5a28a0a710edfeb749c1831880fc8ea7b1dc33d4efbbd04bb",
+      "committed_sha256": "ac1ff7f35761a4a5a28a0a710edfeb749c1831880fc8ea7b1dc33d4efbbd04bb",
       "verdict": "OK"
     },
     {
       "path": "methodology.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/methodology.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/methodology.html?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 10046,
       "committed_bytes": 10046,
-      "live_sha256": "c4585bb76b72cba6056416e5bb1d3d30553afeaf6be8aec84deb8f4f9fd5c414",
-      "committed_sha256": "c4585bb76b72cba6056416e5bb1d3d30553afeaf6be8aec84deb8f4f9fd5c414",
+      "live_sha256": "c60353985be0dc22d7e05a7da7cc53274c6080a0a33d268ef6c0bc336228ec39",
+      "committed_sha256": "c60353985be0dc22d7e05a7da7cc53274c6080a0a33d268ef6c0bc336228ec39",
       "verdict": "OK"
     },
     {
       "path": "positions.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/positions.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/positions.html?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 41216,
       "committed_bytes": 41216,
@@ -66,17 +66,17 @@
     },
     {
       "path": "research.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/research.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/research.html?cb=b30cd96713ae",
       "http_status": 200,
-      "live_bytes": 55868,
-      "committed_bytes": 55868,
-      "live_sha256": "7084dc34913ee55b27f917c2fd1accb3537962949bd9bd63d2ad70360a0a33f2",
-      "committed_sha256": "7084dc34913ee55b27f917c2fd1accb3537962949bd9bd63d2ad70360a0a33f2",
+      "live_bytes": 56879,
+      "committed_bytes": 56879,
+      "live_sha256": "af8d557201ba537153b0f338ad61d3b9007416449aa924e67dc7a0867937936e",
+      "committed_sha256": "af8d557201ba537153b0f338ad61d3b9007416449aa924e67dc7a0867937936e",
       "verdict": "OK"
     },
     {
       "path": "sources.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/sources.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/sources.html?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 18421,
       "committed_bytes": 18421,
@@ -86,7 +86,7 @@
     },
     {
       "path": "strategies.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/strategies.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/strategies.html?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 116070,
       "committed_bytes": 116070,
@@ -96,7 +96,7 @@
     },
     {
       "path": "style.css",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/style.css?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/style.css?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 5689,
       "committed_bytes": 5689,
@@ -106,7 +106,7 @@
     },
     {
       "path": "upcoming.html",
-      "url": "https://buffedlizard55-lab.github.io/NBAComp/upcoming.html?cb=06afffcafcc4",
+      "url": "https://buffedlizard55-lab.github.io/NBAComp/upcoming.html?cb=b30cd96713ae",
       "http_status": 200,
       "live_bytes": 8919,
       "committed_bytes": 8919,
