@@ -1,54 +1,54 @@
-espn.scoreboard: http=200 ok=True bytes=39759 err=None t=0.2s body[:160]=b'{"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association","abbreviation":"NBA","slug":"nba","season":{"year":2027,"startDate":"2026-09-30T07:00Z","endDate":"2027-06-26T06:59Z",'
+espn.scoreboard: http=200 ok=True bytes=39761 err=None t=0.2s body[:160]=b'{"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association","abbreviation":"NBA","slug":"nba","season":{"year":2027,"startDate":"2026-09-30T07:00Z","endDate":"2027-06-26T06:59Z",'
 espn.scoreboard(20260115): http=200 ok=True bytes=126085 err=None t=0.8s body[:160]=b'{"leagues":[{"id":"46","uid":"s:40~l:46","name":"National Basketball Association","abbreviation":"NBA","slug":"nba","season":{"year":2026,"startDate":"2025-10-01T07:00Z","endDate":"2026-06-27T06:59Z",'
-espn.injuries: http=200 ok=True bytes=736945 err=None t=0.8s body[:160]=b'{"timestamp":"2026-10-05T05:55:00Z","status":"success","season":{"year":2027,"type":1,"name":"Preseason","displayName":"2026-27"},"injuries":[{"id":"1","displayName":"Atlanta Hawks","injuries":[{"id":'
+espn.injuries: http=200 ok=True bytes=736945 err=None t=0.8s body[:160]=b'{"timestamp":"2026-10-05T14:58:47Z","status":"success","season":{"year":2027,"type":1,"name":"Preseason","displayName":"2026-27"},"injuries":[{"id":"1","displayName":"Atlanta Hawks","injuries":[{"id":'
 nba.teamstats: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.9s body[:160]=b''
 nba.teamgamelogs: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.8s body[:160]=b''
-nba.scoreboardv2: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.7s body[:160]=b''
-kalshi.series KXNBAGAME: http=200 ok=True bytes=1586 err=None t=0.1s body[:160]=b'{"series":{"additional_prohibitions":["Current players, coaches, and staff of the league, association, or organization(s) governing the event. For college leagues/associations specifically, or where o'
-kalshi.markets KXNBAGAME open: rows=72 t=0.3s
-kalshi.markets KXNBAGAME settled: rows=6 t=0.4s
+nba.scoreboardv2: http=0 ok=False bytes=0 err=TimeoutError: The read operation timed out t=64.8s body[:160]=b''
+kalshi.series KXNBAGAME: http=200 ok=True bytes=1586 err=None t=0.2s body[:160]=b'{"series":{"additional_prohibitions":["Current players, coaches, and staff of the league, association, or organization(s) governing the event. For college leagues/associations specifically, or where o'
+kalshi.markets KXNBAGAME open: rows=72 t=0.4s
+kalshi.markets KXNBAGAME settled: rows=6 t=0.3s
 kalshi.candlesticks: rows=0 t=0.3s
 
 collection_log tail:
-  2026-10-05T05:54:57Z signal-backtest engine ok sigbt-2026-09-21: games=4176 signals=13999 (outcome-only validation; no prices used)
-  2026-10-05T05:54:54Z backtest engine ok bt-2026-09-20: bets=0
-  2026-10-05T05:54:52Z bref-verify basketball-reference ok 2027-october: 88 rows, 0 verified, 0 NEW score conflicts, 0 without local row, 0 skipped (no date / ambiguous)
-  2026-10-05T05:54:50Z bref-backfill basketball-reference ok 2027-october: parsed=88 inserted=0 merged=0 skipped=88
-  2026-10-05T05:54:50Z boxscores espn ok 2026-10-04
-  2026-10-05T05:54:49Z kalshi-settled-history kalshi:KXNBAGAME skipped historical tier already stored finalized rows; not overwriting kalshi_settled_availability:KXNBAGAME
-  2026-10-05T05:54:49Z kalshi-settled-history kalshi:KXNBAGAME empty games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
-  2026-10-05T05:54:49Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR26HOULAL-YES ok http=200 trades=0
-  2026-10-05T05:54:48Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR26HOULAL-NO ok http=200 trades=0
-  2026-10-05T05:54:48Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR26HOULAL-LAL ok http=200 trades=0
-  2026-10-05T05:54:48Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR26HOULAL-HOU ok http=200 trades=0
-  2026-10-05T05:54:39Z daily-kalshi-backfill nbacomp crash Traceback (most recent call last):
+  2026-10-05T14:58:47Z signal-backtest engine ok sigbt-2026-09-21: games=4176 signals=13999 (outcome-only validation; no prices used)
+  2026-10-05T14:58:45Z backtest engine ok bt-2026-09-20: bets=0
+  2026-10-05T14:58:42Z bref-verify basketball-reference ok 2027-october: 88 rows, 0 verified, 0 NEW score conflicts, 0 without local row, 0 skipped (no date / ambiguous)
+  2026-10-05T14:58:41Z bref-backfill basketball-reference ok 2027-october: parsed=88 inserted=0 merged=0 skipped=88
+  2026-10-05T14:58:41Z boxscores espn ok 2026-10-04
+  2026-10-05T14:58:40Z kalshi-settled-history kalshi:KXNBAGAME skipped historical tier already stored finalized rows; not overwriting kalshi_settled_availability:KXNBAGAME
+  2026-10-05T14:58:40Z kalshi-settled-history kalshi:KXNBAGAME empty games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
+  2026-10-05T14:58:40Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR26HOULAL-YES ok http=200 trades=0
+  2026-10-05T14:58:39Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR26HOULAL-NO ok http=200 trades=0
+  2026-10-05T14:58:39Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR26HOULAL-LAL ok http=200 trades=0
+  2026-10-05T14:58:38Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR26HOULAL-HOU ok http=200 trades=0
+  2026-10-05T14:58:30Z daily-kalshi-backfill nbacomp crash Traceback (most recent call last):
   File "/home/runner/work/NBAComp/NBAComp/nbacomp/collect.py", line 2007, in run_task
-  2026-10-05T05:54:37Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC5 ok candles=42
-  2026-10-05T05:54:37Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC10 ok candles=43
-  2026-10-05T05:54:36Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC9 ok candles=45
-  2026-10-05T05:54:36Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC8 ok candles=44
-  2026-10-05T05:54:35Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC11 ok candles=44
-  2026-10-05T05:54:35Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC13 ok candles=46
-  2026-10-05T05:54:35Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC12 ok candles=47
-  2026-10-05T05:54:34Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC15 ok candles=48
-  2026-10-05T05:54:34Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC14 ok candles=45
-  2026-10-05T05:54:34Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC16 ok candles=45
-  2026-10-05T05:54:33Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC18 ok candles=43
-  2026-10-05T05:54:33Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC17 ok candles=43
-  2026-10-05T05:54:33Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC19 ok candles=46
+  2026-10-05T14:58:28Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS6 ok candles=43
+  2026-10-05T14:58:27Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS7 ok candles=48
+  2026-10-05T14:58:27Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS8 ok candles=45
+  2026-10-05T14:58:27Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS9 ok candles=41
+  2026-10-05T14:58:26Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS1 ok candles=48
+  2026-10-05T14:58:26Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS2 ok candles=46
+  2026-10-05T14:58:26Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS3 ok candles=47
+  2026-10-05T14:58:25Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS4 ok candles=48
+  2026-10-05T14:58:25Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-SAS5 ok candles=46
+  2026-10-05T14:58:25Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC1 ok candles=45
+  2026-10-05T14:58:24Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC2 ok candles=45
+  2026-10-05T14:58:24Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC3 ok candles=46
+  2026-10-05T14:58:24Z kalshi-historical kalshi:candles:KXNBASPREAD-26MAY24OKCSAS-OKC4 ok candles=45
 anomaly tail:
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT06NOPOKC", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT06DENUTA", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT06BKNCHA", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05PHXDET", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05NYKPHI", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05MINMIL", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05MEMATL", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05LALSAC", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT04UTADEN", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT04GSWLAC", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT03MIATOR", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26MAY30SASOKC", "c": 11}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26MAY28OKCSAS", "c": 18}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26MAY26SASOKC", "c": 21}
-  2026-10-05T05:55:00Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26MAY25NYKCLE", "c": 18}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT06NOPOKC", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT06DENUTA", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT06BKNCHA", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05PHXDET", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05NYKPHI", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05MINMIL", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05MEMATL", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT05LALSAC", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT04UTADEN", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT04GSWLAC", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26OCT03MIATOR", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26MAY30SASOKC", "c": 11}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26MAY28OKCSAS", "c": 18}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26MAY26SASOKC", "c": 21}
+  2026-10-05T14:58:51Z info kalshi-multi-tickers-per-event {"event_ticker": "KXNBATOTAL-26MAY25NYKCLE", "c": 18}
