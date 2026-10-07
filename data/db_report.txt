@@ -1,15 +1,15 @@
 === table row counts (28 tables) ===
 games                  4461
-odds_snapshots         4058
-injuries               244
+odds_snapshots         4132
+injuries               272
 team_gamelogs          8373
 player_gamelogs        112972
 player_season_stats    0
 team_season_stats      0
 quarter_scores         0
-kalshi_markets         35640
-kalshi_candles         68081
-kalshi_orderbooks      2029
+kalshi_markets         35649
+kalshi_candles         71397
+kalshi_orderbooks      2129
 hist_odds              4043
 hist_backtests         67
 line_backtests         99
@@ -20,44 +20,44 @@ bets                   14
 bet_flags              49
 bankroll_events        14
 verifications          830
-anomalies              296257
+anomalies              304814
 audit_log              3041
 research_log           13
 source_status          40
-collection_log         6747
+collection_log         6810
 game_aliases           0
-meta                   791
+meta                   806
 empty tables: player_season_stats, team_season_stats, quarter_scores, game_aliases
 games span: 2023-10-05 .. 2026-11-18 finals=4185 verified=825
 === collection log (last 25) ===
-2026-10-07T13:38:38Z signal-backtest        engine                   ok       rows=14020  sigbt-2026-09-21: games=4185 signals=14020 (outcome-only validation; no prices used)
-2026-10-07T13:38:35Z backtest               engine                   ok       rows=0      bt-2026-09-20: bets=0
-2026-10-07T13:38:31Z bref-verify            basketball-reference     ok       rows=0      2027-october: 88 rows, 0 verified, 0 NEW score conflicts, 0 without local row, 0 skipped (no date / ambiguous)
-2026-10-07T13:38:30Z bref-backfill          basketball-reference     ok       rows=0      2027-october: parsed=88 inserted=0 merged=0 skipped=88
-2026-10-07T13:38:29Z boxscores              espn                     ok       rows=158    2026-10-06
-2026-10-07T13:38:26Z kalshi-settled-history kalshi:KXNBAGAME         skipped  rows=0      historical tier already stored finalized rows; not overwriting kalshi_settled_availability:KXNBAGAME
-2026-10-07T13:38:26Z kalshi-settled-history kalshi:KXNBAGAME         empty    rows=0      games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
-2026-10-07T13:38:26Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR29CLETOR-YES ok       rows=0      http=200 trades=0
-2026-10-07T13:38:26Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR29CLETOR-TOR ok       rows=0      http=200 trades=0
-2026-10-07T13:38:25Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR29CLETOR-NO ok       rows=0      http=200 trades=0
-2026-10-07T13:38:25Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR29CLETOR-CLE ok       rows=0      http=200 trades=0
-2026-10-07T13:38:16Z daily-kalshi-backfill  nbacomp                  crash    rows=0      Traceback (most recent call last):
+2026-10-07T23:13:34Z signal-backtest        engine                   ok       rows=14020  sigbt-2026-09-21: games=4185 signals=14020 (outcome-only validation; no prices used)
+2026-10-07T23:13:32Z backtest               engine                   ok       rows=0      bt-2026-09-20: bets=0
+2026-10-07T23:13:29Z bref-verify            basketball-reference     ok       rows=0      2027-october: 88 rows, 0 verified, 0 NEW score conflicts, 0 without local row, 0 skipped (no date / ambiguous)
+2026-10-07T23:13:28Z bref-backfill          basketball-reference     ok       rows=0      2027-october: parsed=88 inserted=0 merged=0 skipped=88
+2026-10-07T23:13:28Z boxscores              espn                     ok       rows=158    2026-10-06
+2026-10-07T23:13:25Z kalshi-settled-history kalshi:KXNBAGAME         skipped  rows=0      historical tier already stored finalized rows; not overwriting kalshi_settled_availability:KXNBAGAME
+2026-10-07T23:13:25Z kalshi-settled-history kalshi:KXNBAGAME         empty    rows=0      games_probed=60 tickers_probed=480 tickers_with_candles=0 candles=0 trades=0 availability=unavailable
+2026-10-07T23:13:24Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR29CLETOR-YES ok       rows=0      http=200 trades=0
+2026-10-07T23:13:24Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR29CLETOR-TOR ok       rows=0      http=200 trades=0
+2026-10-07T23:13:24Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR29CLETOR-NO ok       rows=0      http=200 trades=0
+2026-10-07T23:13:23Z kalshi-settled-history kalshi:tape:KXNBAGAME-26APR29CLETOR-CLE ok       rows=0      http=200 trades=0
+2026-10-07T23:13:15Z daily-kalshi-backfill  nbacomp                  crash    rows=0      Traceback (most recent call last):
   File "/home/runner/work/NBAComp/NBAComp/nbacomp/collect.py", line 2007, in run_task
-2026-10-07T13:38:14Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE5 ok       rows=46     candles=46
-2026-10-07T13:38:14Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE6 ok       rows=46     candles=46
-2026-10-07T13:38:14Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE1 ok       rows=49     candles=49
-2026-10-07T13:38:13Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK1 ok       rows=48     candles=48
-2026-10-07T13:38:13Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK2 ok       rows=46     candles=46
-2026-10-07T13:38:12Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK3 ok       rows=49     candles=49
-2026-10-07T13:38:12Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK4 ok       rows=45     candles=45
-2026-10-07T13:38:12Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK10 ok       rows=44     candles=44
-2026-10-07T13:38:11Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK7 ok       rows=46     candles=46
-2026-10-07T13:38:11Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK6 ok       rows=47     candles=47
-2026-10-07T13:38:11Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK9 ok       rows=44     candles=44
-2026-10-07T13:38:10Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK5 ok       rows=43     candles=43
-2026-10-07T13:38:10Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-NYK8 ok       rows=44     candles=44
-=== collector crashes recorded (since 2026-10-07T13:36:03Z): 2 ===
-2026-10-07T13:38:16Z daily-kalshi-backfill (nbacomp)
+2026-10-07T23:13:13Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE18 ok       rows=46     candles=46
+2026-10-07T23:13:12Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE19 ok       rows=44     candles=44
+2026-10-07T23:13:12Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE14 ok       rows=44     candles=44
+2026-10-07T23:13:12Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE15 ok       rows=43     candles=43
+2026-10-07T23:13:11Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE12 ok       rows=43     candles=43
+2026-10-07T23:13:11Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE16 ok       rows=37     candles=37
+2026-10-07T23:13:11Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE13 ok       rows=40     candles=40
+2026-10-07T23:13:10Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE11 ok       rows=46     candles=46
+2026-10-07T23:13:10Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE7 ok       rows=48     candles=48
+2026-10-07T23:13:10Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE8 ok       rows=45     candles=45
+2026-10-07T23:13:09Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE9 ok       rows=42     candles=42
+2026-10-07T23:13:09Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE10 ok       rows=43     candles=43
+2026-10-07T23:13:09Z kalshi-historical      kalshi:candles:KXNBASPREAD-26MAY23NYKCLE-CLE2 ok       rows=49     candles=49
+=== collector crashes recorded (since 2026-10-07T23:11:09Z): 2 ===
+2026-10-07T23:13:15Z daily-kalshi-backfill (nbacomp)
 Traceback (most recent call last):
   File "/home/runner/work/NBAComp/NBAComp/nbacomp/collect.py", line 2007, in run_task
     out = fn(*a, **k)
@@ -66,7 +66,7 @@ Traceback (most recent call last):
     db.insert(con, "kalshi_markets", row, replace=True)
   File "/home/runner/work/NBAComp/NBAComp/nbacomp/db.py", line 658, in insert
     con.
-2026-10-07T13:36:40Z daily-repair (nbacomp)
+2026-10-07T23:11:42Z daily-repair (nbacomp)
 Traceback (most recent call last):
   File "/home/runner/work/NBAComp/NBAComp/nbacomp/collect.py", line 2007, in run_task
     out = fn(*a, **k)
